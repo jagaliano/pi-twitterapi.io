@@ -897,9 +897,15 @@ function flattenObject(data: Record<string, unknown>, prefix = ""): string[] {
     const label = prefix ? `${prefix}.${key}` : key;
     if (value === null || value === undefined || value === "") continue;
     if (Array.isArray(value)) {
-      const scalars = value.filter((item) => item === null || typeof item !== "object");
-      if (scalars.length > 0) lines.push(`${label}: ${scalars.map((item) => String(item)).join(", ")}`);
-      else if (value.length > 0) lines.push(`${label}: ${value.length} item(s)`);
+      // Index each member so an identity inside an object array (for example a
+      // Space speaker) survives instead of collapsing to an item count.
+      value.forEach((item, index) => {
+        if (item !== null && typeof item === "object") {
+          lines.push(...flattenObject(item as Record<string, unknown>, `${label}[${index}]`));
+        } else {
+          lines.push(`${label}[${index}]: ${String(item)}`);
+        }
+      });
     } else if (typeof value === "object") {
       lines.push(...flattenObject(value as Record<string, unknown>, label));
     } else {
@@ -920,7 +926,12 @@ export async function runTwitterApiSpace(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options);
   const space = await fetchSpaceDetail(options.spaceId, backend.apiKey, backend.fetcher, lookupOptions(options));
-  const body = flattenObject(space.data).slice(0, 200).join("\n");
+  const fields = flattenObject(space.data);
+  const body = fields.slice(0, 200).join("\n");
+  const notes =
+    fields.length > 200
+      ? [`The Space detail was long; only the first 200 of ${fields.length} fields were used, so some fields may be omitted.`]
+      : [];
   const details = await synthesizeDocument({
     query: options.query,
     title: `X Space ${space.id}`,
@@ -929,6 +940,7 @@ export async function runTwitterApiSpace(
     model: toSynthesisModel(backend.model),
     signal: options.signal,
     deps: { complete: backend.complete },
+    notes,
   });
   return { markdown: formatTwitterResults(details), details };
 }

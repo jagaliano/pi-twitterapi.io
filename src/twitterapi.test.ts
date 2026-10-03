@@ -1433,6 +1433,16 @@ test("fetchUserMentions validates and forwards the time window", async () => {
   assert.match(seen[0], /mentions/);
   assert.match(seen[0], /sinceTime=100/);
   assert.match(seen[0], /untilTime=200/);
+
+  await assert.rejects(
+    () =>
+      fetchUserMentions("grok", "k", async () => jsonResponse({ tweets: [] }), {
+        sleep: noSleep,
+        sinceTime: 5,
+        untilTime: 1,
+      }),
+    /sinceTime must be before or equal to untilTime/,
+  );
 });
 
 test("fetchTweetsByIds validates the id list and returns unique posts", async () => {
@@ -1455,12 +1465,34 @@ test("fetchTweetsByIds validates the id list and returns unique posts", async ()
   const fetcher: FetchLike = async (input) => {
     seen.push(String(input));
     return jsonResponse({
-      tweets: [tweet({ id: "1" }), tweet({ id: "1" }), tweet({ id: "2", url: "https://x.com/a/status/2" })],
+      tweets: [
+        tweet({ id: "1" }),
+        tweet({ id: "1" }),
+        tweet({ id: undefined, url: "https://x.com/a/status/2" }),
+        tweet({ id: "2", url: "https://x.com/a/status/2" }),
+      ],
     });
   };
   const result = await fetchTweetsByIds(["1", "2"], "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
-  assert.equal(result.tweets.length, 2, "a repeated post is dropped");
+  assert.equal(result.tweets.length, 2, "repeated and alias representations are deduped");
   assert.match(seen[0], /tweet_ids=1%2C2/);
+
+  // A permalink is canonicalised to its id; an unusable reference is rejected
+  // before the paid endpoint is called.
+  const mixed: string[] = [];
+  const mixFetcher: FetchLike = async (input) => {
+    mixed.push(String(input));
+    return jsonResponse({ tweets: [] });
+  };
+  await fetchTweetsByIds(["https://x.com/a/status/7", "8"], "k", mixFetcher, {
+    sleep: noSleep,
+    minRequestIntervalMs: 0,
+  });
+  assert.match(mixed[0], /tweet_ids=7%2C8/);
+  await assert.rejects(
+    () => fetchTweetsByIds(["not-a-tweet"], "k", mixFetcher, { sleep: noSleep }),
+    /numeric post ids or X permalinks/,
+  );
 });
 
 test("fetchCommunityTweets and fetchListTweets use their id params", async () => {

@@ -463,6 +463,50 @@ test("synthesizeDocument returns its citation and skips the model for an empty b
   assert.match(empty.text, /No details/);
 });
 
+test("account prompt includes following count, location and join date", () => {
+  const prompt = buildUserCandidatePrompt("q", [
+    {
+      handle: "a",
+      profileUrl: "https://x.com/a",
+      followers: 5,
+      following: 3,
+      location: "Lagos",
+      createdAt: "2009-06-02T20:12:29.000000Z",
+    },
+  ]);
+  assert.match(prompt, /5 followers/);
+  assert.match(prompt, /3 following/);
+  assert.match(prompt, /location: Lagos/);
+  assert.match(prompt, /joined: 2009-06-02/);
+});
+
+test("synthesizeTrends discloses an invented X link", async () => {
+  const details = await synthesizeTrends({
+    query: "q",
+    trends: [{ name: "#pi", query: "#pi" }],
+    model: MODEL,
+    deps: { complete: async () => "See https://x.com/nobody/status/999" },
+  });
+  assert.ok(
+    details.notes?.some((note) => /were not among the retrieved sources/.test(note)),
+    "an unmatched X link must be disclosed",
+  );
+});
+
+test("synthesizeDocument merges extra notes and discloses invented links", async () => {
+  const details = await synthesizeDocument({
+    query: "q",
+    title: "X Space sp1",
+    body: "title: Live chat",
+    citations: ["https://x.com/i/spaces/sp1"],
+    model: MODEL,
+    deps: { complete: async () => "See https://x.com/i/spaces/sp1 and https://x.com/nobody/status/999" },
+    notes: ["extra note"],
+  });
+  assert.ok(details.notes?.includes("extra note"));
+  assert.ok(details.notes?.some((note) => /were not among the retrieved sources/.test(note)));
+});
+
 test("unmatched non-X links are not reported as fabricated citations", () => {
   const candidates = [tweet({ url: "https://x.com/alice/status/111" })];
   const { citations, fabricated } = deriveCitations(

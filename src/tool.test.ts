@@ -850,6 +850,16 @@ test("mode=tweets fetches specific posts by id", async () => {
     { modelRegistry: userRegistry("Summary (https://x.com/a/status/1)") },
   );
   assert.match(seen[0], /tweet_ids=1%2C2/);
+
+  // A permalink is canonicalised to its id before the request.
+  await tool().execute(
+    "id",
+    { query: "summarise this permalink", mode: "tweets", ids: ["https://x.com/a/status/9"] },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Summary (https://x.com/a/status/1)") },
+  );
+  assert.match(seen[1], /tweet_ids=9/);
 });
 
 test("P2 modes validate their required parameters", async () => {

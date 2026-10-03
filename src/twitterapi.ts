@@ -1653,6 +1653,9 @@ export async function fetchUserMentions(
   const { sinceTime, untilTime, ...paging } = options;
   unixSeconds(sinceTime, "sinceTime");
   unixSeconds(untilTime, "untilTime");
+  if (sinceTime !== undefined && untilTime !== undefined && sinceTime > untilTime) {
+    throw new Error("twitter sinceTime must be before or equal to untilTime");
+  }
   const result = await walkTweets(USER_MENTIONS_PATH, apiKey, fetcher, {
     ...paging,
     params: { userName: handle, sinceTime, untilTime },
@@ -1735,7 +1738,18 @@ export async function fetchTweetsByIds(
   fetcher: FetchLike = fetch,
   options: TwitterApiRequestOptions = {},
 ): Promise<TweetCollection> {
-  const cleaned = ids.map((id) => id.trim()).filter(Boolean);
+  // The tool accepts ids or permalinks, so every entry is canonicalised to a
+  // post id before the paid endpoint is called; an unusable reference is
+  // rejected rather than sent upstream.
+  const cleaned: string[] = [];
+  const requested = new Set<string>();
+  for (const raw of ids) {
+    const id = tweetIdFromInput(raw);
+    if (!id) throw new Error(`twitter mode "tweets" needs numeric post ids or X permalinks (got "${raw}")`);
+    if (requested.has(id)) continue;
+    requested.add(id);
+    cleaned.push(id);
+  }
   if (cleaned.length === 0) throw new Error("twitter mode \"tweets\" needs at least one id in `ids`");
   if (cleaned.length > 100) throw new Error("twitter mode \"tweets\" accepts at most 100 ids");
   const settings = resolveRequestSettings(options);
@@ -1747,13 +1761,19 @@ export async function fetchTweetsByIds(
     throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
   }
   const tweets: Tweet[] = [];
-  const seen = new Set<string>();
+  // Register both identifiers, like the paginated walkers: a post returned with
+  // an id and again with only its permalink is the same post.
+  const seenIds = new Set<string>();
+  const seenUrls = new Set<string>();
   for (const raw of payload.tweets) {
     const tweet = asTweet(raw);
     if (!tweet) continue;
-    const key = tweet.id ?? tweet.url;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    const duplicate =
+      (tweet.id !== undefined && seenIds.has(tweet.id)) ||
+      (tweet.url !== undefined && seenUrls.has(tweet.url));
+    if (tweet.id) seenIds.add(tweet.id);
+    if (tweet.url) seenUrls.add(tweet.url);
+    if (duplicate) continue;
     tweets.push(tweet);
   }
   return { tweets, pagesFetched: 1, stoppedBy: "exhausted", truncated: false };

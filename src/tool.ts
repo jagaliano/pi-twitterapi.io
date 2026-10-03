@@ -88,9 +88,10 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     label: "Twitter",
     description:
       "Read X/Twitter via twitterapi.io and return an answer with citation URLs. Modes: posts (default), " +
-      "users, thread, user (an account's timeline), trends, replies and quotes. Retrieved content is " +
-      "synthesized into an answer by a configured pi model.",
-    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes) and return an answer with citation URLs",
+      "users, thread, user (account timeline), trends, replies, quotes, mentions, followers, followings, " +
+      "profile, tweets, community, list and space. Retrieved content is synthesized into an answer by a " +
+      "configured pi model.",
+    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes, mentions, followers, followings, profile, tweets, community, list, space) and return an answer with citation URLs",
     promptGuidelines: [
       "Use twitter when the user needs current discussion or sentiment from X/Twitter and twitterapi.io is configured.",
       "Use mode \"users\" to discover accounts; use mode \"user\" to read a specific account's recent posts.",
@@ -114,9 +115,9 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       spaceId: Type.Optional(Type.String({ description: "mode=space: the X Space id." })),
       woeid: Type.Optional(Type.Number({ description: "Yahoo Where-On-Earth id for mode=trends (1=Worldwide, 23424977=USA)." })),
       includeReplies: Type.Optional(Type.Boolean({ description: "Include replies: mode=user (timeline) and mode=quotes." })),
-      sinceTime: Type.Optional(Type.Number({ description: "mode=quotes: only quotes on or after this unix timestamp (seconds)." })),
-      untilTime: Type.Optional(Type.Number({ description: "mode=quotes: only quotes before this unix timestamp (seconds)." })),
-      limit: Type.Optional(Type.Number({ description: "mode=user/replies/quotes: stop after this many posts (max 1000)." })),
+      sinceTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items on or after this unix timestamp (seconds)." })),
+      untilTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items before this unix timestamp (seconds)." })),
+      limit: Type.Optional(Type.Number({ description: "mode=user/mentions/followers/followings/replies/quotes/community/list: stop after this many items (max 1000)." })),
       replySort: Type.Optional(Type.String({ description: 'mode=replies sort order: "Relevance" (default), "Latest", or "Likes".' })),
       allowed_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: only posts from these handles (max 20, no @)." })),
       excluded_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: exclude these handles (max 20, no @)." })),
