@@ -150,6 +150,40 @@ test("execute reports that pi's ModelRegistry.complete is required, and does no 
   assert.equal(calls, 0, "compatibility must be checked before any retrieval");
 });
 
+test("execute falls back to the session model when synthesisModel is unset", async () => {
+  const { pi, tool } = captureTool();
+  const fetcher = (async () =>
+    new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "1",
+            url: "https://x.com/alice/status/111",
+            text: "post body",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "alice", name: "Alice" },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+  const registry = {
+    find: () => undefined,
+    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    complete: async () => ({ content: [{ type: "text", text: "Synthesized (https://x.com/alice/status/111)." }] }),
+  };
+
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, fetcher, settings: {} });
+  const result = await tool().execute("id", { query: "q" }, undefined, undefined, {
+    modelRegistry: registry,
+    model: { provider: "anthropic", id: "haiku" },
+  });
+
+  assert.match(result.content[0].text, /Model: anthropic\/haiku/);
+  assert.match(result.content[0].text, /Synthesized/);
+});
+
 test("execute requires synthesisModel", async () => {
   const { pi, tool } = captureTool();
   const fetcher = (async () => new Response(JSON.stringify({ tweets: [], has_next_page: false }), { status: 200 })) as unknown as typeof fetch;

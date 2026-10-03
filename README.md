@@ -23,7 +23,7 @@ pi -e ./dist/index.mjs
 
 ## Configure
 
-Set the twitterapi.io API key and pick the pi model used to synthesize answers:
+Set the twitterapi.io API key. Synthesis uses `twitter.synthesisModel` when set, and otherwise falls back to the model running the current pi session, so a key-only setup already works:
 
 ```bash
 export TWITTERAPI_IO_API_KEY="your-twitterapi.io-key"
@@ -50,7 +50,7 @@ override — and set only the keys you need:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `synthesisModel` | yes | A pi model id (`provider/model`) used to turn retrieved posts into an answer. No default. |
+| `synthesisModel` | no | A pi model id (`provider/model`) used to turn retrieved posts into an answer. When unset, the model running the current pi session is used as a fallback. |
 | `enableImageUnderstanding` | no | Attach post images to the synthesis request when the model accepts image input. |
 | `enableVideoUnderstanding` | no | Attach video poster frames (chat models cannot ingest video). |
 | `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4). |

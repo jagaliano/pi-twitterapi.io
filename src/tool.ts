@@ -80,10 +80,17 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
 
       if (!env.TWITTERAPI_IO_API_KEY) {
         throw new Error(
-          "twitter needs credentials: set TWITTERAPI_IO_API_KEY (twitterapi.io) and twitter.synthesisModel " +
-            "(a pi model id used to synthesize the answer).",
+          "twitter needs credentials: set TWITTERAPI_IO_API_KEY (twitterapi.io). The answer is synthesized by " +
+            "twitter.synthesisModel, or by the model running this session when that setting is unset.",
         );
       }
+
+      // The synthesis model falls back to the model running this session, so a
+      // key-only setup works without extra configuration. An explicit
+      // twitter.synthesisModel always wins.
+      const synthesisModel =
+        config.synthesisModel ?? (ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+      const effectiveConfig = synthesisModel === config.synthesisModel ? config : { ...config, synthesisModel };
 
       // A mode that cannot apply a parameter must say so. Silently ignoring them
       // is how an excluded account ends up in a successful answer.
@@ -103,7 +110,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         const { markdown, details } = await runTwitterApiUserSearch({
           query: question,
           count: (params as TwitterApiSearchParams).count,
-          config,
+          config: effectiveConfig,
           env,
           fetcher,
           signal,
@@ -118,7 +125,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
           tweet: threadReference,
           // Keep the question: the reference only locates the thread.
           query: question,
-          config,
+          config: effectiveConfig,
           env,
           fetcher,
           signal,
@@ -129,7 +136,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
 
       const { markdown, details } = await runTwitterApiSearch({
         params: { ...(params as TwitterApiSearchParams), query: question },
-        config,
+        config: effectiveConfig,
         env,
         fetcher,
         signal,

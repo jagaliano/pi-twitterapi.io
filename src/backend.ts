@@ -305,7 +305,8 @@ function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Synthesis
   const synthesisModelId = options.config.synthesisModel;
   if (!synthesisModelId) {
     throw new Error(
-      "twitter needs a synthesis model: set twitter.synthesisModel to a model id from pi's catalogue.",
+      "twitter needs a synthesis model: set twitter.synthesisModel to a model id from pi's catalogue, " +
+        "or call it from a session whose active model is resolvable.",
     );
   }
   const model = resolveModel(registry, synthesisModelId);
