@@ -54,6 +54,15 @@ export function asTweet(raw: unknown): Tweet | undefined {
   };
 }
 
+/**
+ * Status id from an X/Twitter permalink.
+ *
+ * Only validated x.com / twitter.com hosts are considered, and the id must be a
+ * whole path segment, so `https://x.com/search?q=/status/111` and
+ * `.../status/111garbage` cannot masquerade as a real post. Real suffixes such
+ * as `/photo/1` still resolve. This is the single X-URL parser for the package:
+ * `synthesize.ts` re-exports it for citation matching.
+ */
 export function statusIdFromUrl(url: string): string | undefined {
   let parsed: URL;
   try {
@@ -101,9 +110,3 @@ export function asUser(raw: unknown): UserProfile | undefined {
   };
 }
 
-/**
- * Page/count bounds. An absent value takes the default; a supplied one that is
- * out of range is an error rather than a silent fallback, so a caller asking for
- * 0 pages is told instead of quietly getting the default.
- */
-/** Page bound shared with the configuration range, so a valid config cannot fail here. */

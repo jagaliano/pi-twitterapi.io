@@ -323,9 +323,14 @@ export async function requestWithRetry(
   throw lastError ?? new Error("twitterapi.io request failed");
 }
 
-/** True when retrieval stopped while the upstream still held more results. */
+/** Page bound shared with the configuration range, so a valid config cannot fail here. */
 export const MAX_PAGE_BOUND = 100;
 
+/**
+ * Page/count bounds. An absent value takes the default; a supplied one that is
+ * out of range is an error rather than a silent fallback, so a caller asking for
+ * 0 pages is told instead of quietly getting the default.
+ */
 export function boundedCount(value: unknown, fallback: number, max: number, name: string): number {
   if (value === undefined) return fallback;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {

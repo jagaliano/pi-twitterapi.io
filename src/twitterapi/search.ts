@@ -57,6 +57,7 @@ export interface SearchTweetsOptions {
    */
   localUtcOffsetMinutes?: number;
 }
+/** True when retrieval stopped while the upstream still held more results. */
 export function isTruncated(stoppedBy: SearchTermination): boolean {
   return stoppedBy === "page-cap" || stoppedBy === "cursor-cycle" || stoppedBy === "cursor-missing";
 }
@@ -230,12 +231,3 @@ export async function searchTweets(
   };
 }
 
-/**
- * Status id from an X/Twitter permalink.
- *
- * Only validated x.com / twitter.com hosts are considered, and the id must be a
- * whole path segment, so `https://x.com/search?q=/status/111` and
- * `.../status/111garbage` cannot masquerade as a real post. Real suffixes such
- * as `/photo/1` still resolve. This is the single X-URL parser for the package:
- * `synthesize.ts` re-exports it for citation matching.
- */

@@ -2,9 +2,10 @@
  * twitterapi.io backend — pure request/response logic (no pi imports).
  * Testable with an injected fetcher.
  *
- * Barrel: the public surface is unchanged; the implementation is split into
- * focused modules (core types, params, tweet/user mapping, date window,
- * transport, search and endpoint readers).
+ * Barrel: internal wiring for the split modules (core types, params, tweet/user
+ * mapping, date window, transport, search and endpoint readers). The *published*
+ * surface is `src/index.ts`; `export *` here also exposes sibling-module helpers
+ * to the rest of the source tree by design.
  */
 export * from "./twitterapi/core.js";
 export * from "./twitterapi/params.js";
