@@ -11,10 +11,15 @@ import {
   type SynthesisRequest,
 } from "./synthesize.js";
 import {
+  fetchFollowers,
+  fetchFollowings,
   fetchThread,
   fetchTrends,
   fetchTweetQuotes,
   fetchTweetReplies,
+  fetchTweetsByIds,
+  fetchUserMentions,
+  fetchUserProfile,
   fetchUserTweets,
   normalizeParams,
   searchTweets,
@@ -22,6 +27,7 @@ import {
   type ReplySort,
   type Tweet,
   type TwitterApiSearchParams,
+  type UserProfile,
 } from "./twitterapi.js";
 
 /**
@@ -697,4 +703,137 @@ export async function runTwitterApiTrends(
     deps: { complete: backend.complete },
   });
   return { markdown: formatTwitterResults(details), details };
+}
+
+// ------------------------------------------------ accounts & lookups (P2)
+
+/** Shared synthesis hop for the account-shaped reads (followers, profile). */
+async function completeUserAnswer(
+  backend: SynthesisBackend,
+  options: TwitterApiSynthesisOptions,
+  input: { query: string; users: UserProfile[]; incomplete?: string; notes: string[] },
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const details = await synthesizeUserAnswer({
+    query: input.query,
+    users: input.users,
+    config: options.config,
+    model: toSynthesisModel(backend.model),
+    signal: options.signal,
+    incomplete: input.incomplete,
+    deps: { complete: backend.complete },
+  });
+  details.notes = [...(details.notes ?? []), ...input.notes];
+  return { markdown: formatTwitterResults(details), details };
+}
+
+/** Retry/pacing options every lookup takes from the config. */
+function lookupOptions(options: TwitterApiSynthesisOptions) {
+  return {
+    signal: options.signal,
+    minRequestIntervalMs: options.config.minRequestIntervalMs,
+    retryBaseDelayMs: options.config.retryBaseDelayMs,
+  };
+}
+
+export interface TwitterApiMentionsOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  userName: string;
+  sinceTime?: number;
+  untilTime?: number;
+  limit?: number;
+}
+
+/** Fetch posts that mention an account and synthesize an answer from them. */
+export async function runTwitterApiMentions(
+  options: TwitterApiMentionsOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const mentions = await fetchUserMentions(options.userName, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    sinceTime: options.sinceTime,
+    untilTime: options.untilTime,
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(mentions.stoppedBy, mentions.pagesFetched);
+  const notes = [`Answered from ${mentions.tweets.length} mention(s) of @${mentions.userName}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more mentions remained, so these results may be incomplete.`);
+  }
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: mentions.tweets, incomplete, notes });
+}
+
+export interface TwitterApiFollowOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  userName: string;
+  pageSize?: number;
+  limit?: number;
+}
+
+async function runFollow(
+  options: TwitterApiFollowOptions,
+  direction: "followers" | "followings",
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const fetchFn = direction === "followers" ? fetchFollowers : fetchFollowings;
+  const result = await fetchFn(options.userName, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    pageSize: options.pageSize,
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
+  const notes = [`Answered from ${result.users.length} ${direction} of @${result.userName}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more ${direction} remained, so these results may be incomplete.`);
+  }
+  return completeUserAnswer(backend, options, { query: options.query, users: result.users, incomplete, notes });
+}
+
+/** Fetch an account's followers and synthesize an answer from the profiles. */
+export async function runTwitterApiFollowers(
+  options: TwitterApiFollowOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  return runFollow(options, "followers");
+}
+
+/** Fetch the accounts an account follows and synthesize an answer. */
+export async function runTwitterApiFollowings(
+  options: TwitterApiFollowOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  return runFollow(options, "followings");
+}
+
+export interface TwitterApiProfileOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  userName: string;
+}
+
+/** Fetch one account profile and synthesize an answer from it. */
+export async function runTwitterApiProfile(
+  options: TwitterApiProfileOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const user = await fetchUserProfile(options.userName, backend.apiKey, backend.fetcher, lookupOptions(options));
+  return completeUserAnswer(backend, options, {
+    query: options.query,
+    users: [user],
+    notes: [`Answered from the profile of @${user.handle}.`],
+  });
+}
+
+export interface TwitterApiTweetsByIdsOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  ids: string[];
+}
+
+/** Fetch specific posts by id and synthesize an answer from them. */
+export async function runTwitterApiTweetsByIds(
+  options: TwitterApiTweetsByIdsOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const result = await fetchTweetsByIds(options.ids, backend.apiKey, backend.fetcher, lookupOptions(options));
+  return completeTweetAnswer(backend, options, {
+    query: options.query,
+    tweets: result.tweets,
+    notes: [`Answered from ${result.tweets.length} post(s) fetched by id.`],
+  });
 }

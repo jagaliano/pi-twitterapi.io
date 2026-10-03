@@ -1535,3 +1535,226 @@ export async function fetchTrends(
   }
   return { woeid, trends };
 }
+
+// -------------------------------------------- accounts & lookups (P2)
+
+export const USER_MENTIONS_PATH = "/twitter/user/mentions";
+export const USER_FOLLOWERS_PATH = "/twitter/user/followers";
+export const USER_FOLLOWINGS_PATH = "/twitter/user/followings";
+export const USER_INFO_PATH = "/twitter/user/info";
+export const TWEETS_BY_IDS_PATH = "/twitter/tweets";
+
+export interface UserCollection {
+  users: UserProfile[];
+  pagesFetched: number;
+  stoppedBy: SearchTermination;
+  /** True when accounts remained upstream (`page-cap` or `cursor-cycle`). */
+  truncated: boolean;
+}
+
+/** Cursor-paginate an endpoint that returns an account array under `arrayKey`. */
+async function walkUsers(
+  path: string,
+  apiKey: string,
+  fetcher: FetchLike,
+  options: TweetPagingOptions & {
+    arrayKey: string;
+    params?: Record<string, string | number | boolean | undefined>;
+  },
+): Promise<UserCollection> {
+  const settings = resolveRequestSettings(options);
+  const ceiling = boundedCount(options.maxPagesCeiling, DEFAULT_MAX_PAGES_CEILING, MAX_PAGE_BOUND, "maxPagesCeiling");
+  const maxPages = Math.min(boundedCount(options.maxPages, 3, MAX_PAGE_BOUND, "maxPages"), ceiling);
+  const limit = options.limit === undefined ? undefined : boundedCount(options.limit, 20, 1_000, "limit");
+  const collected: UserProfile[] = [];
+  const seenIds = new Set<string>();
+  const seenHandles = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor = "";
+  let pages = 0;
+  let lastRequestAt: number | undefined;
+  let stoppedBy: SearchTermination = "page-cap";
+
+  while (pages < maxPages && (limit === undefined || collected.length < limit)) {
+    if (settings.signal?.aborted) throw new CancelledError();
+    if (settings.minRequestIntervalMs > 0 && lastRequestAt !== undefined) {
+      const wait = settings.minRequestIntervalMs - (settings.now() - lastRequestAt);
+      if (wait > 0) await sleepAbortable(wait, settings.signal, settings.sleep);
+    }
+    pages += 1;
+    const url = new URL(TWITTERAPI_BASE_URL + path);
+    for (const [key, value] of Object.entries(options.params ?? {})) {
+      if (value === undefined || value === "") continue;
+      url.searchParams.set(key, String(value));
+    }
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
+    lastRequestAt = settings.now();
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+    if (!Array.isArray(payload[options.arrayKey])) {
+      throw new Error(`twitterapi.io returned a malformed response (missing ${options.arrayKey} array)`);
+    }
+
+    for (const raw of payload[options.arrayKey] as unknown[]) {
+      const user = asUser(raw);
+      if (!user) continue;
+      const handleKey = user.handle.toLowerCase();
+      const duplicate = (user.id !== undefined && seenIds.has(user.id)) || seenHandles.has(handleKey);
+      if (user.id) seenIds.add(user.id);
+      seenHandles.add(handleKey);
+      if (duplicate) continue;
+      collected.push(user);
+      if (limit !== undefined && collected.length >= limit) break;
+    }
+
+    const step = advanceOrStop(payload, seenCursors);
+    if (typeof step === "string") {
+      stoppedBy = step;
+      break;
+    }
+    cursor = step.cursor;
+  }
+  if (limit !== undefined && collected.length >= limit) stoppedBy = "target";
+
+  return { users: collected, pagesFetched: pages, stoppedBy, truncated: isTruncated(stoppedBy) };
+}
+
+/** Validate an optional unix-seconds bound. */
+function unixSeconds(value: number | undefined, name: string): void {
+  if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
+    throw new Error(`twitter ${name} must be a non-negative unix timestamp in seconds`);
+  }
+}
+
+function requireUserName(userName: string | undefined, mode: string): string {
+  const handle = userName?.trim().replace(/^@+/, "");
+  if (!handle) throw new Error(`twitter mode "${mode}" needs a userName`);
+  return handle;
+}
+
+export interface UserMentionsDetails extends TweetCollection {
+  userName: string;
+}
+
+export interface FetchUserMentionsOptions extends TweetPagingOptions {
+  sinceTime?: number;
+  untilTime?: number;
+}
+
+/** Fetch posts that mention an account via `/twitter/user/mentions`. */
+export async function fetchUserMentions(
+  userName: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: FetchUserMentionsOptions = {},
+): Promise<UserMentionsDetails> {
+  const handle = requireUserName(userName, "mentions");
+  const { sinceTime, untilTime, ...paging } = options;
+  unixSeconds(sinceTime, "sinceTime");
+  unixSeconds(untilTime, "untilTime");
+  const result = await walkTweets(USER_MENTIONS_PATH, apiKey, fetcher, {
+    ...paging,
+    params: { userName: handle, sinceTime, untilTime },
+  });
+  return { ...result, userName: handle };
+}
+
+export interface FollowersDetails extends UserCollection {
+  userName: string;
+}
+
+export interface FetchFollowOptions extends TweetPagingOptions {
+  /** Accounts per page, upstream accepts 20–200. */
+  pageSize?: number;
+}
+
+function followOptions(
+  handle: string,
+  options: FetchFollowOptions,
+): TweetPagingOptions & { params: Record<string, string | number | undefined> } {
+  const { pageSize, ...paging } = options;
+  if (pageSize !== undefined && (!Number.isInteger(pageSize) || pageSize < 20 || pageSize > 200)) {
+    throw new Error("twitter pageSize must be an integer between 20 and 200");
+  }
+  return { ...paging, params: { userName: handle, pageSize } };
+}
+
+/** Fetch an account's followers via `/twitter/user/followers`. */
+export async function fetchFollowers(
+  userName: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: FetchFollowOptions = {},
+): Promise<FollowersDetails> {
+  const handle = requireUserName(userName, "followers");
+  const result = await walkUsers(USER_FOLLOWERS_PATH, apiKey, fetcher, {
+    ...followOptions(handle, options),
+    arrayKey: "followers",
+  });
+  return { ...result, userName: handle };
+}
+
+/** Fetch the accounts an account follows via `/twitter/user/followings`. */
+export async function fetchFollowings(
+  userName: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: FetchFollowOptions = {},
+): Promise<FollowersDetails> {
+  const handle = requireUserName(userName, "followings");
+  const result = await walkUsers(USER_FOLLOWINGS_PATH, apiKey, fetcher, {
+    ...followOptions(handle, options),
+    arrayKey: "followings",
+  });
+  return { ...result, userName: handle };
+}
+
+/** Fetch a single profile via `/twitter/user/info`. */
+export async function fetchUserProfile(
+  userName: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TwitterApiRequestOptions = {},
+): Promise<UserProfile> {
+  const handle = requireUserName(userName, "profile");
+  const settings = resolveRequestSettings(options);
+  const url = new URL(TWITTERAPI_BASE_URL + USER_INFO_PATH);
+  url.searchParams.set("userName", handle);
+  const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const user = asUser(payload.data);
+  if (!user) throw new Error(`twitterapi.io returned no profile for "${handle}"`);
+  return user;
+}
+
+/** Fetch specific posts by id via `/twitter/tweets` (max 100 ids). */
+export async function fetchTweetsByIds(
+  ids: readonly string[],
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TwitterApiRequestOptions = {},
+): Promise<TweetCollection> {
+  const cleaned = ids.map((id) => id.trim()).filter(Boolean);
+  if (cleaned.length === 0) throw new Error("twitter mode \"tweets\" needs at least one id in `ids`");
+  if (cleaned.length > 100) throw new Error("twitter mode \"tweets\" accepts at most 100 ids");
+  const settings = resolveRequestSettings(options);
+  const url = new URL(TWITTERAPI_BASE_URL + TWEETS_BY_IDS_PATH);
+  url.searchParams.set("tweet_ids", cleaned.join(","));
+  const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  if (!Array.isArray(payload.tweets)) {
+    throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
+  }
+  const tweets: Tweet[] = [];
+  const seen = new Set<string>();
+  for (const raw of payload.tweets) {
+    const tweet = asTweet(raw);
+    if (!tweet) continue;
+    const key = tweet.id ?? tweet.url;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    tweets.push(tweet);
+  }
+  return { tweets, pagesFetched: 1, stoppedBy: "exhausted", truncated: false };
+}

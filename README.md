@@ -69,10 +69,12 @@ override — and set only the keys you need:
 | Parameter | Type | Notes |
 |---|---|---|
 | `query` | string (required) | Natural-language question. Required for every mode. |
-| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` | Defaults to `posts`. |
+| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `tweets` | Defaults to `posts`. |
 | `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`; refused in any other mode. |
-| `user` | string | Handle (no `@`) for `mode=user` (account timeline). |
+| `user` | string | Handle (no `@`) for `mode=user`, `mentions`, `followers`, `followings`, `profile`. |
 | `userId` | string | Numeric user id for `mode=user`; preferred over `user` when known. |
+| `ids` | string[] | `mode=tweets`: post ids or permalinks to fetch (max 100). |
+| `pageSize` | number | `mode=followers`/`followings`: accounts per page (20–200). |
 | `woeid` | number | `mode=trends` location id (1=Worldwide, 23424977=USA). |
 | `includeReplies` | boolean | `mode=user` (timeline) and `mode=quotes`. |
 | `sinceTime` / `untilTime` | number | `mode=quotes`: unix timestamps (seconds) bounding the quotes. |
@@ -98,6 +100,11 @@ than silently ignored.
 | `trends` | `/twitter/trends` | Trending topics for a `woeid`; sources are X search URLs. |
 | `replies` | `/twitter/tweet/replies/v2` | Replies to a post (`replySort`, `limit`). |
 | `quotes` | `/twitter/tweet/quotes` | Quote-posts of a post (`sinceTime`/`untilTime`, `includeReplies`, `limit`). |
+| `mentions` | `/twitter/user/mentions` | Posts mentioning an account (`user`, `sinceTime`/`untilTime`, `limit`). |
+| `followers` | `/twitter/user/followers` | Who follows an account (`user`, `pageSize`, `limit`); profile URLs as sources. |
+| `followings` | `/twitter/user/followings` | Who an account follows (`user`, `pageSize`, `limit`). |
+| `profile` | `/twitter/user/info` | A single account profile (`user`). |
+| `tweets` | `/twitter/tweets` | Specific posts by id (`ids`, max 100). |
 
 ## Behavior and disclosures
 

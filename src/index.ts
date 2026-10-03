@@ -18,11 +18,16 @@ export default function (pi: ExtensionAPI) {
 
 export { registerTwitterTool, type TwitterToolOptions } from "./tool.js";
 export {
+  runTwitterApiFollowers,
+  runTwitterApiFollowings,
+  runTwitterApiMentions,
+  runTwitterApiProfile,
   runTwitterApiQuotes,
   runTwitterApiReplies,
   runTwitterApiSearch,
   runTwitterApiThread,
   runTwitterApiTrends,
+  runTwitterApiTweetsByIds,
   runTwitterApiUserSearch,
   runTwitterApiUserTimeline,
   resolveModel,
@@ -36,12 +41,16 @@ export type {
   BackendOptions,
   ModelLike,
   RegistryLike,
+  TwitterApiFollowOptions,
+  TwitterApiMentionsOptions,
+  TwitterApiProfileOptions,
   TwitterApiQuotesOptions,
   TwitterApiRepliesOptions,
   TwitterApiRunOptions,
   TwitterApiSynthesisOptions,
   TwitterApiThreadOptions,
   TwitterApiTrendsOptions,
+  TwitterApiTweetsByIdsOptions,
   TwitterApiUserSearchOptions,
   TwitterApiUserTimelineOptions,
 } from "./backend.js";
@@ -65,10 +74,15 @@ export {
 export type { ImageAttachment, SynthesisModel } from "./synthesize.js";
 export {
   buildExpression,
+  fetchFollowers,
+  fetchFollowings,
   fetchThread,
   fetchTrends,
   fetchTweetQuotes,
   fetchTweetReplies,
+  fetchTweetsByIds,
+  fetchUserMentions,
+  fetchUserProfile,
   fetchUserTweets,
   normalizeParams,
   searchTweets,
@@ -77,6 +91,7 @@ export {
   tweetIdFromInput,
 } from "./twitterapi.js";
 export type {
+  FollowersDetails,
   ReplySort,
   SearchDetails,
   Trend,
@@ -86,6 +101,8 @@ export type {
   TweetQuotesDetails,
   TweetRepliesDetails,
   TwitterApiSearchParams,
+  UserCollection,
+  UserMentionsDetails,
   UserTweetsDetails,
 } from "./twitterapi.js";
 export type { TwitterSearchDetails } from "./types.js";

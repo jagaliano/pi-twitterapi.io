@@ -720,3 +720,152 @@ test("the new modes validate their required parameters", async () => {
     /allowed_x_handles cannot be applied in mode "user"/,
   );
 });
+
+test("mode=profile reads a single account profile", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({ data: { id: "1", screen_name: "alice", description: "builder", followers_count: 12 } }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute(
+    "id",
+    { query: "who is this?", mode: "profile", user: "alice" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Alice builds things.") },
+  );
+  assert.match(seen[0], /user\/info/);
+  assert.match(seen[0], /userName=alice/);
+  assert.match(result.content[0].text, /Alice builds things/);
+});
+
+test("mode=followers and mode=followings read account graphs", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    const href = String(url);
+    seen.push(href);
+    const body = href.includes("followings")
+      ? { followings: [{ id: "2", screen_name: "bob" }] }
+      : { followers: [{ id: "1", screen_name: "alice" }] };
+    return new Response(JSON.stringify({ ...body, has_next_page: false }), { status: 200 });
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  await tool().execute(
+    "id",
+    { query: "who follows this?", mode: "followers", user: "grok" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Followers: alice (https://x.com/alice)") },
+  );
+  assert.match(seen[0], /followers/);
+  await tool().execute(
+    "id",
+    { query: "who does this follow?", mode: "followings", user: "grok" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Following: bob (https://x.com/bob)") },
+  );
+  assert.match(seen[1], /followings/);
+});
+
+test("mode=mentions reads posts mentioning an account", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "3",
+            url: "https://x.com/b/status/3",
+            text: "hi @grok",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "b" },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  await tool().execute(
+    "id",
+    { query: "what are people saying?", mode: "mentions", user: "grok", sinceTime: 100 },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("People are saying hi (https://x.com/b/status/3)") },
+  );
+  assert.match(seen[0], /mentions/);
+  assert.match(seen[0], /sinceTime=100/);
+});
+
+test("mode=tweets fetches specific posts by id", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({
+        tweets: [
+          { id: "1", url: "https://x.com/a/status/1", text: "post", createdAt: "Mon Sep 21 10:00:00 +0000 2026", author: { userName: "a" } },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  await tool().execute(
+    "id",
+    { query: "summarise these", mode: "tweets", ids: ["1", "2"] },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Summary (https://x.com/a/status/1)") },
+  );
+  assert.match(seen[0], /tweet_ids=1%2C2/);
+});
+
+test("P2 modes validate their required parameters", async () => {
+  const { pi, tool } = captureTool();
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "profile" }, undefined, undefined, undefined),
+    /needs `user`/,
+  );
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "followers" }, undefined, undefined, undefined),
+    /needs `user`/,
+  );
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "tweets" }, undefined, undefined, undefined),
+    /needs `ids`/,
+  );
+});

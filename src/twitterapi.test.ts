@@ -4,10 +4,15 @@ import { execFileSync } from "node:child_process";
 import {
   DEFAULT_MAX_PAGES_CEILING,
   MAX_RETRY_DELAY_MS,
+  fetchFollowers,
+  fetchFollowings,
   fetchThread,
   fetchTrends,
   fetchTweetQuotes,
   fetchTweetReplies,
+  fetchTweetsByIds,
+  fetchUserMentions,
+  fetchUserProfile,
   fetchUserTweets,
   searchUsers,
   statusIdFromUrl,
@@ -1362,6 +1367,97 @@ test("fetchTweetQuotes validates the time window and forwards it", async () => {
   assert.match(seen[0], /sinceTime=100/);
   assert.match(seen[0], /untilTime=200/);
   assert.match(seen[0], /includeReplies=false/);
+});
+
+test("fetchFollowers walks the followers array and maps profiles", async () => {
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({ followers: [apiUser(), apiUser({ id: "2", screen_name: "bob" })], has_next_page: false });
+  };
+  const result = await fetchFollowers("@grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.equal(result.userName, "grok", "a leading @ is stripped");
+  assert.equal(result.users.length, 2);
+  assert.match(seen[0], /followers/);
+  assert.match(seen[0], /userName=grok/);
+});
+
+test("fetchFollowings reads the followings array", async () => {
+  const fetcher: FetchLike = async () => jsonResponse({ followings: [apiUser()], has_next_page: false });
+  const result = await fetchFollowings("grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.equal(result.users.length, 1);
+});
+
+test("fetchFollowers requires a handle and validates pageSize", async () => {
+  await assert.rejects(
+    () => fetchFollowers("", "k", async () => jsonResponse({ followers: [] }), { sleep: noSleep }),
+    /needs a userName/,
+  );
+  await assert.rejects(
+    () => fetchFollowers("grok", "k", async () => jsonResponse({ followers: [] }), { sleep: noSleep, pageSize: 10 }),
+    /pageSize must be an integer between 20 and 200/,
+  );
+});
+
+test("fetchUserProfile unwraps the data envelope and errors when it is empty", async () => {
+  const fetcher: FetchLike = async () => jsonResponse({ data: apiUser() });
+  const user = await fetchUserProfile("@grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.equal(user.handle, "grok");
+
+  await assert.rejects(
+    () => fetchUserProfile("grok", "k", async () => jsonResponse({ data: null }), { sleep: noSleep }),
+    /no profile/,
+  );
+});
+
+test("fetchUserMentions validates and forwards the time window", async () => {
+  await assert.rejects(
+    () => fetchUserMentions("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    /needs a userName/,
+  );
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({ tweets: [tweet()], has_next_page: false });
+  };
+  const result = await fetchUserMentions("grok", "k", fetcher, {
+    sleep: noSleep,
+    minRequestIntervalMs: 0,
+    sinceTime: 100,
+    untilTime: 200,
+  });
+  assert.equal(result.userName, "grok");
+  assert.match(seen[0], /mentions/);
+  assert.match(seen[0], /sinceTime=100/);
+  assert.match(seen[0], /untilTime=200/);
+});
+
+test("fetchTweetsByIds validates the id list and returns unique posts", async () => {
+  await assert.rejects(
+    () => fetchTweetsByIds([], "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    /at least one id/,
+  );
+  await assert.rejects(
+    () =>
+      fetchTweetsByIds(
+        Array.from({ length: 101 }, (_, i) => String(i)),
+        "k",
+        async () => jsonResponse({ tweets: [] }),
+        { sleep: noSleep },
+      ),
+    /at most 100/,
+  );
+
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({
+      tweets: [tweet({ id: "1" }), tweet({ id: "1" }), tweet({ id: "2", url: "https://x.com/a/status/2" })],
+    });
+  };
+  const result = await fetchTweetsByIds(["1", "2"], "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.equal(result.tweets.length, 2, "a repeated post is dropped");
+  assert.match(seen[0], /tweet_ids=1%2C2/);
 });
 
 test("fetchTrends validates woeid and count and maps the upstream trend shape", async () => {
