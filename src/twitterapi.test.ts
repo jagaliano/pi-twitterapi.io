@@ -318,8 +318,10 @@ test("fixed-offset window: one-sided filters stay one-sided", () => {
 });
 
 test("host-zone midnight stays correct across DST transitions (deterministic, child process)", () => {
-  // Node latches TZ per process, so each zone/date runs in its own child.
-  const moduleUrl = new URL("./twitterapi.ts", import.meta.url).href;
+  // Node latches TZ per process, so each zone/date runs in its own child. Import
+  // the pure window module directly: its only imports are type-only, so the
+  // child (plain Node, no TS loader) does not need to resolve sibling modules.
+  const moduleUrl = new URL("./twitterapi/window.ts", import.meta.url).href;
   const midnight = (tz: string, date: string): string => {
     const script = `
       import { resolveLocalWindow } from ${JSON.stringify(moduleUrl)};
