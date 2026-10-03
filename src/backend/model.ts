@@ -1,6 +1,17 @@
 import type { TwitterConfig } from "../config.js";
 import type { SynthesisModel } from "../synthesize.js";
 
+/**
+ * Minimal structural view of pi's ModelRegistry, so this module stays testable
+ * without importing pi internals.
+ *
+ * Only `find` and `getAll` are required: they exist across the supported pi
+ * range. `complete` does NOT — pi 0.80.6 has no such member (verified in both
+ * its .d.ts and compiled JS), so it is optional here and feature-detected at
+ * call time rather than assumed. Keeping it optional is what lets the real
+ * ModelRegistry be passed without a cast, so a future signature change fails
+ * typecheck instead of silently breaking at runtime.
+ */
 export interface RegistryLike {
   find(provider: string, modelId: string): ModelLike | undefined;
   getAll(): readonly ModelLike[];
@@ -12,6 +23,7 @@ export interface ModelLike {
   id: string;
   input?: readonly string[];
 }
+/** Options shared by every twitterapi.io run path. */
 export interface BackendOptions {
   env?: Record<string, string | undefined>;
   fetcher?: typeof fetch;

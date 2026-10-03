@@ -1,5 +1,10 @@
 import { isObject, type FetchLike } from "./core.js";
 
+/**
+ * Upper bound on any single retry delay. A server-supplied `Retry-After` longer
+ * than this is not clamped-and-retried-early — that would spend the remaining
+ * attempts while the limit is still in force — the call fails visibly instead.
+ */
 export const MAX_RETRY_DELAY_MS = 60_000;
 
 /** Default ceiling for the adaptive page budget (see `maxPagesCeiling`). */
