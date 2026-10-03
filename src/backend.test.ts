@@ -346,6 +346,79 @@ test("classifySynthesisError maps provider failures to kinds", () => {
     classifySynthesisError(new Error("twitter synthesis was cancelled before it produced an answer")),
     "cancelled",
   );
+  // Explicit codes win over text heuristics.
+  assert.equal(classifySynthesisError(new Error("429 quota exceeded per minute")), "rate-limit");
+  assert.equal(classifySynthesisError(new Error("insufficient_quota 429")), "quota");
+  // "aborted" from a provider is transport, not caller cancellation.
+  assert.equal(classifySynthesisError(new Error("connection aborted")), "transport");
+  assert.equal(classifySynthesisError(new Error("x"), AbortSignal.abort()), "cancelled");
+  const abortError = new Error("stop");
+  abortError.name = "AbortError";
+  assert.equal(classifySynthesisError(abortError), "cancelled");
+  assert.equal(
+    classifySynthesisError(new Error("twitter synthesis tried to call a tool instead of answering")),
+    "invalid-request",
+  );
+  assert.equal(classifySynthesisError(new Error("maximum context length exceeded")), "invalid-request");
+  assert.equal(classifySynthesisError(new Error("something inexplicable")), "unknown");
+});
+
+test("a text-only fallback does not receive images", async () => {
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku", enableImageUnderstanding: true } });
+  const seen: { model: string; hasImage: boolean }[] = [];
+  const registry = {
+    find: () => undefined,
+    getAll: () => [
+      { provider: "anthropic", id: "haiku", input: ["text", "image"] },
+      { provider: "anthropic", id: "sonnet", input: ["text"] },
+    ],
+    complete: async (model: { id?: string }, context: { messages?: { content?: unknown }[] }) => {
+      const content = context?.messages?.[0]?.content;
+      const hasImage =
+        Array.isArray(content) && content.some((block) => (block as { type?: string }).type === "image");
+      seen.push({ model: model.id ?? "", hasImage });
+      if (model.id === "haiku") throw new Error("401 unauthorized");
+      return { content: [{ type: "text", text: "fallback (https://x.com/a/status/1)" }] };
+    },
+  } as unknown as RegistryLike;
+  const fetcher = (async (input: string | URL) => {
+    const url = String(input);
+    if (url.includes("/media/")) {
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "image/jpeg" } });
+    }
+    return new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "1",
+            url: "https://x.com/a/status/1",
+            text: "t",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "a" },
+            entities: { media: [{ type: "photo", media_url_https: "https://pbs.twimg.com/media/x.jpg" }] },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+
+  const result = await runTwitterApiSearch({
+    params: { query: "q" },
+    config,
+    env: { TWITTERAPI_IO_API_KEY: "k" },
+    registry,
+    fetcher,
+    fallbackModelIds: ["anthropic/sonnet"],
+    synthesisSleep: async () => {},
+  });
+
+  assert.equal(seen[0]?.model, "haiku");
+  assert.equal(seen[0]?.hasImage, true, "the image-capable primary receives the image");
+  assert.equal(seen[1]?.model, "sonnet");
+  assert.equal(seen[1]?.hasImage, false, "the text-only fallback must not receive images");
+  assert.match(result.details.notes?.join(" ") ?? "", /images were omitted/);
 });
 
 test("synthesisRetryDelayMs doubles to a 4s cap", () => {

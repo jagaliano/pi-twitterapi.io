@@ -82,8 +82,8 @@ override — and set only the keys you need:
 | `spaceId` | string | `mode=space`: the X Space id. |
 | `woeid` | number | `mode=trends` location id (1=Worldwide, 23424977=USA). |
 | `includeReplies` | boolean | `mode=user` (timeline) and `mode=quotes`. |
-| `sinceTime` / `untilTime` | number | `mode=quotes`: unix timestamps (seconds) bounding the quotes. |
-| `limit` | number | `mode=user`/`replies`/`quotes`: stop after this many posts (max 1000). |
+| `sinceTime` / `untilTime` | number | `mode=quotes` and `mode=mentions`: unix timestamps (seconds) bounding the results. |
+| `limit` | number | `mode=user`/`mentions`/`followers`/`followings`/`replies`/`quotes`/`community`/`list`: stop after this many items (max 1000). |
 | `replySort` | `"Relevance"` \| `"Latest"` \| `"Likes"` | `mode=replies` sort order (default `Relevance`). |
 | `allowed_x_handles` | string[] | `mode=posts`: only these handles (max 20, no `@`). |
 | `excluded_x_handles` | string[] | `mode=posts`: exclude these handles (max 20, no `@`). |
@@ -128,7 +128,16 @@ than silently ignored.
   note saying the results may be incomplete.
 - **Date windows are resolved at 04:00 UTC by twitterapi.io**, so posts outside
   the requested local window are trimmed while paging, with a note when that
-  happens.
+  happens. Two consequences worth knowing: far-west offsets (for example
+  UTC-8/-10) can lose the last few hours of the requested day because the
+  upstream window ends before local midnight (disclosed as a note), and far-east
+  offsets (UTC+10 and beyond) can spend free paging on the newer trim band before
+  results begin. Start padding is deliberately conservative (one extra hour) so a
+  winter boundary shift cannot silently drop the first hour of the local day.
+- **Images and the fallback.** Media is attached only when the model chosen to
+  synthesize accepts image input; if that model fails and a different model
+  answers, images are omitted rather than sent to a model that cannot read them,
+  and the answer says so.
 - **Synthesis fallback.** If `twitter.synthesisModel` fails at runtime, the
   answer is retried with the model running the current session and the result
   carries a note naming the model that answered. Failures are classified so the
@@ -144,7 +153,8 @@ than silently ignored.
   | Server | `5xx`, bad gateway, unavailable | next model, retried once when it is the last one |
   | Transport | timeouts, connection drops, premature stream endings | next model, retried once when it is the last one |
   | Empty response | model returned no usable text | next model, retried once when it is the last one |
-  | Cancelled | explicit abort wording, generation cancelled | stop, no fallback |
+  | Unclassified | anything else | next model, never retried |
+  | Cancelled | aborted signal / `AbortError`, or pi's "was cancelled" wording | stop, no fallback |
 
   Deterministic failures never retry the same model. The bounded retry (500 ms,
   doubling to a 4 s cap) is spent only on the last available model, since an
@@ -179,7 +189,7 @@ version, including parameter mapping, lives in
 | Fetch posts by id | ❌ | ✅ `mode=tweets` |
 | Communities / lists / Spaces | ❌ | ✅ `mode=community`, `mode=list`, `mode=space` |
 | Handle filters | `allowed_x_handles` / `excluded_x_handles` (max 20, mutually exclusive) | same, `mode=posts` |
-| Date range | `from_date` / `to_date` (`YYYY-MM-DD`) | same, `mode=posts`; plus unix windows for `replies`/`quotes`/`mentions` |
+| Date range | `from_date` / `to_date` (`YYYY-MM-DD`) | same, `mode=posts`; plus unix windows for `quotes`/`mentions` |
 | Result order | chosen by the model | `queryType` (`Latest`/`Top`), `replySort` |
 | Item-count control | ❌ | ✅ `count`, `limit` |
 | Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached when the model accepts images) |

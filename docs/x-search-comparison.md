@@ -46,7 +46,7 @@ which is why the two are priced differently.
 | Lists | ❌ | ✅ `mode=list` → `/twitter/list/tweets_timeline` |
 | Spaces | ❌ | ✅ `mode=space` → `/twitter/spaces/detail` |
 | Handle filters | ✅ `allowed_x_handles` / `excluded_x_handles`, max 20, mutually exclusive | ✅ same names, `mode=posts` |
-| Date range | ✅ `from_date` / `to_date` (`YYYY-MM-DD`) | ✅ same names, `mode=posts`; unix `sinceTime`/`untilTime` for `replies`/`quotes`/`mentions` |
+| Date range | ✅ `from_date` / `to_date` (`YYYY-MM-DD`) | ✅ same names, `mode=posts`; unix `sinceTime`/`untilTime` for `quotes`/`mentions` |
 | Result order | chosen by the model | ✅ `queryType` (`Latest`/`Top`), `replySort` (`Relevance`/`Latest`/`Likes`) |
 | Item-count control | ❌ | ✅ `count` (posts/users/trends), `limit` (many modes) |
 | Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached only when the model accepts images) |
@@ -95,7 +95,20 @@ profile, fetch-by-id, communities, lists and Spaces.
 - **Retrieval honesty.** Paging can stop early (page cap, cursor cycle, missing
   cursor); when it does, the answer carries a note saying the results may be
   incomplete. Trends have no permalink, so their sources are X search URLs.
-- **Cancellation is not retried** by the synthesis fallback.
+- **Cancellation is not retried** by the synthesis fallback. A cancellation is
+authoritative from the aborted signal or `AbortError`, not from provider text;
+a message such as "connection aborted" is classified as a transport failure and
+routed like any other.
+- **Images respect the answering model.** Media is attached only for a model that
+accepts image input; if the primary fails and a text-only fallback answers, the
+images are dropped (and the answer discloses it) instead of being sent to a model
+that would reject them.
+- **Date boundaries are 04:00 UTC as observed, with conservative padding.** The
+upstream resolves `since:` day boundaries at 04:00 UTC in the probed season; if
+that is really US-Eastern local midnight it shifts to 05:00 UTC in winter, so the
+start padding is one hour wider to avoid silently dropping the first hour of the
+local day. Far-west offsets can lose the tail of the requested day (disclosed),
+and far-east offsets can spend free pages on the newer trim band.
 
 ## Sources
 

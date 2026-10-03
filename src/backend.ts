@@ -307,10 +307,12 @@ interface SynthesisBackend {
   model: ModelLike;
   /** Ready-to-use synthesis completion, with fallback and failure handling applied. */
   complete: (request: SynthesisRequest) => Promise<string>;
-  /** Model that served a completion after the primary failed, when that happened. */
+  /** Model that served the most recent completion after the primary failed. */
   fallback?: ModelLike;
-  /** True once a completion has been served by the fallback model. */
+  /** True when the most recent completion was served by the fallback model. */
   isFallbackUsed: () => boolean;
+  /** True when images were dropped because the answering model cannot take them. */
+  imagesDropped: () => boolean;
 }
 
 /** True for an aborted/cancelled completion, which must not trigger a fallback. */
@@ -323,12 +325,14 @@ export type SynthesisFailureKind =
   | "rate-limit"
   | "server"
   | "transport"
-  | "empty";
+  | "empty"
+  | "unknown";
 
 /**
  * Failure classes worth one retry on the last model. Deterministic failures
- * (quota, auth, unknown model, invalid request) are never retried: a second
- * attempt cannot succeed.
+ * (quota, auth, unknown model, invalid request, and anything unclassified) are
+ * never retried: a second attempt cannot succeed or is not worth a second billed
+ * call.
  */
 const RETRYABLE_ON_LAST: ReadonlySet<SynthesisFailureKind> = new Set([
   "rate-limit",
@@ -347,28 +351,48 @@ export function synthesisRetryDelayMs(attempt: number): number {
 
 /**
  * Classify a synthesis failure so the chain reacts per kind instead of treating
- * every error alike. Provider failures reach pi as a message (and sometimes only
- * as a stop reason), so the classification is text-based and ordered so the most
- * specific signal wins.
+ * every error alike.
+ *
+ * Cancellation is authoritative from the signal or error type; the text match is
+ * only a fallback for pi's own "was cancelled" wording, so a provider message
+ * like "connection aborted" is a transport failure rather than a caller cancel.
+ * Explicit status codes are checked before text heuristics, so a 429 carrying
+ * quota wording is still a rate limit and an `api key` mention cannot turn a rate
+ * limit into an auth failure.
  */
-export function classifySynthesisError(error: unknown): SynthesisFailureKind {
+export function classifySynthesisError(error: unknown, signal?: AbortSignal): SynthesisFailureKind {
+  const name = error instanceof Error ? error.name : "";
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  if (/cancel|abort/.test(message)) return "cancelled";
-  if (/insufficient_quota|quota|billing|payment required|subscription|\b402\b|credit/.test(message)) return "quota";
-  if (/\b401\b|\b403\b|unauthor|invalid api key|forbidden|authentication|api key/.test(message)) return "auth";
-  if (/\b404\b|does not exist|unknown model|no such model|not found/.test(message)) return "unknown-model";
-  if (/\b400\b|\b422\b|malformed|invalid request|bad request|validation/.test(message)) return "invalid-request";
-  if (/\b429\b|too many requests|rate limit|overloaded/.test(message)) return "rate-limit";
-  if (/\b5\d\d\b|bad gateway|unavailable|internal server error|gateway timeout/.test(message)) return "server";
+  if (signal?.aborted || name === "AbortError" || /\bwas cancelled\b|generation was cancelled/.test(message)) {
+    return "cancelled";
+  }
+  if (/\b429\b/.test(message)) {
+    return /insufficient_quota|billing|payment required/.test(message) ? "quota" : "rate-limit";
+  }
+  if (/\b402\b/.test(message)) return "quota";
+  if (/\b401\b|\b403\b/.test(message)) return "auth";
+  if (/\b404\b/.test(message)) return "unknown-model";
+  if (/\b400\b|\b422\b/.test(message)) return "invalid-request";
+  if (/\b5\d\d\b/.test(message)) return "server";
+  if (/insufficient_quota|quota|billing|payment required|subscription|\bcredits?\b/.test(message)) return "quota";
+  if (/unauthor|invalid api key|forbidden|authentication|\bapi key\b/.test(message)) return "auth";
+  if (/does not exist|unknown model|no such model|not found/.test(message)) return "unknown-model";
+  if (/malformed|invalid request|bad request|validation|tried to call a tool|context length|too long|token limit/.test(message)) {
+    return "invalid-request";
+  }
+  if (/too many requests|rate limit|overloaded/.test(message)) return "rate-limit";
+  if (/bad gateway|unavailable|internal server error|gateway timeout/.test(message)) return "server";
   if (
-    /timeout|timed out|econnreset|econnrefused|enotfound|socket hang up|network|fetch failed|premature|stream ended|connection (closed|drop|lost|reset)/.test(
+    /timeout|timed out|econnreset|econnrefused|enotfound|socket hang up|network|fetch failed|premature|stream ended|\babort(ed)?\b|connection (closed|drop|lost|reset)/.test(
       message,
     )
   ) {
     return "transport";
   }
   if (/empty answer|no usable text|output limit|empty response/.test(message)) return "empty";
-  return "server";
+  // Unclassified failures are deterministic here: an unrecognised error is not
+  // worth a second billed call.
+  return "unknown";
 }
 
 /** Resolve after `ms`, or reject when the caller aborts. */
@@ -391,13 +415,22 @@ function synthesisDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Append the fallback disclosure when a completion was served by the fallback model. */
+/** Disclose the fallback model and any dropped images on the result. */
 function applyFallbackNote(backend: SynthesisBackend, details: TwitterSearchDetails): void {
-  if (!backend.isFallbackUsed() || !backend.fallback) return;
-  details.notes = [
-    ...(details.notes ?? []),
-    `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
-  ];
+  const fallback = backend.fallback;
+  if (backend.isFallbackUsed() && fallback) {
+    details.model = `${fallback.provider}/${fallback.id}`;
+    details.notes = [
+      ...(details.notes ?? []),
+      `The configured synthesis model failed; the answer was produced by ${fallback.provider}/${fallback.id}.`,
+    ];
+  }
+  if (backend.imagesDropped()) {
+    details.notes = [
+      ...(details.notes ?? []),
+      "The model that answered does not accept image input, so attached images were omitted.",
+    ];
+  }
 }
 
 /**
@@ -455,10 +488,23 @@ function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Synthesis
   }
 
   const completions = new Map<ModelLike, (request: SynthesisRequest) => Promise<string>>();
+  let imagesDropped = false;
   const completionFor = (target: ModelLike): ((request: SynthesisRequest) => Promise<string>) => {
     let completion = completions.get(target);
     if (!completion) {
-      completion = createCompletion(registry, run, target);
+      const completeModel = createCompletion(registry, run, target);
+      const supportsImage = (target.input ?? []).includes("image");
+      completion = supportsImage
+        ? completeModel
+        : async (request) => {
+            // A fallback that cannot take images must not receive them: a vision
+            // primary can fail and hand images to a text-only session model.
+            if (request.images.length > 0 || request.mediaManifest) {
+              imagesDropped = true;
+              return completeModel({ ...request, images: [], mediaManifest: undefined });
+            }
+            return completeModel(request);
+          };
       completions.set(target, completion);
     }
     return completion;
@@ -468,7 +514,11 @@ function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Synthesis
   const sleepForRetry = options.synthesisSleep ?? synthesisDelay;
 
   const complete = async (request: SynthesisRequest): Promise<string> => {
-    let lastError: unknown;
+    // Reset per call so a run that completes more than once never mislabels the
+    // answering model from an earlier call.
+    fallback = undefined;
+    imagesDropped = false;
+    const failures: string[] = [];
     for (let index = 0; index < chain.length; index += 1) {
       const candidate = chain[index];
       // An untried model is the better bet than retrying a model that already
@@ -485,16 +535,17 @@ function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Synthesis
           if (index > 0) fallback = candidate;
           return text;
         } catch (error) {
-          const kind = classifySynthesisError(error);
+          const kind = classifySynthesisError(error, request.signal);
           // A cancellation stops the chain: it is the caller's intent, not a
           // model failure to route around.
           if (kind === "cancelled") throw error;
-          lastError = error;
+          failures.push(`${candidate.provider}/${candidate.id} (${kind}): ${error instanceof Error ? error.message : String(error)}`);
           if (!isLast || !RETRYABLE_ON_LAST.has(kind)) break;
         }
       }
     }
-    throw lastError ?? new Error("twitter synthesis failed: no model in the chain produced an answer");
+    // Every model's cause is reported, not just the last one.
+    throw new Error(`twitter synthesis failed: ${failures.join("; ")}`);
   };
 
   // `fallback` is resolved lazily: the completion runs after this object is
@@ -508,6 +559,7 @@ function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Synthesis
       return fallback;
     },
     isFallbackUsed: () => fallback !== undefined,
+    imagesDropped: () => imagesDropped,
   };
   return backend;
 }
@@ -755,12 +807,7 @@ async function completeTweetAnswer(
     deps: { complete: backend.complete, fetchMedia: createFetchMedia(backend.fetcher, options.signal) },
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
-  if (backend.isFallbackUsed() && backend.fallback) {
-    details.notes = [
-      ...details.notes,
-      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
-    ];
-  }
+  applyFallbackNote(backend, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -883,12 +930,7 @@ export async function runTwitterApiTrends(
     signal: options.signal,
     deps: { complete: backend.complete },
   });
-  if (backend.isFallbackUsed() && backend.fallback) {
-    details.notes = [
-      ...(details.notes ?? []),
-      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
-    ];
-  }
+  applyFallbackNote(backend, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -910,12 +952,7 @@ async function completeUserAnswer(
     deps: { complete: backend.complete },
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
-  if (backend.isFallbackUsed() && backend.fallback) {
-    details.notes = [
-      ...details.notes,
-      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
-    ];
-  }
+  applyFallbackNote(backend, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -1131,11 +1168,6 @@ export async function runTwitterApiSpace(
     deps: { complete: backend.complete },
     notes,
   });
-  if (backend.isFallbackUsed() && backend.fallback) {
-    details.notes = [
-      ...(details.notes ?? []),
-      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
-    ];
-  }
+  applyFallbackNote(backend, details);
   return { markdown: formatTwitterResults(details), details };
 }

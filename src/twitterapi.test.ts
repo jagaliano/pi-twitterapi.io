@@ -1495,6 +1495,17 @@ test("fetchTweetsByIds validates the id list and returns unique posts", async ()
   );
 });
 
+test("upstreamStartDateString pads one extra hour conservatively", () => {
+  // 04:30Z would stay on the same UTC day with the old 4 h pad; the conservative
+  // 5 h pad must reach the previous day so no local-hour can be dropped.
+  const startMs = Date.UTC(2026, 9, 1, 4, 30, 0);
+  assert.equal(upstreamStartDateString(startMs), "2026-09-30");
+});
+
+test("parseTweetDate fails open on an unparseable date", () => {
+  assert.equal(parseTweetDate("not a date"), undefined);
+});
+
 test("fetchCommunityTweets and fetchListTweets use their id params", async () => {
   await assert.rejects(
     () => fetchCommunityTweets("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),

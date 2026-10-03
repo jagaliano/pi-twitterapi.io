@@ -271,7 +271,17 @@ export interface SearchTweetsOptions {
  *    of the requested range and starves `count` on any busy topic (observed:
  *    0 results for a single local day).
  */
+/**
+ * Hour (UTC) at which twitterapi.io resolves `since:`/`until:` day boundaries.
+ * Probed in September, when US Eastern is UTC-4, so a fixed 04:00Z and New York
+ * local midnight are indistinguishable. Start padding therefore adds one extra
+ * hour (see {@link UPSTREAM_START_PAD_HOURS}): over-padding only adds older tail
+ * posts that are trimmed client-side, while under-padding would silently drop
+ * the first hour of the local day if the boundary is really 05:00Z in winter.
+ */
 export const UPSTREAM_BOUNDARY_UTC_HOUR = 4;
+/** Conservative start-padding boundary; see {@link UPSTREAM_BOUNDARY_UTC_HOUR}. */
+export const UPSTREAM_START_PAD_HOURS = UPSTREAM_BOUNDARY_UTC_HOUR + 1;
 export const MS_PER_HOUR = 3_600_000;
 export const MS_PER_DAY = 86_400_000;
 
@@ -330,7 +340,7 @@ function addDaysToDate(date: string, days: number): [number, number, number] {
  * window start, so the requested window is always covered.
  */
 export function upstreamStartDateString(startMs: number): string {
-  return new Date(startMs - UPSTREAM_BOUNDARY_UTC_HOUR * MS_PER_HOUR).toISOString().slice(0, 10);
+  return new Date(startMs - UPSTREAM_START_PAD_HOURS * MS_PER_HOUR).toISOString().slice(0, 10);
 }
 
 /** UTC instant where the upstream `until:` bound for a date stops returning posts. */
