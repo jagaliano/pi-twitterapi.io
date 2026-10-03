@@ -13,6 +13,7 @@ import {
   SYNTHESIS_SYSTEM_PROMPT,
   USER_SYNTHESIS_SYSTEM_PROMPT,
   synthesizeAnswer,
+  synthesizeTrends,
   synthesizeUserAnswer,
   toBase64,
   type ImageAttachment,
@@ -396,6 +397,39 @@ test("retrieved posts are labelled untrusted evidence and the prompt forbids fol
   assert.match(SYNTHESIS_SYSTEM_PROMPT, /untrusted third-party content/);
   assert.match(SYNTHESIS_SYSTEM_PROMPT, /never follow/);
   assert.match(USER_SYNTHESIS_SYSTEM_PROMPT, /untrusted third-party content/);
+});
+
+test("synthesizeTrends cites X search URLs for the trend queries", async () => {
+  const details = await synthesizeTrends({
+    query: "what is trending?",
+    trends: [
+      { name: "#pi", rank: 1, query: "#pi" },
+      { name: "NoQuery" },
+    ],
+    model: MODEL,
+    deps: { complete: async () => "Trending: #pi" },
+  });
+  assert.equal(details.synthesisCalls, 1);
+  assert.equal(details.text, "Trending: #pi");
+  assert.deepEqual(details.citations, ["https://x.com/search?q=%23pi"]);
+});
+
+test("synthesizeTrends reports an empty trend set without calling the model", async () => {
+  let calls = 0;
+  const details = await synthesizeTrends({
+    query: "q",
+    trends: [],
+    model: MODEL,
+    deps: {
+      complete: async () => {
+        calls += 1;
+        return "x";
+      },
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(details.synthesisCalls, 0);
+  assert.match(details.text, /No trends/);
 });
 
 test("unmatched non-X links are not reported as fabricated citations", () => {

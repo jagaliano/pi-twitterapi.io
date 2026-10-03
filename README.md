@@ -68,25 +68,36 @@ override — and set only the keys you need:
 
 | Parameter | Type | Notes |
 |---|---|---|
-| `query` | string (required) | Natural-language search query. For `mode=users`, the keyword matched against account names, handles and bios. |
-| `mode` | `"posts"` \| `"users"` \| `"thread"` | Defaults to `"posts"`. |
-| `tweet` | string | Required for `mode=thread`: a numeric post id or an X permalink in the thread. Refused in any other mode. |
-| `allowed_x_handles` | string[] | Only consider posts from these handles (max 20, no `@`). Posts mode only. |
-| `excluded_x_handles` | string[] | Exclude posts from these handles (max 20, no `@`). Posts mode only. |
-| `from_date` / `to_date` | `YYYY-MM-DD` | Date range. Posts mode only. |
-| `queryType` | `"Latest"` \| `"Top"` | Newest-first (default) or ranked. Posts mode only. |
-| `count` | number | Max items to consider and cite — posts (default 10) or accounts (default 20); max 50. |
+| `query` | string (required) | Natural-language question. Required for every mode. |
+| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` | Defaults to `posts`. |
+| `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`; refused in any other mode. |
+| `user` | string | Handle (no `@`) for `mode=user` (account timeline). |
+| `userId` | string | Numeric user id for `mode=user`; preferred over `user` when known. |
+| `woeid` | number | `mode=trends` location id (1=Worldwide, 23424977=USA). |
+| `includeReplies` | boolean | `mode=user` (timeline) and `mode=quotes`. |
+| `sinceTime` / `untilTime` | number | `mode=quotes`: unix timestamps (seconds) bounding the quotes. |
+| `limit` | number | `mode=user`/`replies`/`quotes`: stop after this many posts (max 1000). |
+| `replySort` | `"Relevance"` \| `"Latest"` \| `"Likes"` | `mode=replies` sort order (default `Relevance`). |
+| `allowed_x_handles` | string[] | `mode=posts`: only these handles (max 20, no `@`). |
+| `excluded_x_handles` | string[] | `mode=posts`: exclude these handles (max 20, no `@`). |
+| `from_date` / `to_date` | `YYYY-MM-DD` | `mode=posts` date range. |
+| `queryType` | `"Latest"` \| `"Top"` | `mode=posts`: newest-first (default) or ranked. |
+| `count` | number | `mode=posts`/`users`: max items (posts default 10, accounts default 20; max 50). `mode=trends`: number of trends (min 30). |
 
 Parameters that cannot apply in a given mode are rejected with an error rather
 than silently ignored.
 
 ### Modes
 
-- **posts** — advanced-search over X posts. Supports handle filters, date ranges,
-  rank order and item count. Optionally attaches post media to synthesis.
-- **users** — account discovery, returning profile URLs as sources.
-- **thread** — fetches the conversation context of a referenced post and answers
-  the question from it.
+| Mode | Endpoint | What it reads |
+|---|---|---|
+| `posts` (default) | `/twitter/tweet/advanced_search` | Keyword/operator post search; handle filters, dates, `Latest`/`Top`, item count. Optionally attaches media. |
+| `users` | `/twitter/user/search` | Account discovery; profile URLs as sources. |
+| `thread` | `/twitter/tweet/thread_context` | A referenced post's whole thread context. |
+| `user` | `/twitter/user/last_tweets` | A specific account's most recent posts (`user`/`userId`, `includeReplies`, `limit`). |
+| `trends` | `/twitter/trends` | Trending topics for a `woeid`; sources are X search URLs. |
+| `replies` | `/twitter/tweet/replies/v2` | Replies to a post (`replySort`, `limit`). |
+| `quotes` | `/twitter/tweet/quotes` | Quote-posts of a post (`sinceTime`/`untilTime`, `includeReplies`, `limit`). |
 
 ## Behavior and disclosures
 

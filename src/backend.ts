@@ -1,12 +1,26 @@
 import type { TwitterConfig } from "./config.js";
 import { formatTwitterResults } from "./format.js";
 import type { TwitterSearchDetails } from "./types.js";
-import { toBase64, synthesizeAnswer, synthesizeUserAnswer, type ImageAttachment, type SynthesisModel, type SynthesisRequest } from "./synthesize.js";
+import {
+  toBase64,
+  synthesizeAnswer,
+  synthesizeTrends,
+  synthesizeUserAnswer,
+  type ImageAttachment,
+  type SynthesisModel,
+  type SynthesisRequest,
+} from "./synthesize.js";
 import {
   fetchThread,
+  fetchTrends,
+  fetchTweetQuotes,
+  fetchTweetReplies,
+  fetchUserTweets,
   normalizeParams,
   searchTweets,
   searchUsers,
+  type ReplySort,
+  type Tweet,
   type TwitterApiSearchParams,
 } from "./twitterapi.js";
 
@@ -539,5 +553,148 @@ export async function runTwitterApiThread(
       `Retrieval stopped early (${incomplete}) while the thread continued, so these results may be incomplete.`,
     ];
   }
+  return { markdown: formatTwitterResults(details), details };
+}
+
+// ------------------------------------------------ extended reads (P1)
+
+/** Shared synthesis hop for the tweet-shaped reads (timeline, replies, quotes). */
+async function completeTweetAnswer(
+  backend: SynthesisBackend,
+  options: TwitterApiSynthesisOptions,
+  input: { query: string; tweets: Tweet[]; incomplete?: string; notes: string[] },
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const details = await synthesizeAnswer({
+    query: input.query,
+    tweets: input.tweets,
+    config: options.config,
+    model: toSynthesisModel(backend.model),
+    signal: options.signal,
+    incomplete: input.incomplete,
+    deps: { complete: backend.complete, fetchMedia: createFetchMedia(backend.fetcher, options.signal) },
+  });
+  details.notes = [...(details.notes ?? []), ...input.notes];
+  return { markdown: formatTwitterResults(details), details };
+}
+
+/** Page/pacing options every extended read takes from the config. */
+function tweetReadOptions(options: TwitterApiSynthesisOptions) {
+  return {
+    signal: options.signal,
+    maxPages: options.config.maxPages,
+    maxPagesCeiling: options.config.maxPagesCeiling,
+    minRequestIntervalMs: options.config.minRequestIntervalMs,
+    retryBaseDelayMs: options.config.retryBaseDelayMs,
+  };
+}
+
+export interface TwitterApiUserTimelineOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  userName?: string;
+  userId?: string;
+  includeReplies?: boolean;
+  limit?: number;
+}
+
+/** Fetch an account's recent posts and synthesize an answer from them. */
+export async function runTwitterApiUserTimeline(
+  options: TwitterApiUserTimelineOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const timeline = await fetchUserTweets(
+    { userName: options.userName, userId: options.userId },
+    backend.apiKey,
+    backend.fetcher,
+    { ...tweetReadOptions(options), includeReplies: options.includeReplies, limit: options.limit },
+  );
+  const incomplete = incompleteReason(timeline.stoppedBy, timeline.pagesFetched);
+  const who = options.userName ? `@${options.userName.replace(/^@+/, "")}` : (options.userId ?? "the account");
+  const notes = [`Answered from the recent timeline of ${who} (${timeline.tweets.length} post(s)).`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while the timeline continued, so these results may be incomplete.`);
+  }
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: timeline.tweets, incomplete, notes });
+}
+
+export interface TwitterApiRepliesOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  tweet: string;
+  queryType?: ReplySort;
+  limit?: number;
+}
+
+/** Fetch replies to a post and synthesize an answer from them. */
+export async function runTwitterApiReplies(
+  options: TwitterApiRepliesOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const replies = await fetchTweetReplies(options.tweet, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    queryType: options.queryType,
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(replies.stoppedBy, replies.pagesFetched);
+  const count = replies.tweets.length;
+  const notes = [`Answered from ${count} repl${count === 1 ? "y" : "ies"} to post ${replies.tweetId}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more replies remained, so these results may be incomplete.`);
+  }
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: replies.tweets, incomplete, notes });
+}
+
+export interface TwitterApiQuotesOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  tweet: string;
+  sinceTime?: number;
+  untilTime?: number;
+  includeReplies?: boolean;
+  limit?: number;
+}
+
+/** Fetch quote-posts of a post and synthesize an answer from them. */
+export async function runTwitterApiQuotes(
+  options: TwitterApiQuotesOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const quotes = await fetchTweetQuotes(options.tweet, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    sinceTime: options.sinceTime,
+    untilTime: options.untilTime,
+    includeReplies: options.includeReplies,
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(quotes.stoppedBy, quotes.pagesFetched);
+  const count = quotes.tweets.length;
+  const notes = [`Answered from ${count} quote-post${count === 1 ? "" : "s"} of post ${quotes.tweetId}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more quotes remained, so these results may be incomplete.`);
+  }
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: quotes.tweets, incomplete, notes });
+}
+
+export interface TwitterApiTrendsOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  woeid: number;
+  count?: number;
+}
+
+/** Fetch a location's trending topics and synthesize an answer from them. */
+export async function runTwitterApiTrends(
+  options: TwitterApiTrendsOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const { trends } = await fetchTrends(options.woeid, backend.apiKey, backend.fetcher, {
+    signal: options.signal,
+    count: options.count,
+    minRequestIntervalMs: options.config.minRequestIntervalMs,
+    retryBaseDelayMs: options.config.retryBaseDelayMs,
+  });
+  const details = await synthesizeTrends({
+    query: options.query,
+    trends,
+    model: toSynthesisModel(backend.model),
+    signal: options.signal,
+    deps: { complete: backend.complete },
+  });
   return { markdown: formatTwitterResults(details), details };
 }

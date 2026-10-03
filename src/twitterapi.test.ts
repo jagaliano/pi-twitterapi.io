@@ -5,6 +5,10 @@ import {
   DEFAULT_MAX_PAGES_CEILING,
   MAX_RETRY_DELAY_MS,
   fetchThread,
+  fetchTrends,
+  fetchTweetQuotes,
+  fetchTweetReplies,
+  fetchUserTweets,
   searchUsers,
   statusIdFromUrl,
   tweetIdFromInput,
@@ -1244,4 +1248,148 @@ test("a filled count is a complete result even when the cursor is missing", asyn
   const unfilled = await searchTweets(normalizeParams({ query: "x", count: 2 }), "k", posts, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(unfilled.stoppedBy, "cursor-missing", "the same page while count is unfilled is truncation");
   assert.equal(unfilled.truncated, true);
+});
+
+// ---------------------------------------------------- extended reads (P1)
+
+test("fetchUserTweets requires a handle or id and pages the account timeline", async () => {
+  await assert.rejects(
+    () => fetchUserTweets({}, "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    /needs a userName or userId/,
+  );
+
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    const url = String(input);
+    seen.push(url);
+    if (url.includes("cursor=")) {
+      return jsonResponse({
+        data: { tweets: [tweet({ id: "2", url: "https://x.com/a/status/2" }), tweet()] },
+        has_next_page: false,
+      });
+    }
+    return jsonResponse({ data: { tweets: [tweet()] }, has_next_page: true, next_cursor: "c1" });
+  };
+  const result = await fetchUserTweets(
+    { userName: "@alice" },
+    "k",
+    fetcher,
+    { sleep: noSleep, minRequestIntervalMs: 0, maxPages: 2 },
+  );
+  assert.equal(result.userName, "alice", "a leading @ is stripped");
+  assert.match(seen[0], /last_tweets/);
+  assert.match(seen[0], /userName=alice/);
+  assert.equal(result.tweets.length, 2, "a post repeated across pages is dropped");
+  assert.equal(result.stoppedBy, "exhausted");
+  assert.equal(result.truncated, false);
+});
+
+test("fetchUserTweets stops at the requested limit", async () => {
+  const fetcher: FetchLike = async () =>
+    jsonResponse({
+      data: {
+        tweets: [tweet({ id: "1", url: "https://x.com/a/status/1" }), tweet({ id: "2", url: "https://x.com/a/status/2" })],
+      },
+      has_next_page: true,
+      next_cursor: "c1",
+    });
+  const result = await fetchUserTweets(
+    { userId: "42" },
+    "k",
+    fetcher,
+    { sleep: noSleep, minRequestIntervalMs: 0, limit: 1 },
+  );
+  assert.equal(result.tweets.length, 1);
+  assert.equal(result.stoppedBy, "target");
+});
+
+test("fetchTweetReplies validates the reference and sort, and returns the tweet id", async () => {
+  await assert.rejects(
+    () => fetchTweetReplies("nope", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    /numeric post id or an X permalink/,
+  );
+  await assert.rejects(
+    () =>
+      fetchTweetReplies("7", "k", async () => jsonResponse({ tweets: [] }), {
+        sleep: noSleep,
+        queryType: "Bad" as never,
+      }),
+    /queryType must be/,
+  );
+
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({ tweets: [tweet({ id: "9", url: "https://x.com/a/status/9" })], has_next_page: false });
+  };
+  const result = await fetchTweetReplies("https://x.com/a/status/7", "k", fetcher, {
+    sleep: noSleep,
+    minRequestIntervalMs: 0,
+  });
+  assert.equal(result.tweetId, "7");
+  assert.match(seen[0], /replies\/v2/);
+  assert.match(seen[0], /tweetId=7/);
+});
+
+test("fetchTweetQuotes validates the time window and forwards it", async () => {
+  await assert.rejects(
+    () => fetchTweetQuotes("7", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep, sinceTime: -1 }),
+    /non-negative unix timestamp/,
+  );
+  await assert.rejects(
+    () =>
+      fetchTweetQuotes("7", "k", async () => jsonResponse({ tweets: [] }), {
+        sleep: noSleep,
+        sinceTime: 5,
+        untilTime: 1,
+      }),
+    /sinceTime must be before or equal to untilTime/,
+  );
+
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({ tweets: [tweet({ id: "10", url: "https://x.com/a/status/10" })], has_next_page: false });
+  };
+  await fetchTweetQuotes("https://x.com/a/status/7", "k", fetcher, {
+    sleep: noSleep,
+    minRequestIntervalMs: 0,
+    sinceTime: 100,
+    untilTime: 200,
+    includeReplies: false,
+  });
+  assert.match(seen[0], /quotes/);
+  assert.match(seen[0], /sinceTime=100/);
+  assert.match(seen[0], /untilTime=200/);
+  assert.match(seen[0], /includeReplies=false/);
+});
+
+test("fetchTrends validates woeid and count and maps the upstream trend shape", async () => {
+  await assert.rejects(
+    () => fetchTrends(1.5, "k", async () => jsonResponse({ trends: [] }), { sleep: noSleep }),
+    /woeid must be an integer/,
+  );
+  await assert.rejects(
+    () => fetchTrends(1, "k", async () => jsonResponse({ trends: [] }), { sleep: noSleep, count: 10 }),
+    /count must be an integer >= 30/,
+  );
+
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({
+      // The live shape nests each item under `trend`.
+      trends: [
+        { trend: { name: "#pi", target: { query: "#pi" }, rank: 1 }, meta_description: "10K posts" },
+        { trend: { name: "#pi", target: { query: "#pi" }, rank: 2 } },
+        { trend: { name: "   " } },
+      ],
+    });
+  };
+  const result = await fetchTrends(1, "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0, count: 30 });
+  assert.equal(result.woeid, 1);
+  assert.equal(result.trends.length, 1, "duplicate and unnamed trends are dropped");
+  assert.deepEqual(result.trends[0], { name: "#pi", rank: 1, query: "#pi", metaDescription: "10K posts" });
+  assert.match(seen[0], /trends\?woeid=1/);
+  assert.match(seen[0], /count=30/);
 });

@@ -326,7 +326,7 @@ test("execute rejects an unknown mode before doing any work", async () => {
   });
   await assert.rejects(
     () => tool().execute("id", { query: "x", mode: "nonsense" }, undefined, undefined, { modelRegistry: userRegistry("x") }),
-    /mode must be "posts", "users", or "thread"/,
+    /mode must be one of/,
   );
 });
 
@@ -485,11 +485,11 @@ test("mode and tweet are validated before credentials", async () => {
 
   await assert.rejects(
     () => tool().execute("id", { query: "x", mode: "nonsense" }, undefined, undefined, undefined),
-    /mode must be "posts", "users", or "thread"/,
+    /mode must be one of/,
   );
   await assert.rejects(
     () => tool().execute("id", { query: "x", tweet: "7" }, undefined, undefined, undefined),
-    /tweet can only be used in mode "thread"/,
+    /tweet can only be used in modes/,
   );
   await assert.rejects(
     () => tool().execute("id", { query: "x", mode: "thread", tweet: "not-a-tweet" }, undefined, undefined, undefined),
@@ -578,5 +578,145 @@ test("mode=users rejects post-only parameters loudly instead of ignoring them", 
         { modelRegistry: userRegistry("x") },
       ),
     /from_date cannot be applied in mode "thread"/,
+  );
+});
+
+test("mode=user reads an account timeline and answers from it", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "5",
+            url: "https://x.com/alice/status/5",
+            text: "timeline body",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "alice" },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute(
+    "id",
+    { query: "what is new?", mode: "user", user: "alice" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Answer (https://x.com/alice/status/5)") },
+  );
+  assert.match(seen[0], /last_tweets/);
+  assert.match(seen[0], /userName=alice/);
+  assert.match(result.content[0].text, /## Answer/);
+});
+
+test("mode=trends reads a location's trends and cites X search URLs", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(JSON.stringify({ trends: [{ name: "#pi", target: { query: "#pi" }, rank: 1 }] }), {
+      status: 200,
+    });
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute(
+    "id",
+    { query: "what is trending?", mode: "trends", woeid: 1 },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Trending: #pi") },
+  );
+  assert.match(seen[0], /trends\?woeid=1/);
+  assert.match(result.content[0].text, /Trending: #pi/);
+  assert.match(result.content[0].text, /https:\/\/x\.com\/search\?q=%23pi/);
+});
+
+test("mode=replies and mode=quotes read a post's conversation", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "8",
+            url: "https://x.com/b/status/8",
+            text: "reply body",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "b" },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  await tool().execute(
+    "id",
+    { query: "what do the replies say?", mode: "replies", tweet: "7", replySort: "Likes" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Reply answer (https://x.com/b/status/8)") },
+  );
+  assert.match(seen[0], /replies\/v2/);
+  assert.match(seen[0], /tweetId=7/);
+  assert.match(seen[0], /queryType=Likes/);
+
+  await tool().execute(
+    "id",
+    { query: "what do the quotes say?", mode: "quotes", tweet: "7", sinceTime: 100 },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Quote answer (https://x.com/b/status/8)") },
+  );
+  assert.match(seen[1], /quotes/);
+  assert.match(seen[1], /sinceTime=100/);
+});
+
+test("the new modes validate their required parameters", async () => {
+  const { pi, tool } = captureTool();
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "user" }, undefined, undefined, undefined),
+    /needs `user` .* or `userId`/,
+  );
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "trends" }, undefined, undefined, undefined),
+    /needs `woeid`/,
+  );
+  await assert.rejects(
+    () =>
+      tool().execute(
+        "id",
+        { query: "q", mode: "user", user: "alice", allowed_x_handles: ["a"] },
+        undefined,
+        undefined,
+        undefined,
+      ),
+    /allowed_x_handles cannot be applied in mode "user"/,
   );
 });

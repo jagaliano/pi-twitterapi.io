@@ -2,8 +2,16 @@ import { Type } from "@sinclair/typebox";
 import { type ExtensionAPI, keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { readMergedPiSettings, type PiSettings } from "./settings.js";
-import { runTwitterApiSearch, runTwitterApiThread, runTwitterApiUserSearch } from "./backend.js";
-import { tweetIdFromInput, type TwitterApiSearchParams } from "./twitterapi.js";
+import {
+  runTwitterApiQuotes,
+  runTwitterApiReplies,
+  runTwitterApiSearch,
+  runTwitterApiThread,
+  runTwitterApiTrends,
+  runTwitterApiUserSearch,
+  runTwitterApiUserTimeline,
+} from "./backend.js";
+import { tweetIdFromInput, type ReplySort, type TwitterApiSearchParams } from "./twitterapi.js";
 import { loadTwitterConfig } from "./config.js";
 import type { TwitterSearchDetails } from "./types.js";
 
@@ -12,6 +20,38 @@ export interface TwitterToolOptions {
   fetcher?: typeof fetch;
   settings?: PiSettings;
 }
+
+/** Modes that locate a specific post through the shared `tweet` argument. */
+const TWEET_MODES = new Set(["thread", "replies", "quotes"]);
+
+/** Per-mode parameter allowlist, so a parameter that does not apply is refused. */
+const MODE_PARAMS: Record<string, readonly string[]> = {
+  posts: ["allowed_x_handles", "excluded_x_handles", "from_date", "to_date", "queryType", "count"],
+  users: ["count"],
+  thread: [],
+  user: ["user", "userId", "includeReplies", "limit"],
+  trends: ["woeid", "count"],
+  replies: ["replySort", "limit"],
+  quotes: ["sinceTime", "untilTime", "includeReplies", "limit"],
+};
+
+/** The parameter universe, used to report parameters a mode cannot apply. */
+const ALL_PARAMS = [
+  "allowed_x_handles",
+  "excluded_x_handles",
+  "from_date",
+  "to_date",
+  "queryType",
+  "count",
+  "user",
+  "userId",
+  "woeid",
+  "includeReplies",
+  "sinceTime",
+  "untilTime",
+  "limit",
+  "replySort",
+] as const;
 
 export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOptions = {}): void {
   const env = options.env ?? process.env;
@@ -23,60 +63,77 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     name: "twitter",
     label: "Twitter",
     description:
-      "Search X/Twitter via twitterapi.io and return an answer with citation URLs. " +
-      "Supports post search, account (user) search, and thread fetch; retrieved posts are " +
+      "Read X/Twitter via twitterapi.io and return an answer with citation URLs. Modes: posts (default), " +
+      "users, thread, user (an account's timeline), trends, replies and quotes. Retrieved content is " +
       "synthesized into an answer by a configured pi model.",
-    promptSnippet: "Search X/Twitter via twitterapi.io for realtime posts, accounts, or a thread, and return an answer with citation URLs",
+    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes) and return an answer with citation URLs",
     promptGuidelines: [
       "Use twitter when the user needs current discussion or sentiment from X/Twitter and twitterapi.io is configured.",
-      "Use mode \"users\" when the user wants to find or discover X accounts rather than posts.",
-      "Use mode \"thread\" with a tweet id or permalink to read a specific post's whole thread.",
-      "Use allowed_x_handles when the user asks to search specific X accounts.",
-      "Use excluded_x_handles when the user asks to exclude specific X accounts.",
-      "Use from_date and to_date for date ranges; dates must be YYYY-MM-DD.",
+      "Use mode \"users\" to discover accounts; use mode \"user\" to read a specific account's recent posts.",
+      "Use mode \"thread\" with a tweet id or permalink to read a post's whole thread.",
+      "Use mode \"replies\" or mode \"quotes\" to read the conversation around a specific post.",
+      "Use mode \"trends\" with a woeid (1=Worldwide, 23424977=USA) for trending topics.",
+      "Use allowed_x_handles and excluded_x_handles with mode \"posts\" to narrow or exclude accounts.",
+      "Use from_date and to_date with mode \"posts\" for date ranges; dates must be YYYY-MM-DD.",
       "Do not use twitter as a raw tweet API; it returns an answer and citation URLs, not guaranteed original post objects.",
     ],
     parameters: Type.Object({
-      query: Type.String({ description: "Natural-language X/Twitter search query. For mode=users, the keyword matched against account names, handles and bios." }),
-      mode: Type.Optional(Type.String({ description: 'What to search: "posts" (default), "users" (discover accounts), or "thread" (a post\'s thread context).' })),
-      tweet: Type.Optional(Type.String({ description: 'Required for mode=thread: a numeric post id or an X permalink belonging to the thread. Refused in any other mode.' })),
-      allowed_x_handles: Type.Optional(Type.Array(Type.String(), { description: "Only consider posts from these X handles (max 20). Do not include @." })),
-      excluded_x_handles: Type.Optional(Type.Array(Type.String(), { description: "Exclude posts from these X handles (max 20). Do not include @." })),
-      from_date: Type.Optional(Type.String({ description: "Start date for search range, YYYY-MM-DD." })),
-      to_date: Type.Optional(Type.String({ description: "End date for search range, YYYY-MM-DD." })),
-      queryType: Type.Optional(Type.String({ description: '"Latest" (default, newest first) or "Top" (ranked).' })),
-      count: Type.Optional(Type.Number({ description: "Max items to consider and cite — posts (default 10) or accounts (default 20); max 50." })),
+      query: Type.String({ description: "Natural-language question or search query. Required for every mode." }),
+      mode: Type.Optional(Type.String({ description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", or "quotes".' })),
+      tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes; refused in any other mode.' })),
+      user: Type.Optional(Type.String({ description: "X handle (no @) for mode=user (account timeline)." })),
+      userId: Type.Optional(Type.String({ description: "Numeric user id for mode=user; preferred over `user` when known." })),
+      woeid: Type.Optional(Type.Number({ description: "Yahoo Where-On-Earth id for mode=trends (1=Worldwide, 23424977=USA)." })),
+      includeReplies: Type.Optional(Type.Boolean({ description: "Include replies: mode=user (timeline) and mode=quotes." })),
+      sinceTime: Type.Optional(Type.Number({ description: "mode=quotes: only quotes on or after this unix timestamp (seconds)." })),
+      untilTime: Type.Optional(Type.Number({ description: "mode=quotes: only quotes before this unix timestamp (seconds)." })),
+      limit: Type.Optional(Type.Number({ description: "mode=user/replies/quotes: stop after this many posts (max 1000)." })),
+      replySort: Type.Optional(Type.String({ description: 'mode=replies sort order: "Relevance" (default), "Latest", or "Likes".' })),
+      allowed_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: only posts from these handles (max 20, no @)." })),
+      excluded_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: exclude these handles (max 20, no @)." })),
+      from_date: Type.Optional(Type.String({ description: "mode=posts: start date, YYYY-MM-DD." })),
+      to_date: Type.Optional(Type.String({ description: "mode=posts: end date, YYYY-MM-DD." })),
+      queryType: Type.Optional(Type.String({ description: 'mode=posts: "Latest" (default, newest first) or "Top" (ranked).' })),
+      count: Type.Optional(Type.Number({ description: "mode=posts/users: max items (posts default 10, accounts default 20; max 50). mode=trends: number of trends (min 30)." })),
     }),
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      // Argument validation comes first: an invalid call should be reported as
-      // such rather than as a missing key.
       const supplied = params as Record<string, unknown>;
       const mode = typeof supplied.mode === "string" ? supplied.mode : "posts";
-      if (mode !== "posts" && mode !== "users" && mode !== "thread") {
-        throw new Error(`twitter mode must be "posts", "users", or "thread" (got "${mode}")`);
-      }
-      const tweet = typeof supplied.tweet === "string" ? supplied.tweet : undefined;
-      if (mode !== "thread" && tweet !== undefined) {
-        throw new Error(
-          `twitter tweet can only be used in mode "thread" (mode is "${mode}"); remove it or set mode to "thread".`,
-        );
-      }
-      // Canonicalised once so an invalid reference fails before any retrieval.
-      let threadReference = "";
-      if (mode === "thread") {
-        if (!tweet || !tweet.trim()) {
-          throw new Error('twitter mode "thread" needs a tweet: pass a numeric post id or an X permalink as `tweet`.');
-        }
-        const id = tweetIdFromInput(tweet);
-        if (!id) {
-          throw new Error(`twitter tweet must be a numeric post id or an X permalink (got "${tweet}")`);
-        }
-        threadReference = `https://x.com/i/status/${id}`;
+      const modes = Object.keys(MODE_PARAMS);
+      if (!modes.includes(mode)) {
+        throw new Error(`twitter mode must be one of ${modes.map((name) => `"${name}"`).join(", ")} (got "${mode}")`);
       }
 
+      // The question is validated first: every mode answers it, and a blank one
+      // must fail before any retrieval.
       const question = typeof supplied.query === "string" ? supplied.query.trim() : "";
       if (!question) throw new Error("twitter query must not be empty");
+
+      // `tweet` locates a post for the thread/reply/quote modes, and is refused
+      // elsewhere rather than silently ignored.
+      const tweet = typeof supplied.tweet === "string" ? supplied.tweet : undefined;
+      let tweetReference = "";
+      if (TWEET_MODES.has(mode)) {
+        if (!tweet || !tweet.trim()) {
+          throw new Error(`twitter mode "${mode}" needs a tweet: pass a numeric post id or an X permalink as \`tweet\`.`);
+        }
+        const id = tweetIdFromInput(tweet);
+        if (!id) throw new Error(`twitter tweet must be a numeric post id or an X permalink (got "${tweet}")`);
+        tweetReference = `https://x.com/i/status/${id}`;
+      } else if (tweet !== undefined) {
+        throw new Error(
+          `twitter tweet can only be used in modes ${[...TWEET_MODES].map((name) => `"${name}"`).join(", ")} ` +
+            `(mode is "${mode}"); remove it or change mode.`,
+        );
+      }
+
+      if (mode === "user" && supplied.user === undefined && supplied.userId === undefined) {
+        throw new Error('twitter mode "user" needs `user` (a handle) or `userId`.');
+      }
+      if (mode === "trends" && !Number.isInteger(supplied.woeid)) {
+        throw new Error('twitter mode "trends" needs `woeid` (an integer; 1=Worldwide, 23424977=USA).');
+      }
 
       if (!env.TWITTERAPI_IO_API_KEY) {
         throw new Error(
@@ -91,60 +148,87 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       const synthesisModel =
         config.synthesisModel ?? (ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
       const effectiveConfig = synthesisModel === config.synthesisModel ? config : { ...config, synthesisModel };
+      const base = { config: effectiveConfig, env, fetcher, signal, registry: ctx?.modelRegistry } as const;
 
-      // A mode that cannot apply a parameter must say so. Silently ignoring them
+      // A mode that cannot apply a parameter must say so. Silently ignoring it
       // is how an excluded account ends up in a successful answer.
-      const reject = (names: string[]): void => {
-        const offending = names.filter((name) => supplied[name] !== undefined);
-        if (offending.length === 0) return;
+      const disallowed = ALL_PARAMS.filter((name) => !MODE_PARAMS[mode].includes(name));
+      const offending = disallowed.filter((name) => supplied[name] !== undefined);
+      if (offending.length > 0) {
         const list = offending.join(", ");
         throw new Error(
-          offending.length === 1
-            ? `twitter ${list} cannot be applied in mode "${mode}"; remove it or use mode "posts".`
-            : `twitter ${list} cannot be applied in mode "${mode}"; remove them or use mode "posts".`,
+          `twitter ${list} cannot be applied in mode "${mode}"; remove ${offending.length === 1 ? "it" : "them"}.`,
         );
-      };
+      }
+
+      const number = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
+      const boolean = (value: unknown): boolean | undefined => (typeof value === "boolean" ? value : undefined);
+      const text = (value: unknown): string | undefined =>
+        typeof value === "string" && value.trim() ? value.trim() : undefined;
 
       if (mode === "users") {
-        reject(["allowed_x_handles", "excluded_x_handles", "from_date", "to_date", "queryType"]);
         const { markdown, details } = await runTwitterApiUserSearch({
           query: question,
-          count: (params as TwitterApiSearchParams).count,
-          config: effectiveConfig,
-          env,
-          fetcher,
-          signal,
-          registry: ctx?.modelRegistry,
+          count: number(supplied.count),
+          ...base,
         });
         return { content: [{ type: "text", text: markdown }], details };
       }
 
       if (mode === "thread") {
-        reject(["allowed_x_handles", "excluded_x_handles", "from_date", "to_date", "queryType", "count"]);
-        const { markdown, details } = await runTwitterApiThread({
-          tweet: threadReference,
-          // Keep the question: the reference only locates the thread.
+        const { markdown, details } = await runTwitterApiThread({ tweet: tweetReference, query: question, ...base });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "user") {
+        const { markdown, details } = await runTwitterApiUserTimeline({
           query: question,
-          config: effectiveConfig,
-          env,
-          fetcher,
-          signal,
-          registry: ctx?.modelRegistry,
+          userName: text(supplied.user),
+          userId: text(supplied.userId),
+          includeReplies: boolean(supplied.includeReplies),
+          limit: number(supplied.limit),
+          ...base,
+        });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "trends") {
+        const { markdown, details } = await runTwitterApiTrends({
+          query: question,
+          woeid: number(supplied.woeid) as number,
+          count: number(supplied.count),
+          ...base,
+        });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "replies") {
+        const { markdown, details } = await runTwitterApiReplies({
+          query: question,
+          tweet: tweetReference,
+          queryType: text(supplied.replySort) as ReplySort | undefined,
+          limit: number(supplied.limit),
+          ...base,
+        });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "quotes") {
+        const { markdown, details } = await runTwitterApiQuotes({
+          query: question,
+          tweet: tweetReference,
+          sinceTime: number(supplied.sinceTime),
+          untilTime: number(supplied.untilTime),
+          includeReplies: boolean(supplied.includeReplies),
+          limit: number(supplied.limit),
+          ...base,
         });
         return { content: [{ type: "text", text: markdown }], details };
       }
 
       const { markdown, details } = await runTwitterApiSearch({
         params: { ...(params as TwitterApiSearchParams), query: question },
-        config: effectiveConfig,
-        env,
-        fetcher,
-        signal,
-        // No cast: RegistryLike only requires find/getAll, which every supported
-        // ModelRegistry provides. `complete` is optional there and detected at
-        // call time, so an incompatible registry fails with a clear error rather
-        // than being asserted away here.
-        registry: ctx?.modelRegistry,
+        ...base,
       });
       return { content: [{ type: "text", text: markdown }], details };
     },
@@ -154,7 +238,13 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       let line = theme.fg("toolTitle", theme.bold("twitter "));
       const mode = typeof (args as { mode?: unknown }).mode === "string" ? (args as { mode: string }).mode : "posts";
       if (mode !== "posts") line += theme.fg("warning", `[${mode}] `);
-      line += theme.fg("accent", mode === "thread" ? String((args as { tweet?: unknown }).tweet ?? "") : args.query ?? "");
+      const subject =
+        mode !== "posts" && (args as { tweet?: unknown }).tweet !== undefined
+          ? String((args as { tweet?: unknown }).tweet)
+          : mode === "user" || mode === "trends"
+            ? String((args as { user?: unknown }).user ?? (args as { woeid?: unknown }).woeid ?? args.query ?? "")
+            : args.query ?? "";
+      line += theme.fg("accent", subject);
       const handles = args.allowed_x_handles ?? args.excluded_x_handles;
       if (Array.isArray(handles) && handles.length > 0) line += theme.fg("muted", ` · ${handles.map((handle) => `@${handle}`).join(",")}`);
       if (args.from_date || args.to_date) line += theme.fg("dim", ` · ${args.from_date ?? "…"}..${args.to_date ?? "…"}`);
@@ -166,7 +256,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 
       if (options.isPartial) {
-        text.setText(theme.fg("muted", "Searching X…"));
+        text.setText(theme.fg("muted", "Reading X…"));
         return text;
       }
 
@@ -177,7 +267,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       }
 
       const details = result.details as TwitterSearchDetails;
-      const header = theme.fg("success", `✓ Twitter search`) + theme.fg("muted", ` · ${details.citations.length} citations · ${details.synthesisCalls ?? 0} synthesis calls`);
+      const header = theme.fg("success", `✓ Twitter`) + theme.fg("muted", ` · ${details.citations.length} citations · ${details.synthesisCalls ?? 0} synthesis calls`);
       const sources = details.citations.slice(0, options.expanded ? details.citations.length : 5);
       const rows = sources.map((url, index) => `${theme.fg("dim", `${index + 1}.`)} ${theme.fg("accent", url)}`);
       let body = rows.length > 0 ? `\n${rows.join("\n")}` : "";

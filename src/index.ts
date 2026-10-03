@@ -18,47 +18,76 @@ export default function (pi: ExtensionAPI) {
 
 export { registerTwitterTool, type TwitterToolOptions } from "./tool.js";
 export {
+  runTwitterApiQuotes,
+  runTwitterApiReplies,
   runTwitterApiSearch,
   runTwitterApiThread,
+  runTwitterApiTrends,
   runTwitterApiUserSearch,
+  runTwitterApiUserTimeline,
   resolveModel,
   assistantText,
   completionText,
   createFetchMedia,
+  isAllowedMediaUrl,
   toSynthesisModel,
 } from "./backend.js";
 export type {
   BackendOptions,
   ModelLike,
   RegistryLike,
+  TwitterApiQuotesOptions,
+  TwitterApiRepliesOptions,
   TwitterApiRunOptions,
   TwitterApiSynthesisOptions,
   TwitterApiThreadOptions,
+  TwitterApiTrendsOptions,
   TwitterApiUserSearchOptions,
+  TwitterApiUserTimelineOptions,
 } from "./backend.js";
 export { DEFAULT_MAX_MEDIA_PER_SEARCH, loadTwitterConfig } from "./config.js";
 export type { TwitterConfig } from "./config.js";
 export {
   buildCandidatePrompt,
+  buildTrendCandidatePrompt,
   collectMedia,
   deriveCitations,
   extractUrls,
   statusId,
+  SYNTHESIS_SYSTEM_PROMPT,
   synthesizeAnswer,
+  synthesizeTrends,
   synthesizeUserAnswer,
   toBase64,
+  TREND_SYNTHESIS_SYSTEM_PROMPT,
+  USER_SYNTHESIS_SYSTEM_PROMPT,
 } from "./synthesize.js";
 export type { ImageAttachment, SynthesisModel } from "./synthesize.js";
 export {
   buildExpression,
   fetchThread,
+  fetchTrends,
+  fetchTweetQuotes,
+  fetchTweetReplies,
+  fetchUserTweets,
   normalizeParams,
   searchTweets,
   searchUsers,
   statusIdFromUrl,
   tweetIdFromInput,
 } from "./twitterapi.js";
-export type { SearchDetails, Tweet, TwitterApiSearchParams } from "./twitterapi.js";
+export type {
+  ReplySort,
+  SearchDetails,
+  Trend,
+  TrendsDetails,
+  Tweet,
+  TweetCollection,
+  TweetQuotesDetails,
+  TweetRepliesDetails,
+  TwitterApiSearchParams,
+  UserTweetsDetails,
+} from "./twitterapi.js";
 export type { TwitterSearchDetails } from "./types.js";
 export { readMergedPiSettings, readPiProjectSettings, readPiUserSettings } from "./settings.js";
 export type { PiSettings } from "./settings.js";
