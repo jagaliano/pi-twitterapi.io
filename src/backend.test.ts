@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assistantText, completionText, createFetchMedia, isAllowedMediaUrl, resolveModel, runTwitterApiSearch, runTwitterApiUserSearch, toSynthesisModel, type RegistryLike } from "./backend.js";
+import {
+  assistantText,
+  classifySynthesisError,
+  completionText,
+  createFetchMedia,
+  isAllowedMediaUrl,
+  resolveModel,
+  runTwitterApiSearch,
+  runTwitterApiUserSearch,
+  synthesisRetryDelayMs,
+  toSynthesisModel,
+  type RegistryLike,
+} from "./backend.js";
 import { loadTwitterConfig } from "./config.js";
 
 function registry(models: Array<{ provider: string; id: string; input?: string[] }>): RegistryLike {
@@ -286,4 +298,150 @@ test("an explicit invalid page budget is rejected rather than clamped into valid
       `${String(bad)} must be rejected`,
     );
   }
+});
+
+// --------------------------------------------- synthesis failure chain
+
+function tweetsOnce(): typeof fetch {
+  return (async () =>
+    new Response(
+      JSON.stringify({
+        tweets: [
+          { id: "1", url: "https://x.com/a/status/1", text: "t", createdAt: "Mon Sep 21 10:00:00 +0000 2026", author: { userName: "a" } },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+}
+
+function chainRegistry(
+  complete: (model: { provider: string; id: string }) => Promise<unknown>,
+): RegistryLike {
+  return {
+    find: () => undefined,
+    getAll: () => [
+      { provider: "anthropic", id: "haiku", input: ["text"] },
+      { provider: "anthropic", id: "sonnet", input: ["text"] },
+    ],
+    complete: complete as never,
+  };
+}
+
+test("classifySynthesisError maps provider failures to kinds", () => {
+  assert.equal(classifySynthesisError(new Error("twitter synthesis failed: insufficient_quota")), "quota");
+  assert.equal(classifySynthesisError(new Error("402 payment required")), "quota");
+  assert.equal(classifySynthesisError(new Error("401 unauthorized")), "auth");
+  assert.equal(classifySynthesisError(new Error("403 forbidden")), "auth");
+  assert.equal(classifySynthesisError(new Error("404 model does not exist")), "unknown-model");
+  assert.equal(classifySynthesisError(new Error("400 invalid request")), "invalid-request");
+  assert.equal(classifySynthesisError(new Error("422 malformed")), "invalid-request");
+  assert.equal(classifySynthesisError(new Error("429 too many requests")), "rate-limit");
+  assert.equal(classifySynthesisError(new Error("overloaded_error")), "rate-limit");
+  assert.equal(classifySynthesisError(new Error("503 service unavailable")), "server");
+  assert.equal(classifySynthesisError(new Error("fetch failed: socket hang up")), "transport");
+  assert.equal(classifySynthesisError(new Error("premature stream ended")), "transport");
+  assert.equal(classifySynthesisError(new Error("twitter synthesis returned an empty answer")), "empty");
+  assert.equal(
+    classifySynthesisError(new Error("twitter synthesis was cancelled before it produced an answer")),
+    "cancelled",
+  );
+});
+
+test("synthesisRetryDelayMs doubles to a 4s cap", () => {
+  assert.equal(synthesisRetryDelayMs(0), 500);
+  assert.equal(synthesisRetryDelayMs(1), 1_000);
+  assert.equal(synthesisRetryDelayMs(2), 2_000);
+  assert.equal(synthesisRetryDelayMs(3), 4_000);
+  assert.equal(synthesisRetryDelayMs(5), 4_000);
+});
+
+test("an auth failure on the configured model moves to the next model", async () => {
+  const seen: string[] = [];
+  const registry = chainRegistry(async (model) => {
+    seen.push(model.id);
+    if (model.id === "haiku") throw new Error("401 unauthorized: invalid api key");
+    return { content: [{ type: "text", text: "fallback (https://x.com/a/status/1)" }] };
+  });
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku" } });
+  const result = await runTwitterApiSearch({
+    params: { query: "q" },
+    config,
+    env: { TWITTERAPI_IO_API_KEY: "k" },
+    registry,
+    fetcher: tweetsOnce(),
+    fallbackModelIds: ["anthropic/sonnet"],
+    synthesisSleep: async () => {},
+  });
+  assert.deepEqual(seen, ["haiku", "sonnet"], "auth is deterministic, so the next model is tried");
+  assert.match(result.details.notes?.join(" ") ?? "", /produced by anthropic\/sonnet/);
+});
+
+test("a retryable failure on the last model is retried once", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const registry = chainRegistry(async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("429 too many requests");
+    return { content: [{ type: "text", text: "ok (https://x.com/a/status/1)" }] };
+  });
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku" } });
+  const result = await runTwitterApiSearch({
+    params: { query: "q" },
+    config,
+    env: { TWITTERAPI_IO_API_KEY: "k" },
+    registry,
+    fetcher: tweetsOnce(),
+    synthesisSleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  assert.equal(calls, 2, "the last model is retried once");
+  assert.deepEqual(delays, [500]);
+  assert.match(result.details.text, /ok/);
+});
+
+test("a deterministic failure on the last model is not retried", async () => {
+  let calls = 0;
+  const registry = chainRegistry(async () => {
+    calls += 1;
+    throw new Error("401 unauthorized: invalid api key");
+  });
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku" } });
+  await assert.rejects(
+    () =>
+      runTwitterApiSearch({
+        params: { query: "q" },
+        config,
+        env: { TWITTERAPI_IO_API_KEY: "k" },
+        registry,
+        fetcher: tweetsOnce(),
+        synthesisSleep: async () => {},
+      }),
+    /unauthorized/,
+  );
+  assert.equal(calls, 1, "auth failures are deterministic and never retried");
+});
+
+test("a cancellation stops the chain without trying the fallback", async () => {
+  const seen: string[] = [];
+  const registry = chainRegistry(async (model) => {
+    seen.push(model.id);
+    throw new Error("twitter synthesis was cancelled before it produced an answer");
+  });
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku" } });
+  await assert.rejects(
+    () =>
+      runTwitterApiSearch({
+        params: { query: "q" },
+        config,
+        env: { TWITTERAPI_IO_API_KEY: "k" },
+        registry,
+        fetcher: tweetsOnce(),
+        fallbackModelIds: ["anthropic/sonnet"],
+        synthesisSleep: async () => {},
+      }),
+    /cancelled/,
+  );
+  assert.deepEqual(seen, ["haiku"], "cancellation is not routed around");
 });

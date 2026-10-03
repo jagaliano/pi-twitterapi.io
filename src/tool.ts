@@ -193,10 +193,20 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       // The synthesis model falls back to the model running this session, so a
       // key-only setup works without extra configuration. An explicit
       // twitter.synthesisModel always wins.
-      const synthesisModel =
-        config.synthesisModel ?? (ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+      const sessionModelId = ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const synthesisModel = config.synthesisModel ?? sessionModelId;
       const effectiveConfig = synthesisModel === config.synthesisModel ? config : { ...config, synthesisModel };
-      const base = { config: effectiveConfig, env, fetcher, signal, registry: ctx?.modelRegistry } as const;
+      // When the configured model fails at runtime, the answer is retried with
+      // the session model — but only when it is a different model.
+      const fallbackModelIds = config.synthesisModel && sessionModelId ? [sessionModelId] : undefined;
+      const base = {
+        config: effectiveConfig,
+        env,
+        fetcher,
+        signal,
+        registry: ctx?.modelRegistry,
+        fallbackModelIds,
+      } as const;
 
       // A mode that cannot apply a parameter must say so. Silently ignoring it
       // is how an excluded account ends up in a successful answer.

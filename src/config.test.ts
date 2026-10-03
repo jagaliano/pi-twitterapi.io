@@ -52,8 +52,8 @@ test("loadTwitterConfig tolerates a non-object twitter block", () => {
   assert.equal(loadTwitterConfig({ twitter: [] }).synthesisModel, undefined);
 });
 
-test("an xsearch settings block cannot configure this extension", () => {
-  const config = loadTwitterConfig({ xsearch: { synthesisModel: "anthropic/haiku", maxPages: 9 } });
+test("only the twitter settings block is read", () => {
+  const config = loadTwitterConfig({ someOtherExtension: { synthesisModel: "anthropic/haiku", maxPages: 9 } });
   assert.equal(config.synthesisModel, undefined);
   assert.equal(config.maxPages, 5, "only the twitter block is read");
 });

@@ -942,6 +942,49 @@ test("mode=community, mode=list and mode=space dispatch to their endpoints", asy
   assert.match(seen[2], /space_id=sp1/);
 });
 
+test("a failing synthesis model falls back to the session model", async () => {
+  const { pi, tool } = captureTool();
+  const fetcher = (async () =>
+    new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "1",
+            url: "https://x.com/alice/status/111",
+            text: "post body",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "alice" },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+  const registry = {
+    find: () => undefined,
+    getAll: () => [
+      { provider: "anthropic", id: "haiku", input: ["text"] },
+      { provider: "anthropic", id: "sonnet", input: ["text"] },
+    ],
+    complete: async (model: { id?: string }) => {
+      if (model?.id === "haiku") throw new Error("provider overloaded");
+      return { content: [{ type: "text", text: "Fallback answer (https://x.com/alice/status/111)." }] };
+    },
+  };
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute("id", { query: "q" }, undefined, undefined, {
+    modelRegistry: registry,
+    model: { provider: "anthropic", id: "sonnet" },
+  });
+  assert.match(result.content[0].text, /Fallback answer/);
+  assert.match(result.content[0].text, /produced by anthropic\/sonnet/);
+});
+
 test("P3 modes validate their required id parameters", async () => {
   const { pi, tool } = captureTool();
   registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });

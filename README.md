@@ -1,13 +1,15 @@
 # pi-twitterapi.io
 
-A [twitterapi.io](https://twitterapi.io)-backed X/Twitter search extension for the
-[pi coding agent](https://pi.dev). It registers a `twitter` tool that retrieves
-posts, accounts or a thread from twitterapi.io and synthesizes an answer with
-citation URLs using a model from pi's own registry.
+A [twitterapi.io](https://twitterapi.io)-backed X/Twitter extension for the
+[pi coding agent](https://pi.dev). It registers a `twitter` tool that reads
+posts, accounts, threads, timelines, trends, conversations and more through
+twitterapi.io, then synthesizes an answer with citation URLs using a model from
+pi's own registry.
 
-This package is standalone and has no dependency on `@pi-lab/xsearch` or any
-other extension. It deliberately does **not** offer an xAI backend: twitterapi.io
-is the retrieval source, and pi's model registry performs the synthesis.
+This extension is self-contained: twitterapi.io is the only retrieval source and
+pi's model registry performs the synthesis. It is designed to cover the same
+surface as xAI's official `x_search` tool and, where twitterapi.io exposes more,
+to go beyond it — see [Compared with xAI `x_search`](#compared-with-xai-x_search).
 
 ## Install
 
@@ -50,7 +52,7 @@ override — and set only the keys you need:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `synthesisModel` | no | A pi model id (`provider/model`) used to turn retrieved posts into an answer. When unset, the model running the current pi session is used as a fallback. |
+| `synthesisModel` | no | A pi model id (`provider/model`) used to turn retrieved posts into an answer. When unset, the session model is used; if it is set but fails at runtime, the session model answers instead with a note. |
 | `enableImageUnderstanding` | no | Attach post images to the synthesis request when the model accepts image input. |
 | `enableVideoUnderstanding` | no | Attach video poster frames (chat models cannot ingest video). |
 | `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4). |
@@ -127,6 +129,74 @@ than silently ignored.
 - **Date windows are resolved at 04:00 UTC by twitterapi.io**, so posts outside
   the requested local window are trimmed while paging, with a note when that
   happens.
+- **Synthesis fallback.** If `twitter.synthesisModel` fails at runtime, the
+  answer is retried with the model running the current session and the result
+  carries a note naming the model that answered. Failures are classified so the
+  chain reacts per kind rather than treating every error alike:
+
+  | Failure | Examples | Reaction |
+  |---|---|---|
+  | Quota / billing | `402`, `insufficient_quota`, quota exceeded, subscription limit | next model |
+  | Authentication | `401`, `403`, invalid API key | next model |
+  | Unknown model | `404`, "does not exist" | next model |
+  | Invalid request | `400`, `422`, malformed | next model |
+  | Rate limit | `429`, "too many requests", overloaded | next model, retried once when it is the last one |
+  | Server | `5xx`, bad gateway, unavailable | next model, retried once when it is the last one |
+  | Transport | timeouts, connection drops, premature stream endings | next model, retried once when it is the last one |
+  | Empty response | model returned no usable text | next model, retried once when it is the last one |
+  | Cancelled | explicit abort wording, generation cancelled | stop, no fallback |
+
+  Deterministic failures never retry the same model. The bounded retry (500 ms,
+  doubling to a 4 s cap) is spent only on the last available model, since an
+  untried model is the better bet while one remains.
+
+## Compared with xAI `x_search`
+
+xAI's official [`x_search`](https://docs.x.ai/developers/tools/x-search) is a
+server-side tool that bundles four underlying operations — keyword search,
+semantic search, user search and thread fetch — and lets Grok choose which to
+run. `pi-twitterapi.io` targets the same read surface through twitterapi.io's REST
+API and adds the endpoints twitterapi.io exposes that `x_search` has no
+equivalent for. The table below is the honest capability comparison; the full
+version, including parameter mapping, lives in
+[`docs/x-search-comparison.md`](docs/x-search-comparison.md).
+
+| Capability | xAI `x_search` | `pi-twitterapi.io` (`twitter` tool) |
+|---|---|---|
+| Retrieval source | xAI's server-side X index | twitterapi.io REST API |
+| Credential | `XAI_API_KEY` | `TWITTERAPI_IO_API_KEY` |
+| Keyword post search | ✅ `x_keyword_search` | ✅ `mode=posts` (`advanced_search`) |
+| Semantic search | ✅ `x_semantic_search` | ❌ **no equivalent** (twitterapi.io has no semantic endpoint) |
+| User/account search | ✅ `x_user_search` | ✅ `mode=users` |
+| Thread fetch | ✅ `x_thread_fetch` | ✅ `mode=thread` |
+| Account timeline | ❌ | ✅ `mode=user` (`last_tweets`) |
+| Trends by location | ❌ | ✅ `mode=trends` |
+| Replies to a post | ❌ | ✅ `mode=replies` |
+| Quote-posts | ❌ | ✅ `mode=quotes` |
+| Mentions of an account | ❌ | ✅ `mode=mentions` |
+| Followers / followings | ❌ | ✅ `mode=followers`, `mode=followings` |
+| Single profile lookup | partial (via user search) | ✅ `mode=profile` |
+| Fetch posts by id | ❌ | ✅ `mode=tweets` |
+| Communities / lists / Spaces | ❌ | ✅ `mode=community`, `mode=list`, `mode=space` |
+| Handle filters | `allowed_x_handles` / `excluded_x_handles` (max 20, mutually exclusive) | same, `mode=posts` |
+| Date range | `from_date` / `to_date` (`YYYY-MM-DD`) | same, `mode=posts`; plus unix windows for `replies`/`quotes`/`mentions` |
+| Result order | chosen by the model | `queryType` (`Latest`/`Top`), `replySort` |
+| Item-count control | ❌ | ✅ `count`, `limit` |
+| Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached when the model accepts images) |
+| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame only (chat models cannot ingest video) |
+| Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model |
+| Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
+| Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens |
+| Shape | one `x_search` request | one `twitter` tool with 15 modes |
+
+**Summary.** `pi-twitterapi.io` matches `x_search` on keyword search, user search,
+thread fetch, handle filters, date ranges and image understanding, and adds a
+dedicated account timeline, trends, replies, quotes, mentions, followers,
+followings, profile, posts-by-id, community, list and Space modes. The one
+capability it cannot match is **semantic search**, because twitterapi.io exposes
+only keyword/operator search. It also differs structurally: `x_search` is one
+server-side call answered by Grok, while this extension retrieves through
+twitterapi.io and synthesizes with a pi model of your choice.
 
 ## Development
 

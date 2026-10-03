@@ -5,12 +5,10 @@ import { registerTwitterTool } from "./tool.js";
  * pi-twitterapi.io — a twitterapi.io-backed X/Twitter search extension for the
  * pi coding agent.
  *
- * Registers the `twitter` tool, which retrieves posts, accounts or a thread from
- * twitterapi.io and synthesizes an answer with citation URLs using a configured
- * pi model. Requires `TWITTERAPI_IO_API_KEY` and `twitter.synthesisModel`.
- *
- * Unlike `@pi-lab/xsearch` this extension has no xAI backend: twitterapi.io is
- * the retrieval source and pi's own model registry performs the synthesis.
+ * Registers the `twitter` tool, which reads X/Twitter through twitterapi.io and
+ * synthesizes an answer with citation URLs using a pi model. Requires
+ * `TWITTERAPI_IO_API_KEY`; synthesis uses `twitter.synthesisModel`, falling back
+ * to the model running the session.
  */
 export default function (pi: ExtensionAPI) {
   registerTwitterTool(pi);
@@ -35,15 +33,18 @@ export {
   runTwitterApiUserTimeline,
   resolveModel,
   assistantText,
+  classifySynthesisError,
   completionText,
   createFetchMedia,
   isAllowedMediaUrl,
+  synthesisRetryDelayMs,
   toSynthesisModel,
 } from "./backend.js";
 export type {
   BackendOptions,
   ModelLike,
   RegistryLike,
+  SynthesisFailureKind,
   TwitterApiCommunityOptions,
   TwitterApiFollowOptions,
   TwitterApiListOptions,

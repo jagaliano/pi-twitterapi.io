@@ -61,6 +61,14 @@ export interface BackendOptions {
   fetcher?: typeof fetch;
   registry?: RegistryLike;
   signal?: AbortSignal;
+  /**
+   * Models to try, in order, after the configured synthesis model fails at
+   * runtime (typically the model running the current session). Duplicates of the
+   * primary and of each other are dropped.
+   */
+  fallbackModelIds?: string[];
+  /** Override the retry delay between last-model attempts (tests). */
+  synthesisSleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Resolve a `provider/model` spec, or a bare model id, against the registry. */
@@ -297,8 +305,99 @@ interface SynthesisBackend {
   fetcher: typeof fetch;
   apiKey: string;
   model: ModelLike;
-  /** Ready-to-use synthesis completion, with failure handling already applied. */
+  /** Ready-to-use synthesis completion, with fallback and failure handling applied. */
   complete: (request: SynthesisRequest) => Promise<string>;
+  /** Model that served a completion after the primary failed, when that happened. */
+  fallback?: ModelLike;
+  /** True once a completion has been served by the fallback model. */
+  isFallbackUsed: () => boolean;
+}
+
+/** True for an aborted/cancelled completion, which must not trigger a fallback. */
+export type SynthesisFailureKind =
+  | "cancelled"
+  | "quota"
+  | "auth"
+  | "unknown-model"
+  | "invalid-request"
+  | "rate-limit"
+  | "server"
+  | "transport"
+  | "empty";
+
+/**
+ * Failure classes worth one retry on the last model. Deterministic failures
+ * (quota, auth, unknown model, invalid request) are never retried: a second
+ * attempt cannot succeed.
+ */
+const RETRYABLE_ON_LAST: ReadonlySet<SynthesisFailureKind> = new Set([
+  "rate-limit",
+  "server",
+  "transport",
+  "empty",
+]);
+
+const LAST_MODEL_RETRY_BASE_MS = 500;
+const LAST_MODEL_RETRY_CAP_MS = 4_000;
+
+/** Bounded exponential backoff: 500 ms, doubling to a 4 s cap. */
+export function synthesisRetryDelayMs(attempt: number): number {
+  return Math.min(LAST_MODEL_RETRY_BASE_MS * 2 ** attempt, LAST_MODEL_RETRY_CAP_MS);
+}
+
+/**
+ * Classify a synthesis failure so the chain reacts per kind instead of treating
+ * every error alike. Provider failures reach pi as a message (and sometimes only
+ * as a stop reason), so the classification is text-based and ordered so the most
+ * specific signal wins.
+ */
+export function classifySynthesisError(error: unknown): SynthesisFailureKind {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (/cancel|abort/.test(message)) return "cancelled";
+  if (/insufficient_quota|quota|billing|payment required|subscription|\b402\b|credit/.test(message)) return "quota";
+  if (/\b401\b|\b403\b|unauthor|invalid api key|forbidden|authentication|api key/.test(message)) return "auth";
+  if (/\b404\b|does not exist|unknown model|no such model|not found/.test(message)) return "unknown-model";
+  if (/\b400\b|\b422\b|malformed|invalid request|bad request|validation/.test(message)) return "invalid-request";
+  if (/\b429\b|too many requests|rate limit|overloaded/.test(message)) return "rate-limit";
+  if (/\b5\d\d\b|bad gateway|unavailable|internal server error|gateway timeout/.test(message)) return "server";
+  if (
+    /timeout|timed out|econnreset|econnrefused|enotfound|socket hang up|network|fetch failed|premature|stream ended|connection (closed|drop|lost|reset)/.test(
+      message,
+    )
+  ) {
+    return "transport";
+  }
+  if (/empty answer|no usable text|output limit|empty response/.test(message)) return "empty";
+  return "server";
+}
+
+/** Resolve after `ms`, or reject when the caller aborts. */
+function synthesisDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error("twitter synthesis was cancelled"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("twitter synthesis was cancelled"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Append the fallback disclosure when a completion was served by the fallback model. */
+function applyFallbackNote(backend: SynthesisBackend, details: TwitterSearchDetails): void {
+  if (!backend.isFallbackUsed() || !backend.fallback) return;
+  details.notes = [
+    ...(details.notes ?? []),
+    `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
+  ];
 }
 
 /**
@@ -344,7 +443,73 @@ function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Synthesis
         "Set twitter.synthesisModel to a model id from pi's catalogue.",
     );
   }
-  return { fetcher, apiKey, model, complete: createCompletion(registry, run, model) };
+  // Build the model chain: the configured model first, then any caller-supplied
+  // fallbacks (typically the session model), deduplicated.
+  const chain: ModelLike[] = [model];
+  for (const id of options.fallbackModelIds ?? []) {
+    if (!id) continue;
+    const resolved = resolveModel(registry, id);
+    if (!resolved) continue;
+    if (chain.some((entry) => entry.provider === resolved.provider && entry.id === resolved.id)) continue;
+    chain.push(resolved);
+  }
+
+  const completions = new Map<ModelLike, (request: SynthesisRequest) => Promise<string>>();
+  const completionFor = (target: ModelLike): ((request: SynthesisRequest) => Promise<string>) => {
+    let completion = completions.get(target);
+    if (!completion) {
+      completion = createCompletion(registry, run, target);
+      completions.set(target, completion);
+    }
+    return completion;
+  };
+
+  let fallback: ModelLike | undefined;
+  const sleepForRetry = options.synthesisSleep ?? synthesisDelay;
+
+  const complete = async (request: SynthesisRequest): Promise<string> => {
+    let lastError: unknown;
+    for (let index = 0; index < chain.length; index += 1) {
+      const candidate = chain[index];
+      // An untried model is the better bet than retrying a model that already
+      // failed, so the retry budget is only spent on the last model in the chain.
+      const isLast = index === chain.length - 1;
+      const maxAttempts = isLast ? 2 : 1;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        if (attempt > 0) {
+          // attempt 1 only happens on the last model after a retryable class.
+          await sleepForRetry(synthesisRetryDelayMs(attempt - 1), request.signal);
+        }
+        try {
+          const text = await completionFor(candidate)(request);
+          if (index > 0) fallback = candidate;
+          return text;
+        } catch (error) {
+          const kind = classifySynthesisError(error);
+          // A cancellation stops the chain: it is the caller's intent, not a
+          // model failure to route around.
+          if (kind === "cancelled") throw error;
+          lastError = error;
+          if (!isLast || !RETRYABLE_ON_LAST.has(kind)) break;
+        }
+      }
+    }
+    throw lastError ?? new Error("twitter synthesis failed: no model in the chain produced an answer");
+  };
+
+  // `fallback` is resolved lazily: the completion runs after this object is
+  // built, so a plain property would freeze the pre-run value (undefined).
+  const backend: SynthesisBackend = {
+    fetcher,
+    apiKey,
+    model,
+    complete,
+    get fallback(): ModelLike | undefined {
+      return fallback;
+    },
+    isFallbackUsed: () => fallback !== undefined,
+  };
+  return backend;
 }
 
 /** Options shared by every twitterapi.io run path. */
@@ -410,7 +575,8 @@ function incompleteReason(stoppedBy: string | undefined, pages: number): string 
 export async function runTwitterApiSearch(
   options: TwitterApiRunOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
-  const { fetcher, apiKey, model, complete } = resolveSynthesisBackend(options);
+  const backend = resolveSynthesisBackend(options);
+  const { fetcher, apiKey, model, complete } = backend;
 
   const params = normalizeParams(options.params);
   const search = await searchTweets(params, apiKey, fetcher, {
@@ -470,6 +636,7 @@ export async function runTwitterApiSearch(
         "(the upstream window is padded back a day so the local day's start is covered).",
     ];
   }
+  applyFallbackNote(backend, details);
 
   return { markdown: formatTwitterResults(details), details };
 }
@@ -481,7 +648,8 @@ export async function runTwitterApiSearch(
 export async function runTwitterApiUserSearch(
   options: TwitterApiUserSearchOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
-  const { fetcher, apiKey, model, complete } = resolveSynthesisBackend(options);
+  const backend = resolveSynthesisBackend(options);
+  const { fetcher, apiKey, model, complete } = backend;
 
   const search = await searchUsers(options.query, apiKey, fetcher, {
     signal: options.signal,
@@ -520,6 +688,7 @@ export async function runTwitterApiUserSearch(
         'and a multi-word query can match nothing; retry with a single distinctive keyword (for example "coding").',
     ];
   }
+  applyFallbackNote(backend, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -529,7 +698,8 @@ export async function runTwitterApiUserSearch(
 export async function runTwitterApiThread(
   options: TwitterApiThreadOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
-  const { fetcher, apiKey, model, complete } = resolveSynthesisBackend(options);
+  const backend = resolveSynthesisBackend(options);
+  const { fetcher, apiKey, model, complete } = backend;
   // Validated before the request, like the post and account paths: a blank
   // question would otherwise still pay for retrieval and synthesis.
   const question = options.query?.trim();
@@ -563,6 +733,7 @@ export async function runTwitterApiThread(
       `Retrieval stopped early (${incomplete}) while the thread continued, so these results may be incomplete.`,
     ];
   }
+  applyFallbackNote(backend, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -584,6 +755,12 @@ async function completeTweetAnswer(
     deps: { complete: backend.complete, fetchMedia: createFetchMedia(backend.fetcher, options.signal) },
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
+  if (backend.isFallbackUsed() && backend.fallback) {
+    details.notes = [
+      ...details.notes,
+      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
+    ];
+  }
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -706,6 +883,12 @@ export async function runTwitterApiTrends(
     signal: options.signal,
     deps: { complete: backend.complete },
   });
+  if (backend.isFallbackUsed() && backend.fallback) {
+    details.notes = [
+      ...(details.notes ?? []),
+      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
+    ];
+  }
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -727,6 +910,12 @@ async function completeUserAnswer(
     deps: { complete: backend.complete },
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
+  if (backend.isFallbackUsed() && backend.fallback) {
+    details.notes = [
+      ...details.notes,
+      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
+    ];
+  }
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -942,5 +1131,11 @@ export async function runTwitterApiSpace(
     deps: { complete: backend.complete },
     notes,
   });
+  if (backend.isFallbackUsed() && backend.fallback) {
+    details.notes = [
+      ...(details.notes ?? []),
+      `The configured synthesis model failed; the answer was produced by ${backend.fallback.provider}/${backend.fallback.id}.`,
+    ];
+  }
   return { markdown: formatTwitterResults(details), details };
 }
