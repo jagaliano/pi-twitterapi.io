@@ -16,6 +16,7 @@ export default function (pi: ExtensionAPI) {
 
 export { registerTwitterTool, type TwitterToolOptions } from "./tool.js";
 export {
+  runTwitterApiAbout,
   runTwitterApiCommunity,
   runTwitterApiFollowers,
   runTwitterApiFollowings,
@@ -24,6 +25,7 @@ export {
   runTwitterApiProfile,
   runTwitterApiQuotes,
   runTwitterApiReplies,
+  runTwitterApiRetweeters,
   runTwitterApiSearch,
   runTwitterApiSpace,
   runTwitterApiThread,
@@ -45,6 +47,7 @@ export type {
   ModelLike,
   RegistryLike,
   SynthesisFailureKind,
+  TwitterApiAboutOptions,
   TwitterApiCommunityOptions,
   TwitterApiFollowOptions,
   TwitterApiListOptions,
@@ -52,6 +55,7 @@ export type {
   TwitterApiProfileOptions,
   TwitterApiQuotesOptions,
   TwitterApiRepliesOptions,
+  TwitterApiRetweetersOptions,
   TwitterApiRunOptions,
   TwitterApiSpaceOptions,
   TwitterApiSynthesisOptions,
@@ -93,6 +97,8 @@ export {
   fetchTweetQuotes,
   fetchTweetReplies,
   fetchTweetsByIds,
+  fetchTweetRetweeters,
+  fetchUserAbout,
   fetchUserMentions,
   fetchUserProfile,
   fetchUserTweets,
@@ -105,6 +111,7 @@ export {
 export type {
   FollowersDetails,
   ReplySort,
+  RetweetersDetails,
   SearchDetails,
   SpaceDetails,
   Trend,
@@ -114,6 +121,7 @@ export type {
   TweetQuotesDetails,
   TweetRepliesDetails,
   TwitterApiSearchParams,
+  UserAbout,
   UserCollection,
   UserMentionsDetails,
   UserTweetsDetails,

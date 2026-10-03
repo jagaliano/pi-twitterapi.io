@@ -18,6 +18,8 @@ import {
   fetchTweetQuotes,
   fetchTweetReplies,
   fetchTweetsByIds,
+  fetchTweetRetweeters,
+  fetchUserAbout,
   fetchUserMentions,
   fetchUserProfile,
   fetchUserTweets,
@@ -525,6 +527,59 @@ export async function runTwitterApiTweetsByIds(
     tweets: result.tweets,
     notes: [`Answered from ${result.tweets.length} post(s) fetched by id.`],
   });
+}
+
+export interface TwitterApiAboutOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  userName: string;
+}
+
+/** Fetch a user's extended "about" page metadata and synthesize an answer. */
+export async function runTwitterApiAbout(
+  options: TwitterApiAboutOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const about = await fetchUserAbout(options.userName, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const fields = flattenObject(about as unknown as Record<string, unknown>);
+  const notes = [`Answered from the about page of @${about.handle}.`];
+  if (fields.length > 200) {
+    notes.push(`The about data was long; only the first 200 of ${fields.length} fields were used, so some may be omitted.`);
+  }
+  const details = await synthesizeDocument({
+    query: options.query,
+    title: `About @${about.handle}`,
+    body: fields.slice(0, 200).join("\n"),
+    citations: [about.profileUrl],
+    model: toSynthesisModel(backend.model),
+    signal: options.signal,
+    deps: { complete: backend.complete },
+    notes,
+  });
+  applyFallbackNote(backend, details);
+  return { markdown: formatTwitterResults(details), details };
+}
+
+export interface TwitterApiRetweetersOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  tweet: string;
+  limit?: number;
+}
+
+/** Fetch users who retweeted a post and synthesize an answer from their profiles. */
+export async function runTwitterApiRetweeters(
+  options: TwitterApiRetweetersOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const result = await fetchTweetRetweeters(options.tweet, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
+  const notes = [`Answered from ${result.users.length} retweeter(s) of post ${result.tweetId}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more retweeters remained, so these results may be incomplete.`);
+  }
+  return completeUserAnswer(backend, options, { query: options.query, users: result.users, incomplete, notes });
 }
 
 // -------------------------------------- communities, lists, spaces (P3)

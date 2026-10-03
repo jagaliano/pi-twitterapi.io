@@ -3,6 +3,7 @@ import { type ExtensionAPI, keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { readMergedPiSettings, type PiSettings } from "./settings.js";
 import {
+  runTwitterApiAbout,
   runTwitterApiCommunity,
   runTwitterApiFollowers,
   runTwitterApiFollowings,
@@ -11,6 +12,7 @@ import {
   runTwitterApiProfile,
   runTwitterApiQuotes,
   runTwitterApiReplies,
+  runTwitterApiRetweeters,
   runTwitterApiSearch,
   runTwitterApiSpace,
   runTwitterApiThread,
@@ -30,7 +32,7 @@ export interface TwitterToolOptions {
 }
 
 /** Modes that locate a specific post through the shared `tweet` argument. */
-const TWEET_MODES = new Set(["thread", "replies", "quotes"]);
+const TWEET_MODES = new Set(["thread", "replies", "quotes", "retweeters"]);
 
 /** Per-mode parameter allowlist, so a parameter that does not apply is refused. */
 const MODE_PARAMS: Record<string, readonly string[]> = {
@@ -49,10 +51,12 @@ const MODE_PARAMS: Record<string, readonly string[]> = {
   community: ["communityId", "limit"],
   list: ["listId", "limit"],
   space: ["spaceId"],
+  about: ["user"],
+  retweeters: ["limit"],
 };
 
 /** Modes that must be told which account to read. */
-const USER_MODES = new Set(["user", "mentions", "followers", "followings", "profile"]);
+const USER_MODES = new Set(["user", "mentions", "followers", "followings", "profile", "about"]);
 
 /** The parameter universe, used to report parameters a mode cannot apply. */
 const ALL_PARAMS = [
@@ -89,14 +93,15 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     description:
       "Read X/Twitter via twitterapi.io and return an answer with citation URLs. Modes: posts (default), " +
       "users, thread, user (account timeline), trends, replies, quotes, mentions, followers, followings, " +
-      "profile, tweets, community, list and space. Retrieved content is synthesized into an answer by a " +
-      "configured pi model.",
-    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes, mentions, followers, followings, profile, tweets, community, list, space) and return an answer with citation URLs",
+      "profile, about, tweets, retweeters, community, list and space. Retrieved content is synthesized into " +
+      "an answer by a configured pi model.",
+    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes, mentions, followers, followings, profile, about, tweets, retweeters, community, list, space) and return an answer with citation URLs",
     promptGuidelines: [
       "Use twitter when the user needs current discussion or sentiment from X/Twitter and twitterapi.io is configured.",
       "Use mode \"users\" to discover accounts; use mode \"user\" to read a specific account's recent posts.",
       "Use mode \"thread\" with a tweet id or permalink to read a post's whole thread.",
       "Use mode \"replies\" or mode \"quotes\" to read the conversation around a specific post.",
+      "Use mode \"retweeters\" with a tweet id or permalink to list the accounts that reposted it.",
       "Use mode \"trends\" with a woeid (1=Worldwide, 23424977=USA) for trending topics.",
       "Use allowed_x_handles and excluded_x_handles with mode \"posts\" to narrow or exclude accounts.",
       "Use from_date and to_date with mode \"posts\" for date ranges; dates must be YYYY-MM-DD.",
@@ -104,9 +109,9 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language question or search query. Required for every mode." }),
-      mode: Type.Optional(Type.String({ description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "tweets", "community", "list", or "space".' })),
-      tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes; refused in any other mode.' })),
-      user: Type.Optional(Type.String({ description: "X handle (no @) for mode=user, mentions, followers, followings or profile." })),
+      mode: Type.Optional(Type.String({ description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "about", "tweets", "retweeters", "community", "list", or "space".' })),
+      tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes/retweeters; refused in any other mode.' })),
+      user: Type.Optional(Type.String({ description: "X handle (no @) for mode=user, mentions, followers, followings, profile or about." })),
       userId: Type.Optional(Type.String({ description: "Numeric user id for mode=user; preferred over `user` when known." })),
       ids: Type.Optional(Type.Array(Type.String(), { description: "mode=tweets: post ids or X permalinks to fetch (max 100)." })),
       pageSize: Type.Optional(Type.Number({ description: "mode=followers/followings: accounts per page (20–200)." })),
@@ -117,7 +122,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       includeReplies: Type.Optional(Type.Boolean({ description: "Include replies: mode=user (timeline) and mode=quotes." })),
       sinceTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items on or after this unix timestamp (seconds)." })),
       untilTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items before this unix timestamp (seconds)." })),
-      limit: Type.Optional(Type.Number({ description: "mode=user/mentions/followers/followings/replies/quotes/community/list: stop after this many items (max 1000)." })),
+      limit: Type.Optional(Type.Number({ description: "mode=user/mentions/followers/followings/replies/quotes/retweeters/community/list: stop after this many items (max 1000)." })),
       replySort: Type.Optional(Type.String({ description: 'mode=replies sort order: "Relevance" (default), "Latest", or "Likes".' })),
       allowed_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: only posts from these handles (max 20, no @)." })),
       excluded_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: exclude these handles (max 20, no @)." })),
@@ -320,6 +325,25 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       if (mode === "tweets") {
         const ids = (supplied.ids as unknown[]).map((value) => String(value));
         const { markdown, details } = await runTwitterApiTweetsByIds({ query: question, ids, ...base });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "about") {
+        const { markdown, details } = await runTwitterApiAbout({
+          query: question,
+          userName: text(supplied.user) as string,
+          ...base,
+        });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "retweeters") {
+        const { markdown, details } = await runTwitterApiRetweeters({
+          query: question,
+          tweet: tweetReference,
+          limit: number(supplied.limit),
+          ...base,
+        });
         return { content: [{ type: "text", text: markdown }], details };
       }
 

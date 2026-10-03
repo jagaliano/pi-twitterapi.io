@@ -14,6 +14,8 @@ import {
   fetchTweetQuotes,
   fetchTweetReplies,
   fetchTweetsByIds,
+  fetchTweetRetweeters,
+  fetchUserAbout,
   fetchUserMentions,
   fetchUserProfile,
   fetchUserTweets,
@@ -1582,4 +1584,80 @@ test("fetchTrends validates woeid and count and maps the upstream trend shape", 
   assert.deepEqual(result.trends[0], { name: "#pi", rank: 1, query: "#pi", metaDescription: "10K posts" });
   assert.match(seen[0], /trends\?woeid=1/);
   assert.match(seen[0], /count=30/);
+});
+
+test("fetchUserAbout unwraps about_profile and verification_info", async () => {
+  await assert.rejects(
+    () => fetchUserAbout("", "k", async () => jsonResponse({ data: {} }), { sleep: noSleep }),
+    /needs a userName/,
+  );
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({
+      data: {
+        id: "1074094858053115904",
+        name: "PiG Coding Agent",
+        userName: "PiGCodingAgent",
+        createdAt: "2018-12-16T00:12:24.000000Z",
+        profilePicture: "https://pbs.twimg.com/profile_images/x/y_normal.jpg",
+        isBlueVerified: true,
+        protected: false,
+        about_profile: {
+          account_based_in: "United States",
+          created_country_accurate: true,
+          location_accurate: true,
+          source: "United States App Store",
+          username_changes: { count: "1", last_changed_at_msec: "1789700806381" },
+        },
+        verification_info: { is_identity_verified: false, reason: { verified_since_msec: "1789701398691" } },
+      },
+    });
+  };
+  const about = await fetchUserAbout("@PiGCodingAgent", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.equal(about.handle, "PiGCodingAgent", "a leading @ is stripped");
+  assert.equal(about.profileUrl, "https://x.com/PiGCodingAgent");
+  assert.equal(about.accountBasedIn, "United States");
+  assert.equal(about.source, "United States App Store");
+  assert.equal(about.locationAccurate, true);
+  assert.equal(about.createdCountryAccurate, true);
+  assert.deepEqual(about.usernameChanges, { count: 1, lastChangedAtMs: 1789700806381 }, "numeric strings are coerced");
+  assert.equal(about.verifiedSinceMsec, 1789701398691);
+  assert.equal(about.identityVerified, undefined, "a false identity-verification flag is not published as true");
+  assert.match(seen[0], /user_about/);
+  assert.match(seen[0], /userName=PiGCodingAgent/);
+
+  await assert.rejects(
+    () => fetchUserAbout("ghost", "k", async () => jsonResponse({ data: { name: "x" } }), { sleep: noSleep }),
+    /no about data/,
+  );
+});
+
+test("fetchTweetRetweeters paginates the users array and validates the tweet", async () => {
+  await assert.rejects(
+    () => fetchTweetRetweeters("not-a-tweet", "k", async () => jsonResponse({ users: [] }), { sleep: noSleep }),
+    /numeric post id or an X permalink/,
+  );
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    const first = seen.length === 1;
+    return jsonResponse({
+      users: first
+        ? [apiUser(), apiUser({ id: "2", screen_name: "bob" })]
+        : [apiUser({ id: "3", screen_name: "carol" })],
+      has_next_page: first,
+      next_cursor: first ? "c1" : undefined,
+    });
+  };
+  const result = await fetchTweetRetweeters("https://x.com/a/status/9", "k", fetcher, {
+    sleep: noSleep,
+    minRequestIntervalMs: 0,
+  });
+  assert.equal(result.tweetId, "9", "a permalink is canonicalised to an id");
+  assert.equal(result.users.length, 3);
+  assert.equal(result.stoppedBy, "exhausted");
+  assert.match(seen[0], /tweet\/retweeters/);
+  assert.match(seen[0], /tweetId=9/);
+  assert.match(seen[1], /cursor=c1/);
 });

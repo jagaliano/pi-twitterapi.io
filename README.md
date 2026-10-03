@@ -71,9 +71,9 @@ override — and set only the keys you need:
 | Parameter | Type | Notes |
 |---|---|---|
 | `query` | string (required) | Natural-language question. Required for every mode. |
-| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `tweets` \| `community` \| `list` \| `space` | Defaults to `posts`. |
-| `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`; refused in any other mode. |
-| `user` | string | Handle (no `@`) for `mode=user`, `mentions`, `followers`, `followings`, `profile`. |
+| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `about` \| `tweets` \| `retweeters` \| `community` \| `list` \| `space` | Defaults to `posts`. |
+| `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`, `retweeters`; refused in any other mode. |
+| `user` | string | Handle (no `@`) for `mode=user`, `mentions`, `followers`, `followings`, `profile`, `about`. |
 | `userId` | string | Numeric user id for `mode=user`; preferred over `user` when known. |
 | `ids` | string[] | `mode=tweets`: post ids or permalinks to fetch (max 100). |
 | `pageSize` | number | `mode=followers`/`followings`: accounts per page (20–200). |
@@ -83,7 +83,7 @@ override — and set only the keys you need:
 | `woeid` | number | `mode=trends` location id (1=Worldwide, 23424977=USA). |
 | `includeReplies` | boolean | `mode=user` (timeline) and `mode=quotes`. |
 | `sinceTime` / `untilTime` | number | `mode=quotes` and `mode=mentions`: unix timestamps (seconds) bounding the results. |
-| `limit` | number | `mode=user`/`mentions`/`followers`/`followings`/`replies`/`quotes`/`community`/`list`: stop after this many items (max 1000). |
+| `limit` | number | `mode=user`/`mentions`/`followers`/`followings`/`replies`/`quotes`/`retweeters`/`community`/`list`: stop after this many items (max 1000). |
 | `replySort` | `"Relevance"` \| `"Latest"` \| `"Likes"` | `mode=replies` sort order (default `Relevance`). |
 | `allowed_x_handles` | string[] | `mode=posts`: only these handles (max 20, no `@`). |
 | `excluded_x_handles` | string[] | `mode=posts`: exclude these handles (max 20, no `@`). |
@@ -109,7 +109,9 @@ than silently ignored.
 | `followers` | `/twitter/user/followers` | Who follows an account (`user`, `pageSize`, `limit`); profile URLs as sources. |
 | `followings` | `/twitter/user/followings` | Who an account follows (`user`, `pageSize`, `limit`). |
 | `profile` | `/twitter/user/info` | A single account profile (`user`). |
+| `about` | `/twitter/user_about` | Extended profile-page metadata (`user`): account-based-in, creation source, handle changes, identity verification; cited as the profile URL. |
 | `tweets` | `/twitter/tweets` | Specific posts by id (`ids`, max 100). |
+| `retweeters` | `/twitter/tweet/retweeters` | Accounts that reposted a post (`tweet`, `limit`); profile URLs as sources. |
 | `community` | `/twitter/community/tweets` | Posts from a community (`communityId`, `limit`). |
 | `list` | `/twitter/list/tweets_timeline` | Posts from a list (`listId`, `limit`). |
 | `space` | `/twitter/spaces/detail` | An X Space's detail (`spaceId`); cited as `https://x.com/i/spaces/<id>`. |
@@ -186,7 +188,9 @@ version, including parameter mapping, lives in
 | Mentions of an account | ❌ | ✅ `mode=mentions` |
 | Followers / followings | ❌ | ✅ `mode=followers`, `mode=followings` |
 | Single profile lookup | partial (via user search) | ✅ `mode=profile` |
+| Extended profile ("about") metadata | ❌ | ✅ `mode=about` |
 | Fetch posts by id | ❌ | ✅ `mode=tweets` |
+| Users who reposted a post | ❌ | ✅ `mode=retweeters` |
 | Communities / lists / Spaces | ❌ | ✅ `mode=community`, `mode=list`, `mode=space` |
 | Handle filters | `allowed_x_handles` / `excluded_x_handles` (max 20, mutually exclusive) | same, `mode=posts` |
 | Date range | `from_date` / `to_date` (`YYYY-MM-DD`) | same, `mode=posts`; plus unix windows for `quotes`/`mentions` |
@@ -197,12 +201,13 @@ version, including parameter mapping, lives in
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens |
-| Shape | one `x_search` request | one `twitter` tool with 15 modes |
+| Shape | one `x_search` request | one `twitter` tool with 17 modes |
 
 **Summary.** `pi-twitterapi.io` matches `x_search` on keyword search, user search,
 thread fetch, handle filters, date ranges and image understanding, and adds a
 dedicated account timeline, trends, replies, quotes, mentions, followers,
-followings, profile, posts-by-id, community, list and Space modes. The one
+followings, profile, about, posts-by-id, retweeters, community, list and Space
+modes. The one
 capability it cannot match is **semantic search**, because twitterapi.io exposes
 only keyword/operator search. It also differs structurally: `x_search` is one
 server-side call answered by Grok, while this extension retrieves through

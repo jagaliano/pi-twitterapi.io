@@ -1002,3 +1002,97 @@ test("P3 modes validate their required id parameters", async () => {
     /needs `spaceId`/,
   );
 });
+
+test("mode=about reads extended profile metadata", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({
+        data: {
+          id: "1",
+          userName: "alice",
+          name: "Alice",
+          isBlueVerified: true,
+          about_profile: { account_based_in: "United States", source: "Web" },
+          verification_info: { is_identity_verified: false },
+        },
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute(
+    "id",
+    { query: "where is this account based?", mode: "about", user: "alice" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Based in the United States (https://x.com/alice).") },
+  );
+  assert.match(seen[0], /user_about/);
+  assert.match(seen[0], /userName=alice/);
+  assert.match(result.content[0].text, /United States/);
+});
+
+test("mode=retweeters reads users who reposted a post", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    seen.push(String(url));
+    return new Response(
+      JSON.stringify({ users: [{ id: "1", screen_name: "alice" }, { id: "2", screen_name: "bob" }], has_next_page: false }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  await tool().execute(
+    "id",
+    { query: "who reposted this?", mode: "retweeters", tweet: "https://x.com/a/status/9", limit: 5 },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Reposted by alice and bob (https://x.com/alice).") },
+  );
+  assert.match(seen[0], /tweet\/retweeters/);
+  assert.match(seen[0], /tweetId=9/, "a permalink is canonicalised to an id");
+});
+
+test("about and retweeters validate their required parameters", async () => {
+  const { pi, tool } = captureTool();
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "about" }, undefined, undefined, undefined),
+    /needs `user`/,
+  );
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "retweeters" }, undefined, undefined, undefined),
+    /needs a tweet/,
+  );
+  await assert.rejects(
+    () =>
+      tool().execute(
+        "id",
+        { query: "q", mode: "retweeters", tweet: "9", sinceTime: 1 },
+        undefined,
+        undefined,
+        undefined,
+      ),
+    /sinceTime cannot be applied in mode "retweeters"/,
+  );
+  // `tweet` stays refused in modes that do not locate a post.
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "about", user: "alice", tweet: "9" }, undefined, undefined, undefined),
+    /tweet can only be used in modes/,
+  );
+});

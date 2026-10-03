@@ -1,5 +1,6 @@
 import {
   TWITTERAPI_BASE_URL,
+  isObject,
   type FetchLike,
   type SearchTermination,
   type Tweet,
@@ -818,4 +819,129 @@ export async function fetchSpaceDetail(
     throw new Error("twitterapi.io returned no space detail");
   }
   return { id, data: raw as Record<string, unknown> };
+}
+
+// --------------------------------------- about & retweeters (P2b)
+
+export const USER_ABOUT_PATH = "/twitter/user_about";
+export const TWEET_RETWEETERS_PATH = "/twitter/tweet/retweeters";
+
+/** Extended profile-page metadata from `/twitter/user_about`. */
+export interface UserAbout {
+  id?: string;
+  /** Handle without "@". */
+  handle: string;
+  name?: string;
+  bio?: string;
+  createdAt?: string;
+  profilePicture?: string;
+  verified?: boolean;
+  protected?: boolean;
+  /** Country/region hint from the about page, when provided. */
+  accountBasedIn?: string;
+  /** Client/region the account was created from, when provided. */
+  source?: string;
+  locationAccurate?: boolean;
+  createdCountryAccurate?: boolean;
+  /** Handle-change count and when the last change happened (epoch ms). */
+  usernameChanges?: { count?: number; lastChangedAtMs?: number };
+  /** Identity-verification state reported on the about page. */
+  identityVerified?: boolean;
+  /** When identity verification was granted (epoch ms), when provided. */
+  verifiedSinceMsec?: number;
+  /** Always constructed: `https://x.com/<handle>`. */
+  profileUrl: string;
+}
+
+/** Parse a finite number from a number or a numeric string (upstream mixes both). */
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function asUserAbout(raw: unknown): UserAbout | undefined {
+  if (!isObject(raw)) return undefined;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const handle = str(raw.screen_name) ?? str(raw.userName) ?? str(raw.username);
+  if (!handle) return undefined;
+  const about = isObject(raw.about_profile) ? raw.about_profile : undefined;
+  const usernameChangesRaw = about && isObject(about.username_changes) ? about.username_changes : undefined;
+  const verification = isObject(raw.verification_info) ? raw.verification_info : undefined;
+  const reason = verification && isObject(verification.reason) ? verification.reason : undefined;
+
+  const user: UserAbout = { handle, profileUrl: `https://x.com/${handle}` };
+  const id = str(raw.id);
+  if (id) user.id = id;
+  const name = str(raw.name);
+  if (name) user.name = name;
+  const bio = str(raw.description) ?? str(raw.bio);
+  if (bio) user.bio = bio;
+  const createdAt = str(raw.createdAt) ?? str(raw.created_at);
+  if (createdAt) user.createdAt = createdAt;
+  const profilePicture = str(raw.profilePicture) ?? str(raw.profile_picture);
+  if (profilePicture) user.profilePicture = profilePicture;
+  if (raw.isBlueVerified === true || raw.isVerified === true || raw.verified === true) user.verified = true;
+  if (raw.protected === true) user.protected = true;
+  const accountBasedIn = about ? str(about.account_based_in) : undefined;
+  if (accountBasedIn) user.accountBasedIn = accountBasedIn;
+  const source = about ? str(about.source) : undefined;
+  if (source) user.source = source;
+  if (about?.location_accurate === true) user.locationAccurate = true;
+  if (about?.created_country_accurate === true) user.createdCountryAccurate = true;
+  if (usernameChangesRaw) {
+    const count = finiteNumber(usernameChangesRaw.count);
+    const lastChangedAtMs = finiteNumber(usernameChangesRaw.last_changed_at_msec);
+    if (count !== undefined || lastChangedAtMs !== undefined) {
+      user.usernameChanges = {};
+      if (count !== undefined) user.usernameChanges.count = count;
+      if (lastChangedAtMs !== undefined) user.usernameChanges.lastChangedAtMs = lastChangedAtMs;
+    }
+  }
+  if (verification?.is_identity_verified === true) user.identityVerified = true;
+  const verifiedSince = reason ? finiteNumber(reason.verified_since_msec) : undefined;
+  if (verifiedSince !== undefined) user.verifiedSinceMsec = verifiedSince;
+  return user;
+}
+
+/** Fetch a user's extended "about" page metadata via `/twitter/user_about`. */
+export async function fetchUserAbout(
+  userName: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TwitterApiRequestOptions = {},
+): Promise<UserAbout> {
+  const handle = requireUserName(userName, "about");
+  const settings = resolveRequestSettings(options);
+  const url = new URL(TWITTERAPI_BASE_URL + USER_ABOUT_PATH);
+  url.searchParams.set("userName", handle);
+  const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const user = asUserAbout(payload.data ?? payload);
+  if (!user) throw new Error(`twitterapi.io returned no about data for "${handle}"`);
+  return user;
+}
+
+export interface RetweetersDetails extends UserCollection {
+  tweetId: string;
+}
+
+/** Fetch users who retweeted a post via `/twitter/tweet/retweeters`. */
+export async function fetchTweetRetweeters(
+  tweet: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TweetPagingOptions = {},
+): Promise<RetweetersDetails> {
+  const id = tweetIdFromInput(tweet);
+  if (!id) throw new Error(`twitter tweet must be a numeric post id or an X permalink (got "${tweet}")`);
+  const result = await walkUsers(TWEET_RETWEETERS_PATH, apiKey, fetcher, {
+    ...options,
+    params: { tweetId: id },
+    arrayKey: "users",
+  });
+  return { ...result, tweetId: id };
 }
