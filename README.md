@@ -114,7 +114,7 @@ than silently ignored.
 | `retweeters` | `/twitter/tweet/retweeters` | Accounts that reposted a post (`tweet`, `limit`); profile URLs as sources. |
 | `community` | `/twitter/community/tweets` | Posts from a community (`communityId`, `limit`). |
 | `list` | `/twitter/list/tweets_timeline` | Posts from a list (`listId`, `limit`). |
-| `space` | `/twitter/spaces/detail` | An X Space's detail (`spaceId`); cited as `https://x.com/i/spaces/<id>`. |
+| `space` | `/twitter/spaces/detail` | An X Space's detail (`spaceId`); cited as `https://x.com/i/spaces/<id>`. Note: twitterapi.io currently returns HTTP 404 for this endpoint even for Spaces that are live in the X app, so the mode often reports the upstream error verbatim. |
 
 ## Behavior and disclosures
 
@@ -128,6 +128,10 @@ than silently ignored.
 - **Partial retrieval is disclosed.** If paging stops early (page cap, cursor
   cycle, or a missing cursor while more results remain), the answer carries a
   note saying the results may be incomplete.
+- **`mode=space` depends on a flaky upstream.** twitterapi.io's
+  `/twitter/spaces/detail` returned HTTP 404 "Space not found or API error" for
+  a Space that X itself displayed as live, so this mode frequently reports the
+  upstream error rather than a summary.
 - **Date windows are resolved at 04:00 UTC by twitterapi.io**, so posts outside
   the requested local window are trimmed while paging, with a note when that
   happens. Two consequences worth knowing: far-west offsets (for example
