@@ -2,6 +2,7 @@
   "name": "pi-twitterapi.io",
   "version": "0.1.0",
   "description": "twitterapi.io-backed X/Twitter search extension for pi coding agent",
+  "author": "José Antonio Galiano Sandoval",
   "keywords": [
     "pi-package",
     "pi",
