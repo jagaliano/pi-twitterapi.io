@@ -866,6 +866,7 @@ function finiteNumber(value: unknown): number | undefined {
 function asUserAbout(raw: unknown): UserAbout | undefined {
   if (!isObject(raw)) return undefined;
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const bool = (v: unknown) => (typeof v === "boolean" ? v : undefined);
   const handle = str(raw.screen_name) ?? str(raw.userName) ?? str(raw.username);
   if (!handle) return undefined;
   const about = isObject(raw.about_profile) ? raw.about_profile : undefined;
@@ -884,14 +885,22 @@ function asUserAbout(raw: unknown): UserAbout | undefined {
   if (createdAt) user.createdAt = createdAt;
   const profilePicture = str(raw.profilePicture) ?? str(raw.profile_picture);
   if (profilePicture) user.profilePicture = profilePicture;
-  if (raw.isBlueVerified === true || raw.isVerified === true || raw.verified === true) user.verified = true;
-  if (raw.protected === true) user.protected = true;
+  // Booleans are preserved when supplied, including `false`: a false
+  // verification, protected or accuracy flag is a real answer, and dropping it
+  // would make "not verified" indistinguishable from "not reported".
+  if ([raw.isBlueVerified, raw.isVerified, raw.verified].some((value) => typeof value === "boolean")) {
+    user.verified = raw.isBlueVerified === true || raw.isVerified === true || raw.verified === true;
+  }
+  const protectedFlag = bool(raw.protected);
+  if (protectedFlag !== undefined) user.protected = protectedFlag;
   const accountBasedIn = about ? str(about.account_based_in) : undefined;
   if (accountBasedIn) user.accountBasedIn = accountBasedIn;
   const source = about ? str(about.source) : undefined;
   if (source) user.source = source;
-  if (about?.location_accurate === true) user.locationAccurate = true;
-  if (about?.created_country_accurate === true) user.createdCountryAccurate = true;
+  const locationAccurate = about ? bool(about.location_accurate) : undefined;
+  if (locationAccurate !== undefined) user.locationAccurate = locationAccurate;
+  const createdCountryAccurate = about ? bool(about.created_country_accurate) : undefined;
+  if (createdCountryAccurate !== undefined) user.createdCountryAccurate = createdCountryAccurate;
   if (usernameChangesRaw) {
     const count = finiteNumber(usernameChangesRaw.count);
     const lastChangedAtMs = finiteNumber(usernameChangesRaw.last_changed_at_msec);
@@ -901,7 +910,8 @@ function asUserAbout(raw: unknown): UserAbout | undefined {
       if (lastChangedAtMs !== undefined) user.usernameChanges.lastChangedAtMs = lastChangedAtMs;
     }
   }
-  if (verification?.is_identity_verified === true) user.identityVerified = true;
+  const identityVerified = verification ? bool(verification.is_identity_verified) : undefined;
+  if (identityVerified !== undefined) user.identityVerified = identityVerified;
   const verifiedSince = reason ? finiteNumber(reason.verified_since_msec) : undefined;
   if (verifiedSince !== undefined) user.verifiedSinceMsec = verifiedSince;
   return user;

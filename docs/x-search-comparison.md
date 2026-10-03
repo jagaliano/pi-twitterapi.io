@@ -18,7 +18,7 @@ run:
 xAI runs the retrieval and Grok writes the answer, so one request does
 everything. It is only available on xAI models; there is no non-xAI fallback.
 
-**`pi-twitterapi.io`** registers one `twitter` tool with 15 modes. Each mode maps
+**`pi-twitterapi.io`** registers one `twitter` tool with 17 modes. Each mode maps
 to a twitterapi.io REST endpoint; the retrieved posts, accounts or metadata are
 then handed to a pi model (`twitter.synthesisModel`, else the session model) that
 writes the answer with citations. Retrieval and synthesis are two separate steps,
@@ -41,7 +41,9 @@ which is why the two are priced differently.
 | Mentions of an account | ❌ | ✅ `mode=mentions` → `/twitter/user/mentions` |
 | Followers / followings | ❌ | ✅ `mode=followers` / `mode=followings` |
 | Single profile lookup | partial (via user search) | ✅ `mode=profile` → `/twitter/user/info` |
+| Extended profile ("about") metadata | ❌ | ✅ `mode=about` → `/twitter/user_about` |
 | Fetch posts by id | ❌ | ✅ `mode=tweets` → `/twitter/tweets` |
+| Users who reposted a post | ❌ | ✅ `mode=retweeters` → `/twitter/tweet/retweeters` |
 | Communities | ❌ | ✅ `mode=community` → `/twitter/community/tweets` |
 | Lists | ❌ | ✅ `mode=list` → `/twitter/list/tweets_timeline` |
 | Spaces | ❌ | ✅ `mode=space` → `/twitter/spaces/detail` |
@@ -54,7 +56,7 @@ which is why the two are priced differently.
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model, with runtime fallback |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Billing | xAI model tokens + per post/profile fetched | twitterapi.io credits + your synthesis model's tokens |
-| Tool shape | one `x_search` call | one `twitter` tool, 15 modes |
+| Tool shape | one `x_search` call | one `twitter` tool, 17 modes |
 | Availability | xAI models only | any pi session with a twitterapi.io key |
 
 ## Parameter mapping
@@ -82,7 +84,7 @@ not true semantic retrieval.
 
 Everything below has no `x_search` equivalent and is a first-class mode here:
 account timeline, trends, replies, quotes, mentions, followers, followings,
-profile, fetch-by-id, communities, lists and Spaces.
+profile, about, fetch-by-id, retweeters, communities, lists and Spaces.
 
 ## Behavioral differences worth knowing
 

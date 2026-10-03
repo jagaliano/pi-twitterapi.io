@@ -1621,9 +1621,11 @@ test("fetchUserAbout unwraps about_profile and verification_info", async () => {
   assert.equal(about.source, "United States App Store");
   assert.equal(about.locationAccurate, true);
   assert.equal(about.createdCountryAccurate, true);
+  assert.equal(about.protected, false, "an explicit `protected: false` is preserved, not dropped");
   assert.deepEqual(about.usernameChanges, { count: 1, lastChangedAtMs: 1789700806381 }, "numeric strings are coerced");
   assert.equal(about.verifiedSinceMsec, 1789701398691);
-  assert.equal(about.identityVerified, undefined, "a false identity-verification flag is not published as true");
+  assert.equal(about.identityVerified, false, "an explicit false identity-verification flag is preserved");
+  assert.equal(about.verified, true, "isBlueVerified true marks the account verified");
   assert.match(seen[0], /user_about/);
   assert.match(seen[0], /userName=PiGCodingAgent/);
 
