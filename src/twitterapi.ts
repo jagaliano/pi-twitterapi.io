@@ -1758,3 +1758,65 @@ export async function fetchTweetsByIds(
   }
   return { tweets, pagesFetched: 1, stoppedBy: "exhausted", truncated: false };
 }
+
+// --------------------------------------- communities, lists, spaces (P3)
+
+export const COMMUNITY_TWEETS_PATH = "/twitter/community/tweets";
+export const LIST_TWEETS_PATH = "/twitter/list/tweets_timeline";
+export const SPACE_DETAIL_PATH = "/twitter/spaces/detail";
+
+/** Fetch posts from a community via `/twitter/community/tweets`. */
+export async function fetchCommunityTweets(
+  communityId: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TweetPagingOptions = {},
+): Promise<TweetCollection> {
+  const id = communityId?.trim();
+  if (!id) throw new Error('twitter mode "community" needs a communityId');
+  return walkTweets(COMMUNITY_TWEETS_PATH, apiKey, fetcher, { ...options, params: { community_id: id } });
+}
+
+/** Fetch posts from a list via `/twitter/list/tweets_timeline`. */
+export async function fetchListTweets(
+  listId: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TweetPagingOptions = {},
+): Promise<TweetCollection> {
+  const id = listId?.trim();
+  if (!id) throw new Error('twitter mode "list" needs a listId');
+  return walkTweets(LIST_TWEETS_PATH, apiKey, fetcher, { ...options, params: { listId: id } });
+}
+
+/** A Space's detail payload (`/twitter/spaces/detail` nests it under `data`). */
+export interface SpaceDetails {
+  id: string;
+  data: Record<string, unknown>;
+}
+
+/** Fetch an X Space's detail via `/twitter/spaces/detail`. */
+export async function fetchSpaceDetail(
+  spaceId: string,
+  apiKey: string,
+  fetcher: FetchLike = fetch,
+  options: TwitterApiRequestOptions = {},
+): Promise<SpaceDetails> {
+  const id = spaceId?.trim();
+  if (!id) throw new Error('twitter mode "space" needs a spaceId');
+  const settings = resolveRequestSettings(options);
+  const url = new URL(TWITTERAPI_BASE_URL + SPACE_DETAIL_PATH);
+  url.searchParams.set("space_id", id);
+  const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  // Live responses nest the object under `detail` (the docs say `data`), and use
+  // a string there to report "not found". Accept both envelopes.
+  const raw = payload.detail ?? payload.data;
+  if (typeof raw === "string" && raw.trim()) {
+    throw new Error(`twitterapi.io space lookup failed: ${raw.trim()}`);
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("twitterapi.io returned no space detail");
+  }
+  return { id, data: raw as Record<string, unknown> };
+}

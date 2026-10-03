@@ -4,8 +4,11 @@ import { execFileSync } from "node:child_process";
 import {
   DEFAULT_MAX_PAGES_CEILING,
   MAX_RETRY_DELAY_MS,
+  fetchCommunityTweets,
   fetchFollowers,
   fetchFollowings,
+  fetchListTweets,
+  fetchSpaceDetail,
   fetchThread,
   fetchTrends,
   fetchTweetQuotes,
@@ -1458,6 +1461,52 @@ test("fetchTweetsByIds validates the id list and returns unique posts", async ()
   const result = await fetchTweetsByIds(["1", "2"], "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(result.tweets.length, 2, "a repeated post is dropped");
   assert.match(seen[0], /tweet_ids=1%2C2/);
+});
+
+test("fetchCommunityTweets and fetchListTweets use their id params", async () => {
+  await assert.rejects(
+    () => fetchCommunityTweets("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    /needs a communityId/,
+  );
+  await assert.rejects(
+    () => fetchListTweets("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    /needs a listId/,
+  );
+
+  const seen: string[] = [];
+  const fetcher: FetchLike = async (input) => {
+    seen.push(String(input));
+    return jsonResponse({ tweets: [tweet()], has_next_page: false });
+  };
+  await fetchCommunityTweets("123", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  await fetchListTweets("456", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.match(seen[0], /community\/tweets/);
+  assert.match(seen[0], /community_id=123/);
+  assert.match(seen[1], /list\/tweets_timeline/);
+  assert.match(seen[1], /listId=456/);
+});
+
+test("fetchSpaceDetail unwraps the data envelope and errors when empty", async () => {
+  await assert.rejects(
+    () => fetchSpaceDetail("", "k", async () => jsonResponse({ data: {} }), { sleep: noSleep }),
+    /needs a spaceId/,
+  );
+  // Live responses nest the object under `detail`.
+  const fetcher: FetchLike = async () => jsonResponse({ detail: { id: "sp1", title: "Live chat", state: "Live" } });
+  const space = await fetchSpaceDetail("sp1", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  assert.equal(space.id, "sp1");
+  assert.equal(space.data.title, "Live chat");
+  await assert.rejects(
+    () => fetchSpaceDetail("sp1", "k", async () => jsonResponse({ detail: null }), { sleep: noSleep }),
+    /no space detail/,
+  );
+  await assert.rejects(
+    () =>
+      fetchSpaceDetail("sp1", "k", async () => jsonResponse({ detail: "Space not found or API error" }), {
+        sleep: noSleep,
+      }),
+    /space lookup failed: Space not found/,
+  );
 });
 
 test("fetchTrends validates woeid and count and maps the upstream trend shape", async () => {

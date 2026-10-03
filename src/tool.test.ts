@@ -869,3 +869,83 @@ test("P2 modes validate their required parameters", async () => {
     /needs `ids`/,
   );
 });
+
+test("mode=community, mode=list and mode=space dispatch to their endpoints", async () => {
+  const { pi, tool } = captureTool();
+  const seen: string[] = [];
+  const fetcher = (async (url: string | URL) => {
+    const href = String(url);
+    seen.push(href);
+    if (href.includes("spaces/detail")) {
+      return new Response(JSON.stringify({ detail: { id: "sp1", title: "Live chat", state: "Live" } }), {
+        status: 200,
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        tweets: [
+          {
+            id: "4",
+            url: "https://x.com/a/status/4",
+            text: "community post",
+            createdAt: "Mon Sep 21 10:00:00 +0000 2026",
+            author: { userName: "a" },
+          },
+        ],
+        has_next_page: false,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  await tool().execute(
+    "id",
+    { query: "what is in this community?", mode: "community", communityId: "123" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Community answer (https://x.com/a/status/4)") },
+  );
+  assert.match(seen[0], /community\/tweets/);
+
+  await tool().execute(
+    "id",
+    { query: "what is in this list?", mode: "list", listId: "456" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("List answer (https://x.com/a/status/4)") },
+  );
+  assert.match(seen[1], /list\/tweets_timeline/);
+
+  await tool().execute(
+    "id",
+    { query: "what is this space?", mode: "space", spaceId: "sp1" },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Space answer.") },
+  );
+  assert.match(seen[2], /spaces\/detail/);
+  assert.match(seen[2], /space_id=sp1/);
+});
+
+test("P3 modes validate their required id parameters", async () => {
+  const { pi, tool } = captureTool();
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "community" }, undefined, undefined, undefined),
+    /needs `communityId`/,
+  );
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "list" }, undefined, undefined, undefined),
+    /needs `listId`/,
+  );
+  await assert.rejects(
+    () => tool().execute("id", { query: "q", mode: "space" }, undefined, undefined, undefined),
+    /needs `spaceId`/,
+  );
+});

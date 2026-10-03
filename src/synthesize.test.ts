@@ -13,6 +13,7 @@ import {
   SYNTHESIS_SYSTEM_PROMPT,
   USER_SYNTHESIS_SYSTEM_PROMPT,
   synthesizeAnswer,
+  synthesizeDocument,
   synthesizeTrends,
   synthesizeUserAnswer,
   toBase64,
@@ -430,6 +431,36 @@ test("synthesizeTrends reports an empty trend set without calling the model", as
   assert.equal(calls, 0);
   assert.equal(details.synthesisCalls, 0);
   assert.match(details.text, /No trends/);
+});
+
+test("synthesizeDocument returns its citation and skips the model for an empty body", async () => {
+  const details = await synthesizeDocument({
+    query: "what is this?",
+    title: "X Space sp1",
+    body: "title: Live chat\nstate: Live",
+    citations: ["https://x.com/i/spaces/sp1"],
+    model: MODEL,
+    deps: { complete: async () => "A live chat space." },
+  });
+  assert.equal(details.text, "A live chat space.");
+  assert.deepEqual(details.citations, ["https://x.com/i/spaces/sp1"]);
+
+  let calls = 0;
+  const empty = await synthesizeDocument({
+    query: "q",
+    title: "X Space sp1",
+    body: "   ",
+    citations: [],
+    model: MODEL,
+    deps: {
+      complete: async () => {
+        calls += 1;
+        return "x";
+      },
+    },
+  });
+  assert.equal(calls, 0);
+  assert.match(empty.text, /No details/);
 });
 
 test("unmatched non-X links are not reported as fabricated citations", () => {

@@ -4,6 +4,7 @@ import type { TwitterSearchDetails } from "./types.js";
 import {
   toBase64,
   synthesizeAnswer,
+  synthesizeDocument,
   synthesizeTrends,
   synthesizeUserAnswer,
   type ImageAttachment,
@@ -11,8 +12,11 @@ import {
   type SynthesisRequest,
 } from "./synthesize.js";
 import {
+  fetchCommunityTweets,
   fetchFollowers,
   fetchFollowings,
+  fetchListTweets,
+  fetchSpaceDetail,
   fetchThread,
   fetchTrends,
   fetchTweetQuotes,
@@ -836,4 +840,95 @@ export async function runTwitterApiTweetsByIds(
     tweets: result.tweets,
     notes: [`Answered from ${result.tweets.length} post(s) fetched by id.`],
   });
+}
+
+// -------------------------------------- communities, lists, spaces (P3)
+
+export interface TwitterApiCommunityOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  communityId: string;
+  limit?: number;
+}
+
+/** Fetch a community's posts and synthesize an answer from them. */
+export async function runTwitterApiCommunity(
+  options: TwitterApiCommunityOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const result = await fetchCommunityTweets(options.communityId, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
+  const notes = [`Answered from ${result.tweets.length} post(s) in community ${options.communityId}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more community posts remained, so these results may be incomplete.`);
+  }
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: result.tweets, incomplete, notes });
+}
+
+export interface TwitterApiListOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  listId: string;
+  limit?: number;
+}
+
+/** Fetch a list's timeline and synthesize an answer from it. */
+export async function runTwitterApiList(
+  options: TwitterApiListOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const result = await fetchListTweets(options.listId, backend.apiKey, backend.fetcher, {
+    ...tweetReadOptions(options),
+    limit: options.limit,
+  });
+  const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
+  const notes = [`Answered from ${result.tweets.length} post(s) in list ${options.listId}.`];
+  if (incomplete) {
+    notes.push(`Retrieval stopped early (${incomplete}) while more list posts remained, so these results may be incomplete.`);
+  }
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: result.tweets, incomplete, notes });
+}
+
+/** Flatten a nested object into bounded `key: value` lines for synthesis. */
+function flattenObject(data: Record<string, unknown>, prefix = ""): string[] {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(data)) {
+    const label = prefix ? `${prefix}.${key}` : key;
+    if (value === null || value === undefined || value === "") continue;
+    if (Array.isArray(value)) {
+      const scalars = value.filter((item) => item === null || typeof item !== "object");
+      if (scalars.length > 0) lines.push(`${label}: ${scalars.map((item) => String(item)).join(", ")}`);
+      else if (value.length > 0) lines.push(`${label}: ${value.length} item(s)`);
+    } else if (typeof value === "object") {
+      lines.push(...flattenObject(value as Record<string, unknown>, label));
+    } else {
+      lines.push(`${label}: ${String(value)}`);
+    }
+  }
+  return lines;
+}
+
+export interface TwitterApiSpaceOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  spaceId: string;
+}
+
+/** Fetch an X Space's detail and synthesize an answer from it. */
+export async function runTwitterApiSpace(
+  options: TwitterApiSpaceOptions,
+): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const backend = resolveSynthesisBackend(options);
+  const space = await fetchSpaceDetail(options.spaceId, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const body = flattenObject(space.data).slice(0, 200).join("\n");
+  const details = await synthesizeDocument({
+    query: options.query,
+    title: `X Space ${space.id}`,
+    body,
+    citations: [`https://x.com/i/spaces/${space.id}`],
+    model: toSynthesisModel(backend.model),
+    signal: options.signal,
+    deps: { complete: backend.complete },
+  });
+  return { markdown: formatTwitterResults(details), details };
 }

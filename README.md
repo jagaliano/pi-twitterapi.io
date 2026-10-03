@@ -69,12 +69,15 @@ override — and set only the keys you need:
 | Parameter | Type | Notes |
 |---|---|---|
 | `query` | string (required) | Natural-language question. Required for every mode. |
-| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `tweets` | Defaults to `posts`. |
+| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `tweets` \| `community` \| `list` \| `space` | Defaults to `posts`. |
 | `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`; refused in any other mode. |
 | `user` | string | Handle (no `@`) for `mode=user`, `mentions`, `followers`, `followings`, `profile`. |
 | `userId` | string | Numeric user id for `mode=user`; preferred over `user` when known. |
 | `ids` | string[] | `mode=tweets`: post ids or permalinks to fetch (max 100). |
 | `pageSize` | number | `mode=followers`/`followings`: accounts per page (20–200). |
+| `communityId` | string | `mode=community`: the community id. |
+| `listId` | string | `mode=list`: the list id. |
+| `spaceId` | string | `mode=space`: the X Space id. |
 | `woeid` | number | `mode=trends` location id (1=Worldwide, 23424977=USA). |
 | `includeReplies` | boolean | `mode=user` (timeline) and `mode=quotes`. |
 | `sinceTime` / `untilTime` | number | `mode=quotes`: unix timestamps (seconds) bounding the quotes. |
@@ -105,6 +108,9 @@ than silently ignored.
 | `followings` | `/twitter/user/followings` | Who an account follows (`user`, `pageSize`, `limit`). |
 | `profile` | `/twitter/user/info` | A single account profile (`user`). |
 | `tweets` | `/twitter/tweets` | Specific posts by id (`ids`, max 100). |
+| `community` | `/twitter/community/tweets` | Posts from a community (`communityId`, `limit`). |
+| `list` | `/twitter/list/tweets_timeline` | Posts from a list (`listId`, `limit`). |
+| `space` | `/twitter/spaces/detail` | An X Space's detail (`spaceId`); cited as `https://x.com/i/spaces/<id>`. |
 
 ## Behavior and disclosures
 

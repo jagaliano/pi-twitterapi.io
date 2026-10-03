@@ -3,13 +3,16 @@ import { type ExtensionAPI, keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { readMergedPiSettings, type PiSettings } from "./settings.js";
 import {
+  runTwitterApiCommunity,
   runTwitterApiFollowers,
   runTwitterApiFollowings,
+  runTwitterApiList,
   runTwitterApiMentions,
   runTwitterApiProfile,
   runTwitterApiQuotes,
   runTwitterApiReplies,
   runTwitterApiSearch,
+  runTwitterApiSpace,
   runTwitterApiThread,
   runTwitterApiTrends,
   runTwitterApiTweetsByIds,
@@ -43,6 +46,9 @@ const MODE_PARAMS: Record<string, readonly string[]> = {
   followings: ["user", "pageSize", "limit"],
   profile: ["user"],
   tweets: ["ids"],
+  community: ["communityId", "limit"],
+  list: ["listId", "limit"],
+  space: ["spaceId"],
 };
 
 /** Modes that must be told which account to read. */
@@ -66,6 +72,9 @@ const ALL_PARAMS = [
   "replySort",
   "ids",
   "pageSize",
+  "communityId",
+  "listId",
+  "spaceId",
 ] as const;
 
 export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOptions = {}): void {
@@ -94,12 +103,15 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language question or search query. Required for every mode." }),
-      mode: Type.Optional(Type.String({ description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", or "tweets".' })),
+      mode: Type.Optional(Type.String({ description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "tweets", "community", "list", or "space".' })),
       tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes; refused in any other mode.' })),
       user: Type.Optional(Type.String({ description: "X handle (no @) for mode=user, mentions, followers, followings or profile." })),
       userId: Type.Optional(Type.String({ description: "Numeric user id for mode=user; preferred over `user` when known." })),
       ids: Type.Optional(Type.Array(Type.String(), { description: "mode=tweets: post ids or X permalinks to fetch (max 100)." })),
       pageSize: Type.Optional(Type.Number({ description: "mode=followers/followings: accounts per page (20–200)." })),
+      communityId: Type.Optional(Type.String({ description: "mode=community: the community id." })),
+      listId: Type.Optional(Type.String({ description: "mode=list: the list id." })),
+      spaceId: Type.Optional(Type.String({ description: "mode=space: the X Space id." })),
       woeid: Type.Optional(Type.Number({ description: "Yahoo Where-On-Earth id for mode=trends (1=Worldwide, 23424977=USA)." })),
       includeReplies: Type.Optional(Type.Boolean({ description: "Include replies: mode=user (timeline) and mode=quotes." })),
       sinceTime: Type.Optional(Type.Number({ description: "mode=quotes: only quotes on or after this unix timestamp (seconds)." })),
@@ -155,6 +167,15 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         const ids = supplied.ids;
         if (!Array.isArray(ids) || ids.length === 0) {
           throw new Error('twitter mode "tweets" needs `ids` (an array of post ids or permalinks).');
+        }
+      }
+      for (const [required, param] of [
+        ["communityId", "community"],
+        ["listId", "list"],
+        ["spaceId", "space"],
+      ] as const) {
+        if (mode === param && (supplied[required] === undefined || String(supplied[required]).trim() === "")) {
+          throw new Error(`twitter mode "${param}" needs \`${required}\`.`);
         }
       }
       if (mode === "trends" && !Number.isInteger(supplied.woeid)) {
@@ -288,6 +309,35 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       if (mode === "tweets") {
         const ids = (supplied.ids as unknown[]).map((value) => String(value));
         const { markdown, details } = await runTwitterApiTweetsByIds({ query: question, ids, ...base });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "community") {
+        const { markdown, details } = await runTwitterApiCommunity({
+          query: question,
+          communityId: text(supplied.communityId) as string,
+          limit: number(supplied.limit),
+          ...base,
+        });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "list") {
+        const { markdown, details } = await runTwitterApiList({
+          query: question,
+          listId: text(supplied.listId) as string,
+          limit: number(supplied.limit),
+          ...base,
+        });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "space") {
+        const { markdown, details } = await runTwitterApiSpace({
+          query: question,
+          spaceId: text(supplied.spaceId) as string,
+          ...base,
+        });
         return { content: [{ type: "text", text: markdown }], details };
       }
 
