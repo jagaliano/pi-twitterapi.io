@@ -68,7 +68,7 @@ override — and set only the keys you need:
 | `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
 | `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary). |
 | `whisperCppBinary` / `whisperModelPath` | no | Local whisper.cpp binary and GGML model (both user-installed). |
-| `maxVideoSeconds` / `maxVideoBytes` / `maxFrames` / `maxVideosPerSearch` / `videoBudgetMs` | no | Video bounds: duration guard (120), download cap (32 MiB), frames per video (8), videos per search (1), time budget (90 s). |
+| `maxVideoSeconds` / `maxVideoBytes` / `maxFrames` / `maxVideosPerSearch` / `videoBudgetMs` | no | Video bounds: duration guard (120), download cap (32 MiB), frames per video (8), videos per search (1), time budget (180 s, max 300 s). |
 
 > **Video processing is opt-in and local-tooling first.** It needs
 > `enableVideoUnderstanding: true` **and** `enableVideoProcessing: true`, plus a
@@ -82,6 +82,9 @@ override — and set only the keys you need:
 > reply that ignores that is kept whole as visual evidence: the transcript is
 > never inferred from prose (an invented transcript would be published as
 > evidence), and STT still recovers the real speech when it is configured.
+> Variants are chosen from a real `HEAD` request rather than the advertised
+> bitrate, which overstates the file by roughly 3x (a nominal 2176 kbps clip
+> measured 6.16 MB where the bitrate suggests 19.6 MB).
 > Executable paths, endpoints and credential names are read from **user
 > settings only** — project `.pi/settings.json` values for those keys are
 > ignored and disclosed. A custom `videoEndpoint` is only honoured when
@@ -98,9 +101,11 @@ override — and set only the keys you need:
 > are analysed: the video is trimmed locally when possible, and a clip that
 > **cannot** be trimmed is not uploaded whole — the native path is skipped and
 > disclosed, while frames and audio stay limited to that window. Worst case a
-> single video call can take roughly **six minutes** (retrieval pacing + 60 s
-> media phase + up to 120 s video phase + synthesis), so expect a long tool call
-> on a media-heavy query.
+> single video call can take several minutes (retrieval pacing + 60 s media phase
+> + up to `videoBudgetMs` video phase + synthesis), and the budget defaults to
+> 180 s and caps at 300 s. Provider video analysis is the slow part and its
+> latency varies: measured live, one call over a 65 s clip took 33 s once and
+> ~71 s another time, so expect a long tool call on a media-heavy query.
 
 > **Important:** the extension needs a pi version whose `ModelRegistry.complete`
 > exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on

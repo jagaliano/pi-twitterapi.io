@@ -48,6 +48,10 @@ export interface VideoDeps {
   signal?: AbortSignal;
   /** Override the Gemini inline threshold (tests). */
   inlineRawBytes?: number;
+  /** Override the per-probe HEAD timeout (tests). */
+  probeTimeoutMs?: number;
+  /** Override the whole probe-sweep budget (tests). */
+  probeBudgetMs?: number;
 }
 
 export type VideoMethod =
@@ -83,6 +87,10 @@ export interface ProcessVideoInput {
   modelSupportsImage: boolean;
 }
 
+/** HEAD probes are cheap (~0.1 s), but one hanging request must not eat the phase. */
+const PROBE_TIMEOUT_MS = 5_000;
+/** Total time the probe sweep may take before we fall back to the estimate. */
+const PROBE_BUDGET_MS = 10_000;
 const MEDIA_TIMEOUT_MS = 20_000;
 const CHILD_MAX_BUFFER = 8 * 1024 * 1024;
 /** Raw base64-in-request threshold for Gemini inline data (F5). */
@@ -211,6 +219,70 @@ export function orderVariants(media: TweetMedia, options: VariantOrderOptions): 
     const gb = group(b);
     if (ga !== gb) return ga - gb;
     return ga === 2 ? asc(a, b) : desc(a, b);
+  });
+}
+
+/**
+ * Measured size of a variant, from a HEAD request.
+ *
+ * Twitter's nominal `bitrate` is a target, not an average, and it overstates the
+ * real file by ~3x: measured live, the 2176 kbps variant of a 65 s clip is
+ * 6.16 MB where `estimateVariantBytes` predicts 19.63 MB, and the 832 kbps one is
+ * 2.29 MB where it predicts 7.51 MB. Ranking on the estimate alone therefore
+ * downloads a needlessly low quality and misjudges the caps. Returns undefined
+ * when the host does not answer HEAD, so callers keep the estimate as fallback.
+ */
+export async function probeVariantBytes(
+  url: string,
+  deps: VideoDeps,
+  deadline: number,
+  now: () => number,
+): Promise<number | undefined> {
+  if (!isAllowedMediaUrl(url)) return undefined;
+  try {
+    const response = await deps.fetcher(url, {
+      method: "HEAD",
+      signal: opSignal(deps, deadline, now),
+      redirect: "error",
+    });
+    if (!response.ok) return undefined;
+    const declared = Number(response.headers.get("content-length") ?? Number.NaN);
+    return Number.isFinite(declared) && declared > 0 ? declared : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Re-rank candidates using measured sizes where they are known, keeping
+ * `orderVariants` order for the rest. Unknown sizes sit after everything known to
+ * fit and before everything known to be over the cap, because they are still
+ * worth one attempt and `downloadVideo` re-checks the declared length anyway.
+ */
+export function rankByMeasuredSize(
+  candidates: { url: string; bitrate?: number }[],
+  measured: ReadonlyMap<string, number>,
+  options: { maxBytes: number; inlineBytes?: number },
+): { url: string; bitrate?: number }[] {
+  const inlineCap = options.inlineBytes === undefined ? undefined : Math.min(options.inlineBytes, options.maxBytes);
+  const group = (v: { url: string }): number => {
+    const bytes = measured.get(v.url);
+    if (bytes === undefined) return 2;
+    if (bytes > options.maxBytes) return 3;
+    return inlineCap !== undefined && bytes <= inlineCap ? 0 : 1;
+  };
+  const position = new Map(candidates.map((v, i) => [v.url, i]));
+  const desc = (a: { bitrate?: number }, b: { bitrate?: number }) => (b.bitrate ?? -1) - (a.bitrate ?? -1);
+  const asc = (a: { bitrate?: number }, b: { bitrate?: number }) => (a.bitrate ?? -1) - (b.bitrate ?? -1);
+  return [...candidates].sort((a, b) => {
+    const ga = group(a);
+    const gb = group(b);
+    if (ga !== gb) return ga - gb;
+    // Best quality first within a fitting group: a variant the estimate thought
+    // was over the inline cap, but which actually fits, now outranks one that only
+    // fitted by estimate.
+    if (ga === 2) return (position.get(a.url) ?? 0) - (position.get(b.url) ?? 0);
+    return ga === 3 ? asc(a, b) : desc(a, b);
   });
 }
 
@@ -719,6 +791,23 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     maxBytes: config.maxVideoBytes,
     inlineBytes: inlinePreferred,
   });
+  // Measure before choosing: the bitrate estimate overstates real bytes by ~3x,
+  // so it picks a needlessly low quality and can misjudge the caps (P1-5). Each
+  // probe is bounded on its own as well as by the phase, and the sweep as a
+  // whole is bounded, so a slow host cannot spend the video budget on HEADs.
+  const probeTimeout = deps.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+  const probeBudget = deps.probeBudgetMs ?? PROBE_BUDGET_MS;
+  const probeUntil = Math.min(deadline, now() + probeBudget);
+  const measured = new Map<string, number>();
+  for (const variant of candidates) {
+    if (deps.signal?.aborted || remaining(deadline, now) <= 1 || now() >= probeUntil) break;
+    const bytes = await probeVariantBytes(variant.url, deps, Math.min(deadline, now() + probeTimeout), now);
+    if (bytes !== undefined) measured.set(variant.url, bytes);
+  }
+  const ordered = rankByMeasuredSize(candidates, measured, {
+    maxBytes: config.maxVideoBytes,
+    inlineBytes: inlinePreferred,
+  });
 
   const dir = await mktemp();
   const localFile = join(dir, "video.mp4");
@@ -726,7 +815,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     // Try variants from preferred/largest to smallest until one downloads within
     // the cap and deadline (P2-6).
     let downloaded = false;
-    for (const variant of candidates) {
+    for (const variant of ordered) {
       if (deps.signal?.aborted || remaining(deadline, now) <= 1) break;
       if (await downloadVideo(variant.url, localFile, config.maxVideoBytes, deps, deadline)) {
         downloaded = true;

@@ -26,9 +26,15 @@ export const DEFAULT_MAX_VIDEO_BYTES = 32 * 1024 * 1024;
 const MAX_VIDEO_BYTES_CEILING = 64 * 1024 * 1024;
 export const DEFAULT_MAX_FRAMES = 8;
 export const DEFAULT_MAX_VIDEOS_PER_SEARCH = 1;
-export const DEFAULT_VIDEO_BUDGET_MS = 90_000;
-/** Effective ceiling for the video phase (F8); larger configured values are clamped. */
-export const MAX_VIDEO_BUDGET_MS = 120_000;
+export const DEFAULT_VIDEO_BUDGET_MS = 180_000;
+/**
+ * Effective ceiling for the video phase (F8); larger configured values are clamped.
+ *
+ * Measured live: one `generateContent` over a 65 s clip took 32.7 s through the
+ * Files path and ~71 s inline, varying run to run. The old 120 s ceiling aborted
+ * long videos before the provider answered, so they fell back to the poster.
+ */
+export const MAX_VIDEO_BUDGET_MS = 300_000;
 
 /**
  * Config keys that can execute code, choose an endpoint, or name a credential.

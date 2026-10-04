@@ -8,8 +8,11 @@ import { loadTwitterConfig } from "./config.js";
 import {
   createProcessVideo,
   estimateVariantBytes,
+  orderVariants,
   parseGeminiResponse,
+  probeVariantBytes,
   processVideo,
+  rankByMeasuredSize,
   selectVariant,
   type ExecFn,
   type VideoDeps,
@@ -54,7 +57,7 @@ test("video config defaults and clamps", () => {
   assert.equal(defaults.sttLanguage, "auto");
   assert.equal(defaults.maxFrames, 8);
   assert.equal(defaults.maxVideosPerSearch, 1);
-  assert.equal(defaults.videoBudgetMs, 90_000);
+  assert.equal(defaults.videoBudgetMs, 180_000);
 
   const clamped = loadTwitterConfig({
     twitter: { maxVideoSeconds: 9_999, maxFrames: 99, maxVideosPerSearch: 99, videoBudgetMs: 10_000_000 },
@@ -62,7 +65,7 @@ test("video config defaults and clamps", () => {
   assert.equal(clamped.maxVideoSeconds, 120, "out-of-range duration falls back to the default");
   assert.equal(clamped.maxFrames, 8, "out-of-range frame cap falls back to the default");
   assert.equal(clamped.maxVideosPerSearch, 1);
-  assert.equal(clamped.videoBudgetMs, 120_000, "budget is clamped to the effective max");
+  assert.equal(clamped.videoBudgetMs, 300_000, "budget is clamped to the effective max");
 });
 
 // -------------------------------------------------------------- variant logic
@@ -94,6 +97,147 @@ test("selectVariant picks the highest bitrate that fits, never blindly the large
 test("selectVariant falls back to the smallest variant when size is unknown", () => {
   const media: TweetMedia = { type: "video", videoVariantsDetailed: [{ url: "a" }, { url: "b" }] };
   assert.equal(selectVariant(media, { maxBytes: 1_000 })?.url, "a");
+});
+
+test("rankByMeasuredSize upgrades a variant the bitrate estimate wrongly excludes", () => {
+  // The estimate puts `high` (8 Mbps x 10 s = 11 MB) over a 2 MB inline cap, so
+  // the estimate order is mid, low, high. Measured, it is only 1 MB and fits.
+  const media: TweetMedia = {
+    type: "video",
+    durationMillis: 10_000,
+    videoVariantsDetailed: [
+      { url: "low", bitrate: 200_000 },
+      { url: "mid", bitrate: 1_000_000 },
+      { url: "high", bitrate: 8_000_000 },
+    ],
+  };
+  const byEstimate = orderVariants(media, { maxBytes: 32 * 1024 * 1024, inlineBytes: 2_000_000 });
+  assert.deepEqual(byEstimate.map((v) => v.url), ["mid", "low", "high"], "estimate order");
+
+  const measured = new Map([
+    ["high", 1_000_000],
+    ["mid", 1_500_000],
+    ["low", 300_000],
+  ]);
+  const ranked = rankByMeasuredSize(byEstimate, measured, { maxBytes: 32 * 1024 * 1024, inlineBytes: 2_000_000 });
+  assert.deepEqual(ranked.map((v) => v.url), ["high", "mid", "low"], "highest quality that really fits is first");
+
+  // A variant measured over the cap is demoted behind everything unknown.
+  const withOver = rankByMeasuredSize(byEstimate, new Map([["high", 99_000_000]]), {
+    maxBytes: 32 * 1024 * 1024,
+    inlineBytes: 2_000_000,
+  });
+  assert.equal(withOver.at(-1)?.url, "high", "known-oversize goes last");
+});
+
+test("processVideo downloads the highest-quality variant that actually fits (P1-5)", async () => {
+  await withTempDir(async (dir) => {
+    const downloads: string[] = [];
+    const sizes: Record<string, number> = { high: 1_000_000, mid: 1_500_000, low: 300_000 };
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const name = url.includes("high") ? "high" : url.includes("mid") ? "mid" : "low";
+      const bytes = sizes[name];
+      if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-length": String(bytes) } });
+      }
+      downloads.push(name);
+      return new Response(new Uint8Array(bytes).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({ twitter: { maxFrames: 1, enableVideoUnderstanding: true } });
+    await processVideo({
+      postUrl: "https://x.com/a/status/30",
+      media: {
+        type: "video",
+        url: "https://pbs.twimg.com/poster.jpg",
+        durationMillis: 10_000,
+        videoVariantsDetailed: [
+          { url: "https://video.twimg.com/low.mp4", bitrate: 200_000 },
+          { url: "https://video.twimg.com/mid.mp4", bitrate: 1_000_000 },
+          { url: "https://video.twimg.com/high.mp4", bitrate: 8_000_000 },
+        ],
+      },
+      config,
+      deps: {
+        fetcher,
+        env: {},
+        exec: fakeExec().exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+        // Inline cap 2 MB: only `high` (1 MB) and `mid` (1.5 MB) fit it.
+        inlineRawBytes: 2_000_000,
+      },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(downloads[0], "high", `first download was ${downloads[0]}`);
+  });
+});
+
+test("a hanging HEAD probe cannot spend the video budget", async () => {
+  await withTempDir(async (dir) => {
+    const downloads: string[] = [];
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
+        // Never answers; only the probe timeout can end it.
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("probe aborted")));
+        });
+      }
+      downloads.push(url.includes("high") ? "high" : "low");
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({ twitter: { maxFrames: 1 } });
+    const started = Date.now();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/31",
+      media: {
+        type: "video",
+        url: "https://pbs.twimg.com/poster.jpg",
+        durationMillis: 10_000,
+        videoVariantsDetailed: [
+          { url: "https://video.twimg.com/low.mp4", bitrate: 200_000 },
+          { url: "https://video.twimg.com/high.mp4", bitrate: 8_000_000 },
+        ],
+      },
+      config,
+      deps: {
+        fetcher,
+        env: {},
+        exec: fakeExec().exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => Date.now(),
+        probeTimeoutMs: 60,
+      },
+      // Plenty of phase budget: the probes must not be able to consume it.
+      deadline: Date.now() + 30_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(downloads.length > 0, "a variant was still downloaded after the probes timed out");
+    assert.ok(Date.now() - started < 5_000, "the probe sweep was bounded");
+    assert.equal(result.method, "frames-only");
+  });
+});
+
+test("probeVariantBytes reads the real size and refuses disallowed hosts", async () => {
+  const seen: string[] = [];
+  const fetcher = (async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    seen.push(`${(init?.method ?? "GET").toUpperCase()} ${url}`);
+    return new Response(null, { status: url.includes("nope") ? 403 : 200, headers: { "content-length": "12345" } });
+  }) as unknown as typeof fetch;
+  const deps = { fetcher, env: {} } as VideoDeps;
+  assert.equal(await probeVariantBytes("https://video.twimg.com/a.mp4", deps, 60_000, () => 0), 12_345);
+  // A non-allowlisted host is never even requested.
+  assert.equal(await probeVariantBytes("https://evil.example/a.mp4", deps, 60_000, () => 0), undefined);
+  assert.ok(!seen.some((s) => s.includes("evil.example")), "no request to the other host");
+  // A rejected HEAD degrades to the estimate rather than failing the run.
+  assert.equal(await probeVariantBytes("https://video.twimg.com/nope.mp4", deps, 60_000, () => 0), undefined);
 });
 
 // ---------------------------------------------------------------- processVideo

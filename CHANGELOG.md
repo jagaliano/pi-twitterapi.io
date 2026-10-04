@@ -20,7 +20,7 @@ represented by its poster frame.
   (`sttEndpoint`, `sttModel`, `sttApiKeyEnv`, `sttLanguage`) or local whisper.cpp
   (`whisperCppBinary`, `whisperModelPath`).
 - Bounds: `maxVideoSeconds` (120), `maxVideoBytes` (32 MiB), `maxFrames` (8),
-  `maxVideosPerSearch` (1), `videoBudgetMs` (90 s).
+  `maxVideosPerSearch` (1), `videoBudgetMs` (180 s, max 300 s).
 - The method actually used is disclosed in the answer: `gemini-native`,
   `frames+stt`, `stt-only`, `frames-only` or `transcript-only`.
 
@@ -47,7 +47,18 @@ represented by its poster frame.
 - Gemini Files uploads are deleted on a best-effort basis, including when
   generation failed or was cancelled; a file that could not be deleted is
   disclosed as possibly retained (Google keeps undeleted uploads for ~48 hours).
-- Worst case a single video call can take roughly six minutes.
+- Worst case a single video call can take several minutes.
+
+### Fixed
+
+- Video variants are now selected from a real `HEAD` request instead of the
+  advertised bitrate. That bitrate is a target rather than an average and
+  overstates the file by roughly 3x, so the old estimate picked a needlessly low
+  resolution (640x360 where 1280x720 fitted) and could misjudge both caps.
+- The video-phase budget defaults to 180 s and is capped at 300 s, up from 90 s
+  and 120 s. Live measurement showed one provider call over a 65 s clip taking
+  33 s to ~71 s with run-to-run variance, so the old ceiling aborted long videos
+  and silently fell back to the poster frame.
 
 ## [0.1.1] - 2026-10-03
 
