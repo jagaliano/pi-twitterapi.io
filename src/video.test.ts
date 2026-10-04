@@ -8,6 +8,7 @@ import { loadTwitterConfig } from "./config.js";
 import {
   createProcessVideo,
   estimateVariantBytes,
+  parseGeminiSections,
   processVideo,
   selectVariant,
   type ExecFn,
@@ -315,5 +316,216 @@ test("createProcessVideo binds deps and returns evidence", async () => {
     assert.equal(evidence.postUrl, "https://x.com/a/status/5");
     assert.equal(evidence.frames.length, 2);
   });
+});
+
+// ---------------------------------------------------- native video / native STT
+
+test("parseGeminiSections splits VISUAL and TRANSCRIPT", () => {
+  assert.deepEqual(parseGeminiSections("VISUAL: a dog\nTRANSCRIPT: woof"), { visual: "a dog", transcript: "woof" });
+  assert.deepEqual(parseGeminiSections("just a description"), { visual: "just a description" });
+  assert.deepEqual(parseGeminiSections("   "), {});
+});
+
+/** Serves the MP4, then the Gemini inline or Files lifecycle. */
+function geminiFetcher(options: { uploadUrl?: boolean; deleteOk?: boolean } = {}) {
+  const calls: { url: string; method: string }[] = [];
+  const fetcher = (async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    calls.push({ url, method });
+    if (url.includes("/upload/v1beta/files")) {
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: options.uploadUrl === false ? {} : { "x-goog-upload-url": "https://upload.example/session" },
+      });
+    }
+    if (url.includes("upload.example/session")) {
+      return new Response(JSON.stringify({ file: { name: "files/abc", uri: "files/abc" } }), { status: 200 });
+    }
+    if (url.includes("/v1beta/files/abc") && method === "DELETE") {
+      return new Response(null, { status: options.deleteOk === false ? 500 : 200 });
+    }
+    if (url.includes("/v1beta/files/abc")) {
+      return new Response(JSON.stringify({ state: "ACTIVE" }), { status: 200 });
+    }
+    if (url.includes(":generateContent")) {
+      const text = "VISUAL: a person speaks\nTRANSCRIPT: hello world";
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+    }
+    return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+  }) as unknown as typeof fetch;
+  return { fetcher, calls };
+}
+
+function nativeDeps(fetcher: typeof fetch, dir: string, inlineRawBytes?: number): VideoDeps {
+  return {
+    fetcher,
+    env: { GOOGLE_API_KEY: "k" },
+    exec: fakeExec().exec,
+    checkBinary: async () => true,
+    mktemp: async () => dir,
+    rmTemp: async () => {},
+    now: () => 0,
+    inlineRawBytes,
+  };
+}
+
+const GEMINI_CONFIG = loadTwitterConfig({
+  twitter: { videoEndpointType: "gemini-files", videoModel: "gemini-2.5-flash", videoApiKeyEnv: "GOOGLE_API_KEY" },
+});
+
+test("processVideo uses Gemini inline data and maps sections to evidence", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/6",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.method, "gemini-native");
+    assert.equal(result.visualNotes, "a person speaks");
+    assert.equal(result.transcript, "hello world");
+    assert.ok(calls.some((c) => c.url.includes(":generateContent")));
+    assert.ok(!calls.some((c) => c.url.includes("/upload/")), "inline path did not upload");
+  });
+});
+
+test("processVideo uses the Files lifecycle and deletes the upload", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/7",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      // Force the Files path with a 1-byte inline threshold.
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.method, "gemini-native");
+    assert.ok(calls.some((c) => c.url.includes("/upload/v1beta/files")));
+    assert.ok(calls.some((c) => c.method === "DELETE" && c.url.includes("/v1beta/files/abc")), "upload deleted");
+  });
+});
+
+test("processVideo discloses a failed Gemini delete", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = geminiFetcher({ deleteOk: false });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/8",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(result.notes.some((note) => /could not be deleted/.test(note)));
+  });
+});
+
+test("processVideo runs local whisper.cpp and reads the JSON output file", async () => {
+  await withTempDir(async (dir) => {
+    const modelPath = join(dir, "ggml.bin");
+    await writeFile(modelPath, "model");
+    const whisperExec: ExecFn = async (_file, args) => {
+      const output = args[args.length - 1];
+      if (args.includes("-oj")) {
+        const ofIndex = args.indexOf("-of");
+        await writeFile(`${args[ofIndex + 1]}.json`, JSON.stringify({ text: "whispered words" }));
+        return { stdout: "", stderr: "" };
+      }
+      if (args.includes("-i") && !args.includes("-y")) {
+        const error = new Error("probe") as Error & { stderr?: string };
+        error.stderr = "Duration: 00:00:05.00";
+        throw error;
+      }
+      if (!output.includes("frame-")) await writeFile(output, new Uint8Array([1]));
+      return { stdout: "", stderr: "" };
+    };
+    const { fetcher } = videoFetcher();
+    const config = loadTwitterConfig({
+      twitter: { whisperCppBinary: "/usr/bin/whisper-cli", whisperModelPath: modelPath },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/9",
+      media: videoMedia(),
+      config,
+      deps: { fetcher, env: {}, exec: whisperExec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(result.transcript, "whispered words");
+    assert.equal(result.method, "transcript-only");
+    assert.ok(result.notes.some((note) => /local whisper.cpp/.test(note)));
+  });
+});
+
+test("processVideo returns early when the caller signal is already aborted", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = videoFetcher();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/10",
+      media: videoMedia(),
+      config: loadTwitterConfig({ twitter: {} }),
+      deps: { fetcher, env: {}, signal: controller.signal, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.frames.length, 0);
+    assert.ok(result.notes.some((note) => /cancelled/.test(note)));
+  });
+});
+
+test("processVideo trims an over-limit video on the local file and says so", async () => {
+  await withTempDir(async (dir) => {
+    const invocations: string[][] = [];
+    const exec: ExecFn = async (_file, args) => {
+      invocations.push(args);
+      const output = args[args.length - 1];
+      if (args.includes("-i") && !args.includes("-y")) {
+        const error = new Error("probe") as Error & { stderr?: string };
+        error.stderr = "Duration: 00:10:00.00";
+        throw error;
+      }
+      if (output.includes("frame-")) {
+        await writeFile(join(output.replace("%03d", "001")), new Uint8Array([1]));
+      } else if (output.endsWith(".mp4") || output.endsWith(".mp3") || output.endsWith(".wav")) {
+        await writeFile(output, new Uint8Array([1]));
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const { fetcher } = videoFetcher();
+    const config = loadTwitterConfig({ twitter: { maxVideoSeconds: 120, maxFrames: 2 } });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/11",
+      media: videoMedia({ durationMillis: 600_000 }),
+      config,
+      deps: { fetcher, env: {}, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 120_000,
+      modelSupportsImage: true,
+    });
+    const clip = invocations.find((args) => args.includes("-c") && args.includes("copy"));
+    assert.ok(clip, "clip invoked");
+    assert.ok(clip!.includes("-t") && clip![clip!.indexOf("-t") + 1] === "120");
+    assert.ok(result.notes.some((note) => /only the first 120s/.test(note)));
+  });
+});
+
+test("video processing requires both switches for all four combinations", () => {
+  const combos: [boolean, boolean, boolean][] = [
+    [false, false, false],
+    [true, false, false],
+    [false, true, false],
+    [true, true, true],
+  ];
+  for (const [video, understanding, expected] of combos) {
+    const config = loadTwitterConfig({ twitter: { enableVideoProcessing: video, enableVideoUnderstanding: understanding } });
+    assert.equal(config.enableVideoProcessing, expected, `video=${video} understanding=${understanding}`);
+  }
 });
 

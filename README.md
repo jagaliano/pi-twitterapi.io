@@ -79,7 +79,17 @@ override — and set only the keys you need:
 > all). Sending video/audio to a third-party endpoint is disclosed in the answer.
 > Executable paths, endpoints and credential names are read from **user
 > settings only** — project `.pi/settings.json` values for those keys are
-> ignored and disclosed.
+> ignored and disclosed. A custom `videoEndpoint` is only honoured when
+> `videoApiKeyEnv` is set explicitly (and must be `https://`), so the default
+> key is never sent to another host.
+>
+> **Retention and duration.** When native video uses the Gemini Files API the
+> uploaded file is deleted after the call; if deletion fails the answer says so.
+> Only the first `maxVideoSeconds` (default 120 s) are analysed — the video is
+> trimmed locally when possible, otherwise the limit is disclosed as not applied.
+> Worst case a video call can take a few minutes (retrieval pacing + 60 s image
+> phase + up to 120 s video phase + synthesis), so expect a long tool call on a
+> media-heavy query.
 
 > **Important:** the extension needs a pi version whose `ModelRegistry.complete`
 > exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on

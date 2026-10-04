@@ -327,11 +327,48 @@ export async function collectMedia(
   const attemptCap = Math.max(1, config.maxMediaPerSearch) * 3;
   const budgetMs = deps.mediaBudgetMs ?? MEDIA_PHASE_BUDGET_MS;
   const deadline = clock() + budgetMs;
+  // One budget for the whole video phase, not per video (P1-3).
+  const videoPhaseDeadline = clock() + config.videoBudgetMs;
   let attempts = 0;
+  // Photos and posters share `maxMediaPerSearch`; frames are capped separately
+  // by `maxFrames` and do not consume this budget (P2-7).
+  let attachments = 0;
   let skippedForCap = 0;
   let skippedForBudget = 0;
   let failed = 0;
   let videoPosters = 0;
+
+  const hasVideo = withMedia.some((t) => (t.media ?? []).some(isVideoMedia));
+  const hasPhoto = withMedia.some((t) => (t.media ?? []).some((m) => !isVideoMedia(m)));
+  if (!model.supportsImage && ((hasPhoto && config.enableImageUnderstanding) || (hasVideo && !processVideo))) {
+    notes.push(
+      `Media understanding was requested but ${model.provider}/${model.id} does not accept image input, ` +
+        `so ${withMedia.length} post(s) with media were analysed from text only.`,
+    );
+  }
+
+  // Fetch a poster frame within the shared attachment budget.
+  const fetchPoster = async (postUrl: string, media: TweetMedia): Promise<void> => {
+    if (!config.enableVideoUnderstanding || !model.supportsImage || !fetchMedia || !media.url) return;
+    if (attachments >= config.maxMediaPerSearch) {
+      skippedForCap += 1;
+      return;
+    }
+    if (attempts >= attemptCap || clock() >= deadline) {
+      skippedForBudget += 1;
+      return;
+    }
+    attempts += 1;
+    const attachment = await fetchMedia(media.url, Math.max(1, deadline - clock()));
+    if (!attachment) {
+      failed += 1;
+      return;
+    }
+    images.push({ data: attachment.data, mimeType: attachment.mimeType || extensionMime(media.url) });
+    labels.push(`${postUrl} — ${media.type ?? "media"}`);
+    attachments += 1;
+    videoPosters += 1;
+  };
 
   // Photos first, so a slow video cannot starve them (M4).
   if (model.supportsImage && fetchMedia && config.enableImageUnderstanding) {
@@ -339,7 +376,7 @@ export async function collectMedia(
       for (const media of tweet.media ?? []) {
         if (isVideoMedia(media)) continue;
         if (!media.url) continue;
-        if (images.length >= config.maxMediaPerSearch) {
+        if (attachments >= config.maxMediaPerSearch) {
           skippedForCap += 1;
           continue;
         }
@@ -355,73 +392,58 @@ export async function collectMedia(
         }
         images.push({ data: attachment.data, mimeType: attachment.mimeType || extensionMime(media.url) });
         labels.push(`${tweet.url ?? "(post without a permalink)"} — ${media.type ?? "media"}`);
+        attachments += 1;
       }
     }
   }
 
   const videoPosts = withMedia.filter((t) => (t.media ?? []).some(isVideoMedia));
-  if (!model.supportsImage && videoPosts.length > 0 && !processVideo) {
-    notes.push(
-      `Media understanding was requested but ${model.provider}/${model.id} does not accept image input, ` +
-        `so ${withMedia.length} post(s) with media were analysed from text only.`,
-    );
-  }
-
   let videosStarted = 0;
   for (const tweet of videoPosts) {
     const media = (tweet.media ?? []).find(isVideoMedia);
     if (!media) continue;
     const postUrl = tweet.url ?? "(post without a permalink)";
 
-    if (processVideo && videosStarted < config.maxVideosPerSearch) {
+    if (processVideo && videosStarted < config.maxVideosPerSearch && clock() < videoPhaseDeadline) {
       videosStarted += 1;
-      const videoDeadline = clock() + config.videoBudgetMs;
       try {
         const result = await processVideo({
           postUrl,
           media,
           config,
-          deadline: videoDeadline,
+          deadline: videoPhaseDeadline,
           modelSupportsImage: model.supportsImage,
         });
         for (const frame of result.frames) {
           images.push({ data: frame.data, mimeType: frame.mimeType });
           labels.push(frame.label);
         }
-        evidence.push({
-          postUrl,
-          method: result.method,
-          transcript: result.transcript ? truncate(result.transcript, MAX_TRANSCRIPT_CHARS) : undefined,
-          visualNotes: result.visualNotes ? truncate(result.visualNotes, MAX_VISUAL_NOTES_CHARS) : undefined,
-        });
         for (const note of result.notes) notes.push(note);
-        notes.push(`Video for ${postUrl} processed via ${result.method}.`);
+        const gotEvidence =
+          result.frames.length > 0 || Boolean(result.transcript) || Boolean(result.visualNotes);
+        if (gotEvidence) {
+          evidence.push({
+            postUrl,
+            method: result.method,
+            transcript: result.transcript ? truncate(result.transcript, MAX_TRANSCRIPT_CHARS) : undefined,
+            visualNotes: result.visualNotes ? truncate(result.visualNotes, MAX_VISUAL_NOTES_CHARS) : undefined,
+          });
+          notes.push(`Video for ${postUrl} processed via ${result.method}.`);
+        } else {
+          // No evidence at all: fall back to the poster rather than producing
+          // nothing (P1-5).
+          notes.push(`Video processing produced no evidence for ${postUrl}; falling back to its poster frame.`);
+          await fetchPoster(postUrl, media);
+        }
       } catch (error) {
         notes.push(`Video processing failed for ${postUrl}: ${(error as Error).message}`);
+        await fetchPoster(postUrl, media);
       }
       continue;
     }
 
-    // Poster-frame fallback (video processing is off, or the per-search cap was hit).
-    if (config.enableVideoUnderstanding && model.supportsImage && fetchMedia && media.url) {
-      if (images.length >= config.maxMediaPerSearch) {
-        skippedForCap += 1;
-        continue;
-      }
-      if (attempts >= attemptCap || clock() >= deadline) {
-        skippedForBudget += 1;
-        continue;
-      }
-      attempts += 1;
-      const attachment = await fetchMedia(media.url, Math.max(1, deadline - clock()));
-      if (!attachment) {
-        failed += 1;
-        continue;
-      }
-      images.push({ data: attachment.data, mimeType: attachment.mimeType || extensionMime(media.url) });
-      labels.push(`${postUrl} — ${media.type ?? "media"}`);
-      videoPosters += 1;
-    }
+    // Poster-frame fallback (video processing is off, over budget, or past the cap).
+    await fetchPoster(postUrl, media);
   }
 
   if (videoPosters > 0) {

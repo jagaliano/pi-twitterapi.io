@@ -187,15 +187,32 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
       ? (endpointTypeRaw as VideoEndpointType)
       : DEFAULT_VIDEO_ENDPOINT_TYPE;
 
+  // F3/P0-1: a custom endpoint may only be used when the user ALSO names the
+  // credential env var explicitly, and only over HTTPS. Otherwise the default
+  // key (e.g. GOOGLE_API_KEY) could be sent to an arbitrary host.
+  const explicitKeyEnv = text(user.videoApiKeyEnv);
+  let videoEndpoint = text(user.videoEndpoint);
+  if (videoEndpoint && !explicitKeyEnv) {
+    configNotes.push(
+      "twitter.videoEndpoint was ignored: set twitter.videoApiKeyEnv explicitly with a custom endpoint, so the " +
+        "default key is never sent to another host.",
+    );
+    videoEndpoint = undefined;
+  }
+  if (videoEndpoint && !/^https:\/\//i.test(videoEndpoint)) {
+    configNotes.push("twitter.videoEndpoint was ignored: it must be an https:// URL.");
+    videoEndpoint = undefined;
+  }
+
   return {
     synthesisModel,
     enableImageUnderstanding: config.enableImageUnderstanding === true,
     enableVideoUnderstanding,
     enableVideoProcessing: videoRequested && enableVideoUnderstanding,
     videoEndpointType,
-    videoEndpoint: text(user.videoEndpoint),
+    videoEndpoint,
     videoModel: text(user.videoModel),
-    videoApiKeyEnv: text(user.videoApiKeyEnv) ?? DEFAULT_VIDEO_API_KEY_ENV,
+    videoApiKeyEnv: explicitKeyEnv ?? DEFAULT_VIDEO_API_KEY_ENV,
     sttEndpoint: text(user.sttEndpoint),
     sttModel: text(user.sttModel),
     sttApiKeyEnv: text(user.sttApiKeyEnv) ?? DEFAULT_STT_API_KEY_ENV,

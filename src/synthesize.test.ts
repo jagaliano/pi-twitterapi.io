@@ -542,7 +542,7 @@ const VIDEO_CONFIG = loadTwitterConfig({
 test("video evidence cannot smuggle a citation into Sources (M3)", async () => {
   const result = await synthesizeAnswer({
     query: "what happens?",
-    tweets: [tweet()],
+    tweets: [tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] })],
     config: VIDEO_CONFIG,
     model: VISION_MODEL,
     deps: {
@@ -561,6 +561,31 @@ test("video evidence cannot smuggle a citation into Sources (M3)", async () => {
   assert.ok(result.citations.includes("https://x.com/alice/status/111"));
   assert.ok(!result.citations.includes("https://x.com/evil/status/1"), "injected link is not published");
   assert.ok(result.notes?.some((note) => /did not match any retrieved post/.test(note)));
+});
+
+test("collectMedia falls back to the poster when processing yields no evidence (P1-5)", async () => {
+  const mediaTweet = tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] });
+  const result = await collectMedia([mediaTweet], VIDEO_CONFIG, VISION_MODEL, {
+    complete: async () => "",
+    fetchMedia: async (): Promise<ImageAttachment | undefined> => ({ data: "POSTER", mimeType: "image/jpeg" }),
+    processVideo: async () => ({ postUrl: mediaTweet.url!, method: "frames-only", frames: [], notes: [] }),
+  });
+  assert.ok(result.images.some((image) => image.data === "POSTER"), "poster used when nothing else was produced");
+  assert.ok(result.notes.some((note) => /produced no evidence/.test(note)));
+  assert.ok(!result.notes.some((note) => /processed via/.test(note)), "no false success note");
+});
+
+test("collectMedia falls back to the poster when processing throws (P1-5)", async () => {
+  const mediaTweet = tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] });
+  const result = await collectMedia([mediaTweet], VIDEO_CONFIG, VISION_MODEL, {
+    complete: async () => "",
+    fetchMedia: async (): Promise<ImageAttachment | undefined> => ({ data: "POSTER", mimeType: "image/jpeg" }),
+    processVideo: async () => {
+      throw new Error("boom");
+    },
+  });
+  assert.ok(result.images.some((image) => image.data === "POSTER"));
+  assert.ok(result.notes.some((note) => /processing failed/.test(note)));
 });
 
 test("collectMedia drops the poster when video frames are available (F9)", async () => {
