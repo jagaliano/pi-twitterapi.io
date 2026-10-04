@@ -8,6 +8,7 @@ import { loadTwitterConfig } from "./config.js";
 import {
   createProcessVideo,
   estimateVariantBytes,
+  parseGeminiResponse,
   parseGeminiSections,
   processVideo,
   selectVariant,
@@ -745,6 +746,72 @@ test("the inline fallback cannot invent a transcript out of quoted prose (P2-8)"
   });
 });
 
+test("parseGeminiSections only accepts complete heading tokens (P2-8)", () => {
+  // A word that merely starts with a label is not a heading.
+  assert.deepEqual(parseGeminiSections("VISUAL: A sign.\nTranscriptomics is printed on it.\nTRANSCRIPT:"), {
+    visual: "A sign.\nTranscriptomics is printed on it.",
+  });
+  assert.deepEqual(parseGeminiSections("Transcriptomics is printed on it."), {
+    visual: "Transcriptomics is printed on it.",
+  });
+  // Body punctuation is content, not heading decoration.
+  assert.deepEqual(parseGeminiSections("TRANSCRIPT: -5 degrees"), { transcript: "-5 degrees" });
+});
+
+test("a quoted label on one line cannot become an invented transcript (P2-8)", () => {
+  const parsed = parseGeminiSections('VISUAL: A sign reads "the transcript: unavailable". TRANSCRIPT:');
+  assert.equal(parsed.transcript, undefined, "no transcript is fabricated from quoted prose");
+  assert.equal(parsed.visual, 'A sign reads "the transcript: unavailable".');
+});
+
+test("parseGeminiResponse prefers the JSON the request asks for (P2-8)", () => {
+  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":"woof"}'), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+  // An empty transcript in JSON stays empty rather than being invented.
+  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":""}'), { visual: "a dog" });
+  assert.deepEqual(parseGeminiResponse('```json\n{"visual":"a dog","transcript":""}\n```'), { visual: "a dog" });
+  // A reply that ignored the JSON request still falls back conservatively.
+  assert.deepEqual(parseGeminiResponse("VISUAL: a dog\nTRANSCRIPT: woof"), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+});
+
+test("processVideo asks for JSON and reads a JSON reply without heuristics (P2-8)", async () => {
+  await withTempDir(async (dir) => {
+    let sentBody = "";
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(":generateContent")) {
+        sentBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              { content: { parts: [{ text: '{"visual":"a person speaks","transcript":"hello world"}' }] } },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/24",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.match(sentBody, /responseMimeType/, "the request asks for structured output");
+    assert.equal(result.visualNotes, "a person speaks");
+    assert.equal(result.transcript, "hello world");
+    assert.equal(result.method, "gemini-native");
+  });
+});
+
 test("STT does not retry when the audio format itself is rejected (P2-7)", async () => {
   await withTempDir(async (dir) => {
     let transcriptionCalls = 0;
@@ -753,7 +820,7 @@ test("STT does not retry when the audio format itself is rejected (P2-7)", async
       const url = String(input);
       if (url.includes("/audio/transcriptions")) {
         transcriptionCalls += 1;
-        return new Response("Unsupported audio format", { status: 415 });
+        return new Response("Invalid request: Unsupported audio format", { status: 415 });
       }
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
