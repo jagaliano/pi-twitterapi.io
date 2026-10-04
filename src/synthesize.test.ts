@@ -712,3 +712,20 @@ test("an early poster fallback does not consume a later slow failure's reservati
   });
   assert.equal(posters, 2, "both announced poster fallbacks were fetched");
 });
+
+test("with video processing off, posters keep the unchanged media deadline (P2-3)", async () => {
+  const mediaTweet = tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] });
+  const config = loadTwitterConfig({ twitter: { enableVideoUnderstanding: true } });
+  let posters = 0;
+  const result = await collectMedia([mediaTweet], config, VISION_MODEL, {
+    complete: async () => "",
+    fetchMedia: async (): Promise<ImageAttachment | undefined> => {
+      posters += 1;
+      return { data: "POSTER", mimeType: "image/jpeg" };
+    },
+    mediaBudgetMs: 0,
+  });
+  assert.equal(posters, 0, "no reservation is made when there is no video phase to reserve for");
+  assert.equal(result.images.length, 0);
+  assert.ok(result.notes.some((note) => /were not attempted/.test(note)));
+});

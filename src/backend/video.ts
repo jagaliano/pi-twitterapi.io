@@ -369,7 +369,12 @@ export function parseGeminiSections(text: string): { visual?: string; transcript
   const trimmed = text.trim();
   if (!trimmed) return {};
   const clean = (value: string) => value.replace(/^[\s*_#>`\-]+/, "").replace(/[*_`]+\s*$/, "").trim();
-  const split = (pattern: RegExp): { visual?: string; transcript?: string } => {
+  interface Split {
+    sections: { visual?: string; transcript?: string };
+    /** Heading *kinds* recognised, which is not the same as non-empty bodies. */
+    kinds: Set<string>;
+  }
+  const split = (pattern: RegExp): Split => {
     const found: { key: "visual" | "transcript"; start: number; end: number }[] = [];
     for (const match of trimmed.matchAll(pattern)) {
       const at = match.index ?? 0;
@@ -379,26 +384,32 @@ export function parseGeminiSections(text: string): { visual?: string; transcript
         end: at + match[0].length,
       });
     }
+    const kinds = new Set(found.map((entry) => entry.key));
     // No recognisable heading: the whole reply is the visual description.
-    if (found.length === 0) return { visual: trimmed };
+    if (found.length === 0) return { sections: { visual: trimmed }, kinds };
     const sections: { visual?: string; transcript?: string } = {};
     for (let i = 0; i < found.length; i += 1) {
       const stop = i + 1 < found.length ? found[i + 1].start : trimmed.length;
       const body = clean(trimmed.slice(found[i].end, stop));
       if (body && sections[found[i].key] === undefined) sections[found[i].key] = body;
     }
-    return sections;
+    return { sections, kinds };
   };
-  const score = (sections: { visual?: string; transcript?: string }) =>
-    Number(Boolean(sections.visual)) + Number(Boolean(sections.transcript));
   // Anchored first: a heading on its own line, allowing Markdown prefixes and an
-  // optional colon.
+  // optional colon. Both headings recognised is decisive even when one body is
+  // empty — a `TRANSCRIPT:` with nothing after it is a real, silent answer, and
+  // re-splitting it inline would invent a transcript out of quoted prose.
   const anchored = split(/(?:^|\n)[ \t>*_#-]*(VISUAL|TRANSCRIPT)[ \t]*[:：]?/gi);
-  if (score(anchored) >= 2) return anchored;
-  // Otherwise allow inline separators, so a single-line
-  // `VISUAL: a dog TRANSCRIPT: woof` still classifies both parts (P2-8).
-  const inline = split(/(VISUAL|TRANSCRIPT)[ \t]*[:：]/gi);
-  return score(inline) > score(anchored) ? inline : anchored;
+  if (anchored.kinds.size >= 2) return anchored.sections;
+  // Only a genuinely single-line, explicitly headed reply may use the inline
+  // separators, so a heading-less paragraph that merely mentions a label keeps
+  // its introduction (P2-8).
+  const inlineEligible = !/\n/.test(trimmed) && /^[\s*_#>-]*(VISUAL|TRANSCRIPT)[ \t]*[:：]/i.test(trimmed);
+  if (inlineEligible) {
+    const inline = split(/(?:^|[\s>*_#-])(VISUAL|TRANSCRIPT)[ \t]*[:：]/gi);
+    if (inline.kinds.size >= 2) return inline.sections;
+  }
+  return anchored.sections;
 }
 
 interface GeminiResult {
@@ -561,6 +572,33 @@ function sttTextFromJson(json: unknown): string | undefined {
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
+/**
+ * Read at most `limit` characters of a response body, cancelling the rest. Used
+ * only to classify an error, so buffering an unbounded error page is pointless
+ * work (P2-4).
+ */
+async function readBoundedBody(response: Response, limit: number): Promise<string> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== "function") {
+    return (await response.text().catch(() => "")).slice(0, limit);
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (text.length < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    // A broken stream still leaves whatever was read usable for classification.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return text.slice(0, limit);
+}
+
 async function remoteStt(
   audioFile: string,
   config: TwitterConfig,
@@ -590,14 +628,14 @@ async function remoteStt(
         redirect: "error",
       });
     };
-    // Only a *capability* rejection (an unsupported response_format or timestamp
-    // option) justifies paying for another upload. A 400 for an invalid model, an
-    // auth failure, throttling or a server error is reported after one attempt
-    // (P2-7).
+    // Only a rejection tied specifically to the *response format* or timestamp
+    // options justifies paying for another upload: changing `response_format`
+    // cannot repair an audio/file-format problem, an invalid model, an auth
+    // failure, throttling or a server error (P2-7).
     const unsupportedFormat = async (response: Response): Promise<boolean> => {
       if (response.status !== 400 && response.status !== 415 && response.status !== 422) return false;
-      const body = (await response.text().catch(() => "")).slice(0, 2_000).toLowerCase();
-      return /(response_format|response format|verbose_json|timestamp_granularit\w*|unsupported[^.]{0,40}format|format[^.]{0,40}(not supported|unsupported|invalid))/.test(
+      const body = (await readBoundedBody(response, 2_000)).toLowerCase();
+      return /(response_format|response format|verbose_json|timestamp_granularit\w*|(response|output|request)[^.]{0,20}format)/.test(
         body,
       );
     };

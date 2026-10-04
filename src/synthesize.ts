@@ -359,7 +359,12 @@ export async function collectMedia(
       // failure cannot consume the reservation a later slow failure still needs.
       // Reading `videoPhaseDeadline` here is safe: this only runs once the video
       // loop has started (P1-3).
-      posterDeadline = Math.max(deadline, videoPhaseDeadline) + POSTER_FALLBACK_BUDGET_MS;
+      // Only real video processing justifies reserving past the media deadline,
+      // because only then can slow video work consume a poster's window. With the
+      // feature off, the disabled-path behaviour is unchanged (P2-3).
+      posterDeadline = processVideo
+        ? Math.max(deadline, videoPhaseDeadline) + POSTER_FALLBACK_BUDGET_MS
+        : deadline;
     }
     return posterDeadline;
   };

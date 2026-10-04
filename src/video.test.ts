@@ -727,6 +727,60 @@ test("parseGeminiSections tolerates reordered and Markdown headings (P2-8)", () 
   });
 });
 
+test("the inline fallback cannot invent a transcript out of quoted prose (P2-8)", () => {
+  // Both headings are recognised, so an empty transcript body is a real silence —
+  // re-splitting inline would treat the quoted label as a heading.
+  assert.deepEqual(parseGeminiSections('VISUAL: A sign reads "transcript: unavailable".\nTRANSCRIPT:'), {
+    visual: 'A sign reads "transcript: unavailable".',
+  });
+  // A heading-less paragraph that merely mentions a label keeps its introduction.
+  assert.deepEqual(
+    parseGeminiSections("The video shows a chart. The transcript: nobody speaks here."),
+    { visual: "The video shows a chart. The transcript: nobody speaks here." },
+  );
+  // Markdown-prefixed single-line still splits.
+  assert.deepEqual(parseGeminiSections("**VISUAL:** a dog **TRANSCRIPT:** woof"), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+});
+
+test("STT does not retry when the audio format itself is rejected (P2-7)", async () => {
+  await withTempDir(async (dir) => {
+    let transcriptionCalls = 0;
+    const { exec } = fakeExec();
+    const fetcher = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/audio/transcriptions")) {
+        transcriptionCalls += 1;
+        return new Response("Unsupported audio format", { status: 415 });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({
+      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/23",
+      media: videoMedia(),
+      config,
+      deps: {
+        fetcher,
+        env: { STT_API_KEY: "k" },
+        exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(transcriptionCalls, 1, "changing response_format cannot fix the audio encoding");
+    assert.ok(result.notes.some((note) => /HTTP 415/.test(note)));
+  });
+});
+
 test("native upload is skipped when the duration cannot be established (P1-1)", async () => {
   await withTempDir(async (dir) => {
     const { fetcher, calls } = geminiFetcher();
