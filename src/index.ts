@@ -127,5 +127,18 @@ export type {
   UserTweetsDetails,
 } from "./twitterapi.js";
 export type { TwitterSearchDetails } from "./types.js";
+export { createProcessVideo, estimateVariantBytes, processVideo, selectVariant } from "./backend/video.js";
+export type {
+  BoundProcessVideo,
+  ExecFn,
+  ProcessVideoInput,
+  VideoDeps,
+  VideoEvidence,
+  VideoFrame,
+  VideoMethod,
+} from "./backend/video.js";
+export { DEFAULT_VIDEO_ENDPOINT_TYPE, USER_ONLY_CONFIG_KEYS, VIDEO_ENDPOINT_TYPES } from "./config.js";
+export type { VideoEndpointType } from "./config.js";
+export type { VideoEvidenceBlock } from "./synthesize.js";
 export { readMergedPiSettings, readPiProjectSettings, readPiUserSettings } from "./settings.js";
 export type { PiSettings } from "./settings.js";

@@ -5,15 +5,21 @@ function asMedia(raw: unknown): TweetMedia | undefined {
   if (!isObject(raw)) return undefined;
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
   const variants = isObject(raw.video_info) && Array.isArray(raw.video_info.variants) ? raw.video_info.variants : [];
-  const playable = variants
+  const playableVariants = variants
     .filter((v) => isObject(v) && typeof v.url === "string" && v.content_type === "video/mp4")
-    .sort((a, b) => Number((a as Record<string, unknown>).bitrate ?? 0) - Number((b as Record<string, unknown>).bitrate ?? 0))
-    .map((v) => String((v as Record<string, unknown>).url));
+    .map((v) => {
+      const record = v as Record<string, unknown>;
+      const bitrate = typeof record.bitrate === "number" && Number.isFinite(record.bitrate) ? record.bitrate : undefined;
+      return { url: String(record.url), bitrate };
+    })
+    .sort((a, b) => (a.bitrate ?? 0) - (b.bitrate ?? 0));
+  const playable = playableVariants.map((v) => v.url);
   const duration = isObject(raw.video_info) && typeof raw.video_info.duration_millis === "number" ? raw.video_info.duration_millis : undefined;
   const media: TweetMedia = {
     type: str(raw.type),
     url: str(raw.media_url_https) ?? str(raw.media_url),
     videoVariants: playable.length > 0 ? playable : undefined,
+    videoVariantsDetailed: playableVariants.length > 0 ? playableVariants : undefined,
     durationMillis: duration,
   };
   return media.url || media.videoVariants ? media : undefined;

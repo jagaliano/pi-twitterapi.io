@@ -3,12 +3,18 @@ import { toBase64, type ImageAttachment } from "../synthesize.js";
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 const MEDIA_TIMEOUT_MS = 20_000;
 
-/** Read a body while enforcing a byte cap, so an oversized response is never fully buffered. */
-async function readCapped(response: Response, limit: number): Promise<Uint8Array | undefined> {
+/** Receives streamed body chunks; may return a promise to apply backpressure. */
+export type ChunkSink = (chunk: Uint8Array) => void | Promise<void>;
+
+/**
+ * Stream a response body into `onChunk`, enforcing a byte cap, so an oversized
+ * response is never fully buffered. Returns `false` (and cancels the body) when
+ * the cap is exceeded, `true` when the body was read to the end.
+ */
+export async function readCapped(response: Response, limit: number, onChunk: ChunkSink): Promise<boolean> {
   const body = response.body;
-  if (!body) return undefined;
+  if (!body) return false;
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
@@ -18,13 +24,25 @@ async function readCapped(response: Response, limit: number): Promise<Uint8Array
       total += value.byteLength;
       if (total > limit) {
         await reader.cancel().catch(() => undefined);
-        return undefined;
+        return false;
       }
-      chunks.push(value);
+      await onChunk(value);
     }
   } finally {
     reader.releaseLock();
   }
+  return true;
+}
+
+/** Buffer a capped body into bytes (images). Returns undefined when the cap is exceeded. */
+async function readCappedBytes(response: Response, limit: number): Promise<Uint8Array | undefined> {
+  const chunks: Uint8Array[] = [];
+  const ok = await readCapped(response, limit, (chunk) => {
+    chunks.push(chunk);
+  });
+  if (!ok) return undefined;
+  let total = 0;
+  for (const chunk of chunks) total += chunk.byteLength;
   const bytes = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {
@@ -88,7 +106,7 @@ export function createFetchMedia(fetcher: typeof fetch, callerSignal?: AbortSign
       if (!mimeType.startsWith("image/")) return undefined;
       const declared = Number(response.headers.get("content-length") ?? Number.NaN);
       if (Number.isFinite(declared) && declared > maxBytes) return undefined;
-      const bytes = await readCapped(response, maxBytes);
+      const bytes = await readCappedBytes(response, maxBytes);
       if (!bytes) return undefined;
       return { data: toBase64(bytes), mimeType };
     } catch {

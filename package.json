@@ -20,6 +20,9 @@
     "url": "https://github.com/jagaliano/pi-twitterapi.io/issues"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "files": [
     "src",
     "!src/**/*.test.ts",

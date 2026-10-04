@@ -27,6 +27,11 @@ export interface TweetMedia {
   url?: string;
   /** Playable variants, highest bitrate last (videos only). */
   videoVariants?: string[];
+  /**
+   * Playable variants with bitrate, ascending. Added alongside `videoVariants`
+   * (kept for back-compat) so video selection can weigh size = bitrate/8 × sec.
+   */
+  videoVariantsDetailed?: { url: string; bitrate?: number }[];
   durationMillis?: number;
 }
 

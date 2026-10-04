@@ -1,5 +1,6 @@
 import type { TwitterConfig } from "../config.js";
 import type { SynthesisModel } from "../synthesize.js";
+import type { ExecFn } from "./video.js";
 
 /**
  * Minimal structural view of pi's ModelRegistry, so this module stays testable
@@ -37,6 +38,8 @@ export interface BackendOptions {
   fallbackModelIds?: string[];
   /** Override the retry delay between last-model attempts (tests). */
   synthesisSleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Injected local-process runner for video processing (tests). */
+  videoExec?: ExecFn;
 }
 
 /** Resolve a `provider/model` spec, or a bare model id, against the registry. */

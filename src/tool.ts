@@ -1,7 +1,7 @@
 import { Type, type TSchema } from "typebox";
 import { type ExtensionAPI, keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { readMergedPiSettings, type PiSettings } from "./settings.js";
+import { readPiProjectSettings, readPiUserSettings, type PiSettings } from "./settings.js";
 import {
   runTwitterApiAbout,
   runTwitterApiCommunity,
@@ -28,7 +28,15 @@ import type { TwitterSearchDetails } from "./types.js";
 export interface TwitterToolOptions {
   env?: NodeJS.ProcessEnv;
   fetcher?: typeof fetch;
+  /**
+   * A single, trusted settings blob. Kept for back-compat; when set, no project
+   * settings are read and every key is treated as user-provided.
+   */
   settings?: PiSettings;
+  /** User (global) settings. Preferred over `settings`. */
+  userSettings?: PiSettings;
+  /** Project settings; executable/endpoint/credential keys are ignored and disclosed. */
+  projectSettings?: PiSettings;
 }
 
 /** Modes that locate a specific post through the shared `tweet` argument. */
@@ -120,8 +128,12 @@ const ALL_PARAMS = [
 export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOptions = {}): void {
   const env = options.env ?? process.env;
   const fetcher = options.fetcher ?? fetch;
-  const settings = options.settings ?? readMergedPiSettings();
-  const config = loadTwitterConfig(settings);
+  // A single `settings` blob is trusted (back-compat). Otherwise read user and
+  // project settings separately so project-level executable paths, endpoints and
+  // credential names can be ignored (B1/F1).
+  const settings = options.settings ?? options.userSettings ?? readPiUserSettings();
+  const projectSettings = options.settings ? undefined : (options.projectSettings ?? readPiProjectSettings());
+  const config = loadTwitterConfig(settings, { projectSettings });
 
   pi.registerTool({
     name: "twitter",

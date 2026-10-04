@@ -61,6 +61,25 @@ override — and set only the keys you need:
 | `maxPagesCeiling` | no | Hard cap that `maxPages` is clamped to (default 20). |
 | `minRequestIntervalMs` | no | Minimum spacing between upstream requests (default 5000). twitterapi.io allows 0.2 QPS on unpaid accounts; raise it if you are being throttled, lower it for a higher-QPS tier, or set it to 0 to disable pacing. |
 | `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). |
+| `enableVideoProcessing` | no | Run **real** video processing (native video and/or frames + transcript). Requires `enableVideoUnderstanding`. Off by default. |
+| `videoEndpointType` | no | Native-video wire format: `gemini-files` (default) or `openai-compatible` (unverified). |
+| `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
+| `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var (default `STT_API_KEY`). No hidden default provider. |
+| `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
+| `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary). |
+| `whisperCppBinary` / `whisperModelPath` | no | Local whisper.cpp binary and GGML model (both user-installed). |
+| `maxVideoSeconds` / `maxVideoBytes` / `maxFrames` / `maxVideosPerSearch` / `videoBudgetMs` | no | Video bounds: duration guard (120), download cap (32 MiB), frames per video (8), videos per search (1), time budget (90 s). |
+
+> **Video processing is opt-in and local-tooling first.** It needs
+> `enableVideoUnderstanding: true` **and** `enableVideoProcessing: true`, plus a
+> locally installed `ffmpeg` (for frames/audio) and optionally whisper.cpp, or a
+> configured native-video / STT endpoint. In v1 native video goes to **Gemini
+> only** (`gemini-files`); frames are sent to your pi model; `openai-compatible`
+> video is **not** enabled pending verification (Grok cannot take video input at
+> all). Sending video/audio to a third-party endpoint is disclosed in the answer.
+> Executable paths, endpoints and credential names are read from **user
+> settings only** — project `.pi/settings.json` values for those keys are
+> ignored and disclosed.
 
 > **Important:** the extension needs a pi version whose `ModelRegistry.complete`
 > exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on

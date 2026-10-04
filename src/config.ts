@@ -1,4 +1,5 @@
 import type { PiSettings } from "./settings.js";
+import { mergePiSettings } from "./settings.js";
 
 import { DEFAULT_MAX_PAGES_CEILING } from "./twitterapi.js";
 
@@ -13,6 +14,42 @@ export const DEFAULT_MIN_REQUEST_INTERVAL_MS = 5_000;
 export const DEFAULT_RETRY_BASE_DELAY_MS = 5_000;
 const MAX_INTERVAL_MS = 600_000;
 
+/** Native-video wire formats. v1 ships `gemini-files`; `openai-compatible` is spike-gated. */
+export const VIDEO_ENDPOINT_TYPES = ["gemini-files", "openai-compatible", "anthropic"] as const;
+export type VideoEndpointType = (typeof VIDEO_ENDPOINT_TYPES)[number];
+
+export const DEFAULT_VIDEO_ENDPOINT_TYPE: VideoEndpointType = "gemini-files";
+export const DEFAULT_VIDEO_API_KEY_ENV = "GOOGLE_API_KEY";
+export const DEFAULT_STT_API_KEY_ENV = "STT_API_KEY";
+export const DEFAULT_MAX_VIDEO_SECONDS = 120;
+export const DEFAULT_MAX_VIDEO_BYTES = 32 * 1024 * 1024;
+const MAX_VIDEO_BYTES_CEILING = 64 * 1024 * 1024;
+export const DEFAULT_MAX_FRAMES = 8;
+export const DEFAULT_MAX_VIDEOS_PER_SEARCH = 1;
+export const DEFAULT_VIDEO_BUDGET_MS = 90_000;
+/** Effective ceiling for the video phase (F8); larger configured values are clamped. */
+export const MAX_VIDEO_BUDGET_MS = 120_000;
+
+/**
+ * Config keys that can execute code, choose an endpoint, or name a credential.
+ * These are read from **user (global) settings only** — a project-level value is
+ * ignored and disclosed, so a cloned repo cannot run a binary or exfiltrate a
+ * secret via `.pi/settings.json`.
+ */
+export const USER_ONLY_CONFIG_KEYS = [
+  "enableVideoProcessing",
+  "videoEndpoint",
+  "videoEndpointType",
+  "videoModel",
+  "videoApiKeyEnv",
+  "sttEndpoint",
+  "sttModel",
+  "sttApiKeyEnv",
+  "ffmpegPath",
+  "whisperCppBinary",
+  "whisperModelPath",
+] as const;
+
 export interface TwitterConfig {
   /**
    * pi model id ("provider/model") that synthesizes the answer from posts
@@ -25,6 +62,44 @@ export interface TwitterConfig {
   enableImageUnderstanding: boolean;
   /** Attach video poster frames to the synthesis request. */
   enableVideoUnderstanding: boolean;
+  /**
+   * Run real video processing (native video via the video endpoint, and/or
+   * frames + STT). Requires `enableVideoUnderstanding`; off by default.
+   */
+  enableVideoProcessing: boolean;
+  videoEndpointType: VideoEndpointType;
+  /** Base URL override. `gemini-files` defaults to Google; other hosts need an explicit endpoint + key env. */
+  videoEndpoint?: string;
+  /** Native-video model id (e.g. "gemini-2.5-flash"). */
+  videoModel?: string;
+  /** Env var holding the native-video API key (default `GOOGLE_API_KEY`). */
+  videoApiKeyEnv: string;
+  /** OpenAI-compatible STT base URL. Unset disables remote STT. */
+  sttEndpoint?: string;
+  /** STT model id (e.g. "whisper-large-v3-turbo"). */
+  sttModel?: string;
+  /** Env var holding the STT API key (default `STT_API_KEY`). */
+  sttApiKeyEnv: string;
+  /** ISO-639-1 language for STT, or "auto" (default). */
+  sttLanguage: string;
+  /** ffmpeg binary override; otherwise PATH is searched. */
+  ffmpegPath?: string;
+  /** whisper.cpp binary (user-installed); unset disables the local STT tier. */
+  whisperCppBinary?: string;
+  /** whisper.cpp GGML model path (user-installed). */
+  whisperModelPath?: string;
+  /** Duration guard in seconds (default 120, max 600). */
+  maxVideoSeconds: number;
+  /** Byte cap for a single video download (default 32 MiB, max 64 MiB). */
+  maxVideoBytes: number;
+  /** Frames extracted per video (default 8, max 16). */
+  maxFrames: number;
+  /** Videos processed per search (default 1, max 3). */
+  maxVideosPerSearch: number;
+  /** Time budget for the video phase in ms (default 90_000, effective max 120_000). */
+  videoBudgetMs: number;
+  /** Notes about ignored/overridden settings, appended to result disclosures. */
+  configNotes: string[];
   /** Upper bound on media attachments per search. */
   maxMediaPerSearch: number;
   /** Base page budget per search. */
@@ -38,6 +113,16 @@ export interface TwitterConfig {
   minRequestIntervalMs: number;
   /** Base delay for retry backoff. */
   retryBaseDelayMs: number;
+}
+
+export interface LoadTwitterConfigOptions {
+  /**
+   * Untrusted project settings. Only non-sensitive keys are read from here;
+   * the `USER_ONLY_CONFIG_KEYS` are ignored with a disclosure. The first
+   * argument is always treated as trusted (user) settings, so the one-argument
+   * form keeps working for callers that have a single settings blob.
+   */
+  projectSettings?: PiSettings;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -54,18 +139,76 @@ function pageCount(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 ? Math.min(value, 100) : fallback;
 }
 
-export function loadTwitterConfig(settings: PiSettings): TwitterConfig {
-  const config = isObject(settings.twitter) ? settings.twitter : {};
+/** Integer in [min, max], or the fallback when absent/invalid. */
+function intInRange(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function twitterBlock(settings: PiSettings | undefined): Record<string, unknown> {
+  return settings && isObject(settings.twitter) ? settings.twitter : {};
+}
+
+export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConfigOptions = {}): TwitterConfig {
+  const user = twitterBlock(settings);
+  const project = twitterBlock(options.projectSettings);
+  // Non-sensitive keys keep their historic behaviour: project overrides user.
+  const config = mergePiSettings(user, project);
+  const configNotes: string[] = [];
+
+  // Sensitive keys are read from user settings only; a project-level value is
+  // ignored and disclosed (B1/F1/F3).
+  const ignored = USER_ONLY_CONFIG_KEYS.filter((key) => project[key] !== undefined);
+  if (ignored.length > 0) {
+    configNotes.push(
+      `twitter.${ignored.join(", twitter.")} from project settings was ignored: executable paths, endpoints and ` +
+        "credentials are read from user settings only.",
+    );
+  }
+
   const maxMedia = config.maxMediaPerSearch;
   const ceiling = pageCount(config.maxPagesCeiling, DEFAULT_MAX_PAGES_CEILING);
-  const synthesisModel =
-    typeof config.synthesisModel === "string" && config.synthesisModel.trim()
-      ? config.synthesisModel.trim()
-      : undefined;
+  const synthesisModel = text(config.synthesisModel);
+
+  const enableVideoUnderstanding = config.enableVideoUnderstanding === true;
+  const videoRequested = user.enableVideoProcessing === true;
+  if (videoRequested && !enableVideoUnderstanding) {
+    configNotes.push(
+      "twitter.enableVideoProcessing was ignored because twitter.enableVideoUnderstanding is not enabled.",
+    );
+  }
+
+  const endpointTypeRaw = text(user.videoEndpointType);
+  const videoEndpointType: VideoEndpointType =
+    endpointTypeRaw && (VIDEO_ENDPOINT_TYPES as readonly string[]).includes(endpointTypeRaw)
+      ? (endpointTypeRaw as VideoEndpointType)
+      : DEFAULT_VIDEO_ENDPOINT_TYPE;
+
   return {
     synthesisModel,
     enableImageUnderstanding: config.enableImageUnderstanding === true,
-    enableVideoUnderstanding: config.enableVideoUnderstanding === true,
+    enableVideoUnderstanding,
+    enableVideoProcessing: videoRequested && enableVideoUnderstanding,
+    videoEndpointType,
+    videoEndpoint: text(user.videoEndpoint),
+    videoModel: text(user.videoModel),
+    videoApiKeyEnv: text(user.videoApiKeyEnv) ?? DEFAULT_VIDEO_API_KEY_ENV,
+    sttEndpoint: text(user.sttEndpoint),
+    sttModel: text(user.sttModel),
+    sttApiKeyEnv: text(user.sttApiKeyEnv) ?? DEFAULT_STT_API_KEY_ENV,
+    sttLanguage: text(user.sttLanguage) ?? "auto",
+    ffmpegPath: text(user.ffmpegPath),
+    whisperCppBinary: text(user.whisperCppBinary),
+    whisperModelPath: text(user.whisperModelPath),
+    maxVideoSeconds: intInRange(config.maxVideoSeconds, DEFAULT_MAX_VIDEO_SECONDS, 1, 600),
+    maxVideoBytes: intInRange(config.maxVideoBytes, DEFAULT_MAX_VIDEO_BYTES, 1_024, MAX_VIDEO_BYTES_CEILING),
+    maxFrames: intInRange(config.maxFrames, DEFAULT_MAX_FRAMES, 1, 16),
+    maxVideosPerSearch: intInRange(config.maxVideosPerSearch, DEFAULT_MAX_VIDEOS_PER_SEARCH, 1, 3),
+    videoBudgetMs: Math.min(intervalMs(config.videoBudgetMs, DEFAULT_VIDEO_BUDGET_MS), MAX_VIDEO_BUDGET_MS),
+    configNotes,
     maxMediaPerSearch:
       typeof maxMedia === "number" && Number.isInteger(maxMedia) && maxMedia >= 0
         ? Math.min(maxMedia, 20)

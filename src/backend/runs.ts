@@ -6,6 +6,7 @@ import {
   synthesizeDocument,
   synthesizeTrends,
   synthesizeUserAnswer,
+  type SynthesisDeps,
 } from "../synthesize.js";
 import {
   fetchCommunityTweets,
@@ -33,6 +34,7 @@ import {
 } from "../twitterapi.js";
 import { toSynthesisModel, type TwitterApiSynthesisOptions } from "./model.js";
 import { createFetchMedia } from "./media.js";
+import { createProcessVideo } from "./video.js";
 import { applyFallbackNote, resolveSynthesisBackend, type SynthesisBackend } from "./synthesis.js";
 
 export interface TwitterApiRunOptions extends TwitterApiSynthesisOptions {
@@ -81,6 +83,32 @@ function incompleteReason(stoppedBy: string | undefined, pages: number): string 
   return undefined;
 }
 
+/** Build synthesis deps, wiring the optional bound video pre-processor (M5). */
+function mediaDeps(
+  backend: Pick<SynthesisBackend, "complete" | "fetcher">,
+  options: TwitterApiSynthesisOptions,
+): SynthesisDeps {
+  return {
+    complete: backend.complete,
+    fetchMedia: createFetchMedia(backend.fetcher, options.signal),
+    processVideo: options.config.enableVideoProcessing
+      ? createProcessVideo({
+          fetcher: options.fetcher ?? fetch,
+          env: options.env ?? {},
+          signal: options.signal,
+          exec: options.videoExec,
+        })
+      : undefined,
+  };
+}
+
+/** Append config-level disclosures (ignored project keys, switch warnings). */
+function appendConfigNotes(options: TwitterApiSynthesisOptions, details: TwitterSearchDetails): void {
+  if (options.config.configNotes.length > 0) {
+    details.notes = [...(details.notes ?? []), ...options.config.configNotes];
+  }
+}
+
 /**
  * Retrieve posts from twitterapi.io and synthesize the answer, returning the
  * shared `{ markdown, details }` shape.
@@ -112,10 +140,7 @@ export async function runTwitterApiSearch(
     model: toSynthesisModel(model),
     signal: options.signal,
     incomplete,
-    deps: {
-      complete,
-      fetchMedia: createFetchMedia(fetcher, options.signal),
-    },
+    deps: mediaDeps(backend, options),
   });
 
   if (search.window?.shortfallHours) {
@@ -150,6 +175,7 @@ export async function runTwitterApiSearch(
     ];
   }
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
 
   return { markdown: formatTwitterResults(details), details };
 }
@@ -202,6 +228,7 @@ export async function runTwitterApiUserSearch(
     ];
   }
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -234,7 +261,7 @@ export async function runTwitterApiThread(
     model: toSynthesisModel(model),
     signal: options.signal,
     incomplete,
-    deps: { complete, fetchMedia: createFetchMedia(fetcher, options.signal) },
+    deps: mediaDeps(backend, options),
   });
   details.notes = [
     ...(details.notes ?? []),
@@ -247,6 +274,7 @@ export async function runTwitterApiThread(
     ];
   }
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -265,10 +293,11 @@ async function completeTweetAnswer(
     model: toSynthesisModel(backend.model),
     signal: options.signal,
     incomplete: input.incomplete,
-    deps: { complete: backend.complete, fetchMedia: createFetchMedia(backend.fetcher, options.signal) },
+    deps: mediaDeps(backend, options),
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -392,6 +421,7 @@ export async function runTwitterApiTrends(
     deps: { complete: backend.complete },
   });
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -414,6 +444,7 @@ async function completeUserAnswer(
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -556,6 +587,7 @@ export async function runTwitterApiAbout(
     notes,
   });
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -683,5 +715,6 @@ export async function runTwitterApiSpace(
     notes,
   });
   applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
   return { markdown: formatTwitterResults(details), details };
 }
