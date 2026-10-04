@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { Value } from "typebox/value";
+
 import { registerTwitterTool } from "./tool.js";
 
 function captureTool() {
@@ -30,6 +32,43 @@ test("registerTwitterTool registers intent-only parameters", () => {
   assert.equal(properties.model, undefined);
   assert.equal(properties.enable_image_understanding, undefined);
   assert.equal(properties.enable_video_understanding, undefined);
+});
+
+test("the mode, queryType and replySort parameters are closed sets", () => {
+  const { pi, tool } = captureTool();
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+
+  const parameters = tool().parameters;
+  const literals = (name: string) =>
+    (parameters.properties[name].anyOf as { const: string }[]).map((entry) => entry.const);
+
+  assert.deepEqual(literals("mode"), [
+    "posts",
+    "users",
+    "thread",
+    "user",
+    "trends",
+    "replies",
+    "quotes",
+    "mentions",
+    "followers",
+    "followings",
+    "profile",
+    "about",
+    "tweets",
+    "retweeters",
+    "community",
+    "list",
+    "space",
+  ]);
+  assert.deepEqual(literals("queryType"), ["Latest", "Top"]);
+  assert.deepEqual(literals("replySort"), ["Relevance", "Latest", "Likes"]);
+
+  // A union that does not actually reject unknown values would be worse than a plain string.
+  assert.equal(Value.Check(parameters, { query: "q", mode: "replies" }), true);
+  assert.equal(Value.Check(parameters, { query: "q", mode: "nope" }), false);
+  assert.equal(Value.Check(parameters, { query: "q", queryType: "Recent" }), false);
+  assert.equal(Value.Check(parameters, { query: "q", replySort: "Top" }), false);
 });
 
 test("execute rejects with actionable guidance when no credentials exist", async () => {

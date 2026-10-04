@@ -17,10 +17,11 @@ to go beyond it — see [Compared with xAI `x_search`](#compared-with-xai-x_sear
 pi install npm:pi-twitterapi.io
 ```
 
-Or load a local build directly:
+Or load the local source directly (pi compiles TypeScript extensions on the
+fly, so there is no build step):
 
 ```bash
-pi -e ./dist/index.mjs
+pi -e ./src/index.ts
 ```
 
 ## Configure
@@ -223,8 +224,25 @@ twitterapi.io and synthesizes with a pi model of your choice.
 pnpm install
 pnpm typecheck
 pnpm test
-pnpm build
 ```
+
+There is no build step. Pi loads the TypeScript sources in `src/` directly
+through [jiti](https://github.com/unjs/jiti), and the published package ships
+those sources, so `pi install npm:pi-twitterapi.io` and
+`pi install git:github.com/jagaliano/pi-twitterapi.io` both work without a
+compile step. `src/*.test.ts` files are excluded from the npm tarball.
+
+## Releases
+
+1. `pnpm typecheck && pnpm test`
+2. Update [`CHANGELOG.md`](CHANGELOG.md), then bump the version with `npm version patch` (or `minor`), which also creates the git tag
+3. `git push origin main --tags`
+4. `npm publish --access public` — or push the tag and let `.github/workflows/release.yml` publish it when an `NPM_TOKEN` repository secret is set
+
+The `pi-package` keyword makes the published package eligible for the
+[pi package gallery](https://pi.dev/packages); the gallery indexes npm, so there
+is nothing to submit separately. `.github/workflows/ci.yml` typechecks and tests
+every push and pull request.
 
 ## License
 

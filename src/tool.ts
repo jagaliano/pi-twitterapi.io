@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type TSchema } from "typebox";
 import { type ExtensionAPI, keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { readMergedPiSettings, type PiSettings } from "./settings.js";
@@ -34,8 +34,44 @@ export interface TwitterToolOptions {
 /** Modes that locate a specific post through the shared `tweet` argument. */
 const TWEET_MODES = new Set(["thread", "replies", "quotes", "retweeters"]);
 
+/** Every read mode the tool accepts, in README order. */
+const TWITTER_MODES = [
+  "posts",
+  "users",
+  "thread",
+  "user",
+  "trends",
+  "replies",
+  "quotes",
+  "mentions",
+  "followers",
+  "followings",
+  "profile",
+  "about",
+  "tweets",
+  "retweeters",
+  "community",
+  "list",
+  "space",
+] as const;
+
+type TwitterMode = (typeof TWITTER_MODES)[number];
+
+function isTwitterMode(value: string): value is TwitterMode {
+  return (TWITTER_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * The mode literals as a non-empty tuple, which is what `Type.Union` takes.
+ * Built from `TWITTER_MODES` so the schema and the runtime guard cannot drift.
+ */
+function modeLiterals(): [TSchema, ...TSchema[]] {
+  const [first, ...rest] = TWITTER_MODES;
+  return [Type.Literal(first), ...rest.map((name) => Type.Literal(name))];
+}
+
 /** Per-mode parameter allowlist, so a parameter that does not apply is refused. */
-const MODE_PARAMS: Record<string, readonly string[]> = {
+const MODE_PARAMS: Record<TwitterMode, readonly string[]> = {
   posts: ["allowed_x_handles", "excluded_x_handles", "from_date", "to_date", "queryType", "count"],
   users: ["count"],
   thread: [],
@@ -109,7 +145,11 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language question or search query. Required for every mode." }),
-      mode: Type.Optional(Type.String({ description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "about", "tweets", "retweeters", "community", "list", or "space".' })),
+      mode: Type.Optional(
+        Type.Union(modeLiterals(), {
+          description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "about", "tweets", "retweeters", "community", "list", or "space".',
+        }),
+      ),
       tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes/retweeters; refused in any other mode.' })),
       user: Type.Optional(Type.String({ description: "X handle (no @) for mode=user, mentions, followers, followings, profile or about." })),
       userId: Type.Optional(Type.String({ description: "Numeric user id for mode=user; preferred over `user` when known." })),
@@ -123,22 +163,32 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       sinceTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items on or after this unix timestamp (seconds)." })),
       untilTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items before this unix timestamp (seconds)." })),
       limit: Type.Optional(Type.Number({ description: "mode=user/mentions/followers/followings/replies/quotes/retweeters/community/list: stop after this many items (max 1000)." })),
-      replySort: Type.Optional(Type.String({ description: 'mode=replies sort order: "Relevance" (default), "Latest", or "Likes".' })),
+      replySort: Type.Optional(
+        Type.Union([Type.Literal("Relevance"), Type.Literal("Latest"), Type.Literal("Likes")], {
+          description: 'mode=replies sort order: "Relevance" (default), "Latest", or "Likes".',
+        }),
+      ),
       allowed_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: only posts from these handles (max 20, no @)." })),
       excluded_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: exclude these handles (max 20, no @)." })),
       from_date: Type.Optional(Type.String({ description: "mode=posts: start date, YYYY-MM-DD." })),
       to_date: Type.Optional(Type.String({ description: "mode=posts: end date, YYYY-MM-DD." })),
-      queryType: Type.Optional(Type.String({ description: 'mode=posts: "Latest" (default, newest first) or "Top" (ranked).' })),
+      queryType: Type.Optional(
+        Type.Union([Type.Literal("Latest"), Type.Literal("Top")], {
+          description: 'mode=posts: "Latest" (default, newest first) or "Top" (ranked).',
+        }),
+      ),
       count: Type.Optional(Type.Number({ description: "mode=posts/users: max items (posts default 10, accounts default 20; max 50). mode=trends: number of trends (min 30)." })),
     }),
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const supplied = params as Record<string, unknown>;
-      const mode = typeof supplied.mode === "string" ? supplied.mode : "posts";
-      const modes = Object.keys(MODE_PARAMS);
-      if (!modes.includes(mode)) {
-        throw new Error(`twitter mode must be one of ${modes.map((name) => `"${name}"`).join(", ")} (got "${mode}")`);
+      const requested = typeof supplied.mode === "string" ? supplied.mode : "posts";
+      if (!isTwitterMode(requested)) {
+        throw new Error(
+          `twitter mode must be one of ${TWITTER_MODES.map((name) => `"${name}"`).join(", ")} (got "${requested}")`,
+        );
       }
+      const mode = requested;
 
       // The question is validated first: every mode answers it, and a blank one
       // must fail before any retrieval.

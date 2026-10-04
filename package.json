@@ -21,33 +21,36 @@
   },
   "type": "module",
   "files": [
-    "dist",
+    "src",
+    "!src/**/*.test.ts",
     "README.md",
+    "CHANGELOG.md",
     "docs"
   ],
   "pi": {
     "extensions": [
-      "./dist/index.mjs"
-    ]
+      "./src/index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/jagaliano/pi-twitterapi.io/main/preview.png"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsdown",
-    "test": "tsx --test src/**/*.test.ts",
-    "prepublishOnly": "npm run build"
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.99.2",
-    "@earendil-works/pi-tui": "0.99.2",
-    "@sinclair/typebox": "^0.34.49",
-    "@types/node": "^25.9.4",
-    "tsdown": "^0.22.3",
-    "tsx": "^4.22.4",
+    "@earendil-works/pi-coding-agent": "^1.0.2",
+    "@earendil-works/pi-tui": "^1.0.2",
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typebox": "^1.3.34",
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.99.2 <2",
-    "@earendil-works/pi-tui": ">=0.99.2 <2",
-    "@sinclair/typebox": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   }
 }
