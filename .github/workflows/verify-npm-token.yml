@@ -1,0 +1,36 @@
+# Checks that the NPM_TOKEN secret exists and actually authenticates, without
+# publishing anything. Dispatch it from the default branch:
+#
+#   gh workflow run verify-npm-token.yml
+#
+# Use it after setting or rotating NPM_TOKEN, before a release. A green run
+# means the token is wired up and accepted by the registry; it says nothing
+# about publish permission, which only a real publish exercises.
+name: Verify npm token
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the NPM_TOKEN secret authenticates
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not set on this repository." >&2
+            echo "Set it with:" >&2
+            echo "  gh secret set NPM_TOKEN --repo $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

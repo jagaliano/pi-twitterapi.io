@@ -235,9 +235,32 @@ compile step. `src/*.test.ts` files are excluded from the npm tarball.
 ## Releases
 
 1. `pnpm typecheck && pnpm test`
-2. Update [`CHANGELOG.md`](CHANGELOG.md), then bump the version with `npm version patch` (or `minor`), which also creates the git tag
-3. `git push origin main --tags`
-4. `npm publish --access public` — or push the tag and let `.github/workflows/release.yml` publish it when an `NPM_TOKEN` repository secret is set
+2. Update [`CHANGELOG.md`](CHANGELOG.md), then bump the version with
+   `npm version patch` (or `minor`), which also creates the git tag
+3. `git push origin main --tags` — a `v*` tag makes `.github/workflows/release.yml`
+   publish it (needs an `NPM_TOKEN` repository secret) and open the GitHub release
+4. Or publish by hand: `npm publish --access public`
+
+### Rehearsing a release
+
+The pipeline can be checked without releasing anything. It runs the tag/version
+check, install, typecheck, tests and a token check, then stops unless the publish
+is explicitly requested:
+
+```bash
+gh workflow run verify-npm-token.yml --repo jagaliano/pi-twitterapi.io
+gh workflow run release.yml --ref v0.1.1                  # dry run
+gh workflow run release.yml --ref v0.1.1 -f publish=true  # the real publish
+```
+
+`workflow_dispatch` runs the workflow as it exists at the given ref, so a manual
+run has to target a tag that already contains the revision you want. The `v0.1.0`
+tag was created before the dry-run mode existed, so dispatching against it
+publishes directly.
+
+Once the package exists on npm you can switch to
+[trusted publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC) and delete
+`NPM_TOKEN`; the workflow works with either.
 
 The `pi-package` keyword makes the published package eligible for the
 [pi package gallery](https://pi.dev/packages); the gallery indexes npm, so there
