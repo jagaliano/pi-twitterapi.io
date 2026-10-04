@@ -10,6 +10,7 @@ import {
   resolveModel,
   runTwitterApiSearch,
   runTwitterApiUserSearch,
+  supportedReasoningEffort,
   synthesisRetryDelayMs,
   toSynthesisModel,
   type RegistryLike,
@@ -427,6 +428,49 @@ test("synthesisRetryDelayMs doubles to a 4s cap", () => {
   assert.equal(synthesisRetryDelayMs(2), 2_000);
   assert.equal(synthesisRetryDelayMs(3), 4_000);
   assert.equal(synthesisRetryDelayMs(5), 4_000);
+});
+
+test("supportedReasoningEffort recovers the accepted value from a rejection", () => {
+  // The real message from opencode-go/muse-spark-1.3-contributor.
+  const real =
+    'opencode-go API error (400): {"message":"reasoning_effort \'none\' is not supported for model ' +
+    "'muse-spark-1.3-contributor'. Supported values: [minimal, low, medium, high, xhigh, max]" +
+    ',"param":"reasoning.effort","type":"invalid_request_error"}';
+  assert.equal(supportedReasoningEffort(new Error(real)), "minimal");
+  assert.equal(supportedReasoningEffort(new Error('reasoning_effort "none" is not supported; supported values: ["low", "high"]')), "low");
+  // Anything else must not trigger a second billed call.
+  assert.equal(supportedReasoningEffort(new Error("429 too many requests")), undefined);
+  assert.equal(supportedReasoningEffort(new Error("401 unauthorized")), undefined);
+  assert.equal(supportedReasoningEffort(new Error("reasoning_effort not supported")), undefined, "no list, no retry");
+});
+
+test("a reasoning-only model is retried with a supported effort instead of failing", async () => {
+  const efforts: (string | undefined)[] = [];
+  const registry = chainRegistry(async () => {
+    throw new Error("unused");
+  });
+  // Capture the options passed on each attempt.
+  registry.complete = (async (_model: unknown, _context: unknown, options?: { reasoningEffort?: string }) => {
+    efforts.push(options?.reasoningEffort);
+    if (efforts.length === 1) {
+      throw new Error(
+        "opencode-go API error (400): reasoning_effort 'none' is not supported. " +
+          "Supported values: [minimal, low, medium, high, xhigh, max]",
+      );
+    }
+    return { content: [{ type: "text", text: "ok (https://x.com/a/status/1)" }] };
+  }) as never;
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku" } });
+  const result = await runTwitterApiSearch({
+    params: { query: "q" },
+    config,
+    env: { TWITTERAPI_IO_API_KEY: "k" },
+    registry,
+    fetcher: tweetsOnce(),
+  });
+  assert.deepEqual(efforts, [undefined, "minimal"], "one retry, with the accepted effort");
+  assert.match(result.markdown, /https:\/\/x\.com\/a\/status\/1/);
+  assert.ok(!/produced by/.test(result.details.notes?.join(" ") ?? ""), "no fallback model was needed");
 });
 
 test("an auth failure on the configured model moves to the next model", async () => {

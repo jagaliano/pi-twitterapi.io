@@ -37,6 +37,27 @@ export function completionText(message: unknown): string {
 
 
 /**
+ * Recover the cheapest accepted reasoning effort from a provider rejection.
+ *
+ * Some models cannot be called with reasoning off at all — pi sends
+ * `reasoning_effort: 'none'` by default, and an `openai-responses` model that
+ * requires reasoning answers 400 with the accepted list. Retrying once with the
+ * first supported value keeps such models usable instead of failing synthesis
+ * (measured live against `opencode-go/muse-spark-1.3-contributor`).
+ */
+export function supportedReasoningEffort(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/reasoning[_ ]effort/i.test(message)) return undefined;
+  if (!/not supported|unsupported|invalid/i.test(message)) return undefined;
+  const list = /supported values?:?\s*\[([^\]]+)\]/i.exec(message)?.[1];
+  if (!list) return undefined;
+  return list
+    .split(",")
+    .map((value) => value.trim().replace(/^["']|["']$/g, ""))
+    .find((value) => /^[a-z]+$/.test(value));
+}
+
+/**
  * Build the synthesis completion for a resolved model. Shared by every
  * twitterapi.io path so failure handling cannot differ between them.
  */
@@ -50,32 +71,39 @@ function createCompletion(
       request.mediaManifest && request.images.length > 0
         ? `${request.prompt}\n\nAttached images, in order:\n${request.mediaManifest}`
         : request.prompt;
-    const message = await run.call(
-      registry,
-      model as never,
-      {
-        systemPrompt: request.system,
-        messages: [
-          {
-            role: "user",
-            content:
-              request.images.length > 0
-                ? [
-                    { type: "text", text: promptText },
-                    ...request.images.map((image) => ({
-                      type: "image",
-                      data: image.data,
-                      mimeType: image.mimeType,
-                    })),
-                  ]
-                : request.prompt,
-            timestamp: Date.now(),
-          },
-        ],
-      } as never,
-      { signal: request.signal } as never,
-    );
-    return completionText(message);
+    const attempt = (reasoningEffort?: string): Promise<unknown> =>
+      run.call(
+        registry,
+        model as never,
+        {
+          systemPrompt: request.system,
+          messages: [
+            {
+              role: "user",
+              content:
+                request.images.length > 0
+                  ? [
+                      { type: "text", text: promptText },
+                      ...request.images.map((image) => ({
+                        type: "image",
+                        data: image.data,
+                        mimeType: image.mimeType,
+                      })),
+                    ]
+                  : request.prompt,
+              timestamp: Date.now(),
+            },
+          ],
+        } as never,
+        (reasoningEffort ? { signal: request.signal, reasoningEffort } : { signal: request.signal }) as never,
+      );
+    try {
+      return completionText(await attempt());
+    } catch (error) {
+      const effort = supportedReasoningEffort(error);
+      if (!effort) throw error;
+      return completionText(await attempt(effort));
+    }
   };
 }
 
