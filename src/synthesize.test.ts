@@ -684,3 +684,31 @@ test("the video budget starts when video work starts, not before the photo phase
   assert.equal(now >= 50_000, true);
   assert.equal(seenDeadline, 50_000 + config.videoBudgetMs, "the video deadline is measured from the video phase");
 });
+
+test("an early poster fallback does not consume a later slow failure's reservation (P1-3)", async () => {
+  const tweets = [
+    tweet({ id: "1", url: "https://x.com/a/status/1", media: [{ type: "video", url: "https://pbs.twimg.com/p1.jpg" }] }),
+    tweet({ id: "2", url: "https://x.com/a/status/2", media: [{ type: "video", url: "https://pbs.twimg.com/p2.jpg" }] }),
+  ];
+  const config = loadTwitterConfig({
+    twitter: { enableVideoUnderstanding: true, enableVideoProcessing: true, maxVideosPerSearch: 2 },
+  });
+  let now = 0;
+  let posters = 0;
+  await collectMedia(tweets, config, VISION_MODEL, {
+    complete: async () => "",
+    now: () => now,
+    mediaBudgetMs: 60_000,
+    fetchMedia: async (): Promise<ImageAttachment | undefined> => {
+      posters += 1;
+      return { data: "POSTER", mimeType: "image/jpeg" };
+    },
+    processVideo: async (input) => {
+      // The first video fails instantly; the second fails only after the media
+      // budget has already expired.
+      if (input.postUrl.endsWith("/2")) now += 90_000;
+      return { postUrl: input.postUrl, method: "frames-only", frames: [], notes: [] };
+    },
+  });
+  assert.equal(posters, 2, "both announced poster fallbacks were fetched");
+});

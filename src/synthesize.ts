@@ -354,8 +354,14 @@ export async function collectMedia(
   // and shared (P1-3).
   let posterDeadline = 0;
   const posterLimit = (): number => {
-    if (posterDeadline === 0) posterDeadline = clock() + POSTER_FALLBACK_BUDGET_MS;
-    return Math.max(deadline, posterDeadline);
+    if (posterDeadline === 0) {
+      // Anchor past the *whole* video phase, so a poster fetched after an early
+      // failure cannot consume the reservation a later slow failure still needs.
+      // Reading `videoPhaseDeadline` here is safe: this only runs once the video
+      // loop has started (P1-3).
+      posterDeadline = Math.max(deadline, videoPhaseDeadline) + POSTER_FALLBACK_BUDGET_MS;
+    }
+    return posterDeadline;
   };
 
   // Fetch a poster frame within the shared attachment budget.

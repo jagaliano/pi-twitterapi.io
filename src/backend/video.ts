@@ -369,27 +369,36 @@ export function parseGeminiSections(text: string): { visual?: string; transcript
   const trimmed = text.trim();
   if (!trimmed) return {};
   const clean = (value: string) => value.replace(/^[\s*_#>`\-]+/, "").replace(/[*_`]+\s*$/, "").trim();
-  const found: { key: "visual" | "transcript"; start: number; end: number }[] = [];
-  // Anchored to a line start (allowing Markdown prefixes) so the word inside
-  // prose is not mistaken for a heading, with an optional colon.
-  const heading = /(?:^|\n)[ \t>*_#-]*(VISUAL|TRANSCRIPT)[ \t]*[:：]?/gi;
-  for (const match of trimmed.matchAll(heading)) {
-    const at = match.index ?? 0;
-    found.push({
-      key: match[1].toLowerCase() === "visual" ? "visual" : "transcript",
-      start: at,
-      end: at + match[0].length,
-    });
-  }
-  // No recognisable heading: the whole reply is the visual description.
-  if (found.length === 0) return { visual: trimmed };
-  const sections: { visual?: string; transcript?: string } = {};
-  for (let i = 0; i < found.length; i += 1) {
-    const stop = i + 1 < found.length ? found[i + 1].start : trimmed.length;
-    const body = clean(trimmed.slice(found[i].end, stop));
-    if (body && sections[found[i].key] === undefined) sections[found[i].key] = body;
-  }
-  return sections;
+  const split = (pattern: RegExp): { visual?: string; transcript?: string } => {
+    const found: { key: "visual" | "transcript"; start: number; end: number }[] = [];
+    for (const match of trimmed.matchAll(pattern)) {
+      const at = match.index ?? 0;
+      found.push({
+        key: match[1].toLowerCase() === "visual" ? "visual" : "transcript",
+        start: at,
+        end: at + match[0].length,
+      });
+    }
+    // No recognisable heading: the whole reply is the visual description.
+    if (found.length === 0) return { visual: trimmed };
+    const sections: { visual?: string; transcript?: string } = {};
+    for (let i = 0; i < found.length; i += 1) {
+      const stop = i + 1 < found.length ? found[i + 1].start : trimmed.length;
+      const body = clean(trimmed.slice(found[i].end, stop));
+      if (body && sections[found[i].key] === undefined) sections[found[i].key] = body;
+    }
+    return sections;
+  };
+  const score = (sections: { visual?: string; transcript?: string }) =>
+    Number(Boolean(sections.visual)) + Number(Boolean(sections.transcript));
+  // Anchored first: a heading on its own line, allowing Markdown prefixes and an
+  // optional colon.
+  const anchored = split(/(?:^|\n)[ \t>*_#-]*(VISUAL|TRANSCRIPT)[ \t]*[:：]?/gi);
+  if (score(anchored) >= 2) return anchored;
+  // Otherwise allow inline separators, so a single-line
+  // `VISUAL: a dog TRANSCRIPT: woof` still classifies both parts (P2-8).
+  const inline = split(/(VISUAL|TRANSCRIPT)[ \t]*[:：]/gi);
+  return score(inline) > score(anchored) ? inline : anchored;
 }
 
 interface GeminiResult {
@@ -581,17 +590,24 @@ async function remoteStt(
         redirect: "error",
       });
     };
-    // Only a *capability* rejection (unsupported response_format) justifies
-    // paying for another upload. Auth, throttling and server failures are
-    // reported instead of re-posting the same audio (P2-7).
-    const unsupported = (status: number) => status === 400 || status === 415 || status === 422;
+    // Only a *capability* rejection (an unsupported response_format or timestamp
+    // option) justifies paying for another upload. A 400 for an invalid model, an
+    // auth failure, throttling or a server error is reported after one attempt
+    // (P2-7).
+    const unsupportedFormat = async (response: Response): Promise<boolean> => {
+      if (response.status !== 400 && response.status !== 415 && response.status !== 422) return false;
+      const body = (await response.text().catch(() => "")).slice(0, 2_000).toLowerCase();
+      return /(response_format|response format|verbose_json|timestamp_granularit\w*|unsupported[^.]{0,40}format|format[^.]{0,40}(not supported|unsupported|invalid))/.test(
+        body,
+      );
+    };
     const formats: ("verbose_json" | "json" | "text")[] = ["verbose_json", "json", "text"];
     let response: Response | undefined;
     let used: "verbose_json" | "json" | "text" = "text";
     for (const format of formats) {
       response = await attempt(format);
       used = format;
-      if (response.ok || !unsupported(response.status)) break;
+      if (response.ok || !(await unsupportedFormat(response))) break;
     }
     if (!response || !response.ok) return { note: `STT endpoint returned HTTP ${response?.status ?? 0}.` };
     const text =
@@ -704,22 +720,23 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     let durationMs = media.durationMillis;
     if (!durationMs && haveFfmpeg) durationMs = await probeLocalDuration(ctx, localFile, remaining(deadline, now));
     const maxSeconds = config.maxVideoSeconds;
-    const overLimit = durationMs !== undefined && durationMs > maxSeconds * 1000;
+    const durationKnown = durationMs !== undefined && durationMs > 0;
+    const overLimit = durationKnown && (durationMs as number) > maxSeconds * 1000;
 
-    // Enforce the duration limit on the media actually sent to a provider
-    // (P1-4). The local ffmpeg paths are additionally bounded by `-t maxSeconds`.
+    // The byte cap bounds *size*, never *duration*, so a native upload is only
+    // allowed once the clip is provably inside the limit: either we know it is
+    // short enough, or we produced a locally trimmed copy. An unknown duration
+    // is therefore trimmed too — and skipped when it cannot be (P1-1).
     let mediaFile = localFile;
     let trimmed = false;
-    if (overLimit && haveFfmpeg) {
+    if ((!durationKnown || overLimit) && haveFfmpeg) {
       const clipped = join(dir, "clip.mp4");
       if (await clipVideo(ctx, localFile, clipped, maxSeconds, remaining(deadline, now))) {
         mediaFile = clipped;
         trimmed = true;
       }
     }
-    // An over-limit clip that could not be trimmed must never be uploaded whole:
-    // that would break the very cost/privacy bound the limit exists to enforce.
-    const nativeAllowed = !overLimit || trimmed;
+    const nativeAllowed = trimmed || (durationKnown && !overLimit);
     if (overLimit) {
       evidence.notes.push(
         trimmed
@@ -727,6 +744,13 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
           : `The video is ${Math.round((durationMs as number) / 1000)}s and exceeds the ${maxSeconds}s limit and ` +
               "could not be trimmed locally, so native video analysis was skipped; frames and audio were " +
               `limited to the first ${maxSeconds}s.`,
+      );
+    } else if (!durationKnown) {
+      evidence.notes.push(
+        trimmed
+          ? `The video duration could not be determined; only the first ${maxSeconds}s were analysed.`
+          : "The video duration could not be determined and it could not be bounded locally, so native video " +
+              "analysis was skipped.",
       );
     }
 
@@ -773,14 +797,16 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
       }
     }
 
-    // Tier 2 — frames (only when the synthesis model accepts images).
-    if (!nativeMethod && modelSupportsImage && haveFfmpeg && durationMs) {
+    // Tier 2 — frames (only when the synthesis model accepts images). A trimmed
+    // clip is bounded by construction, so it supplies the frame timing it needs.
+    const frameDurationMs = durationKnown ? (durationMs as number) : trimmed ? maxSeconds * 1000 : undefined;
+    if (!nativeMethod && modelSupportsImage && haveFfmpeg && frameDurationMs) {
       try {
-        const files = await extractFrames(ctx, mediaFile, dir, durationMs, config.maxFrames, maxSeconds, remaining(deadline, now));
+        const files = await extractFrames(ctx, mediaFile, dir, frameDurationMs, config.maxFrames, maxSeconds, remaining(deadline, now));
         const total = files.length;
         for (let i = 0; i < files.length; i += 1) {
           const bytes = await readFile(files[i]);
-          const at = (Math.min(durationMs, maxSeconds * 1000) / 1000) * ((i + 0.5) / total);
+          const at = (Math.min(frameDurationMs, maxSeconds * 1000) / 1000) * ((i + 0.5) / total);
           evidence.frames.push({
             data: Buffer.from(bytes).toString("base64"),
             mimeType: "image/jpeg",

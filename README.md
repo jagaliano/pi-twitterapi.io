@@ -161,8 +161,11 @@ than silently ignored.
   dropped from `Sources` and counted in the `## Notes` section. Non-X links are
   outside the citation contract: they are neither published as sources nor
   counted as invented citations.
-- **Media is best-effort.** Video cannot be sent to a chat model, so video posts
-  are represented by their poster frame and this limitation is disclosed.
+- **Media is best-effort.** By default a video post is represented by its poster
+  frame and the limitation is disclosed, because a chat model cannot ingest
+  video. With `enableVideoProcessing` (see above) the video itself is analysed —
+  locally trimmed frames/audio, and/or the configured native-video or STT
+  endpoint — and the poster is kept only as the fallback when that yields nothing.
 - **Partial retrieval is disclosed.** If paging stops early (page cap, cursor
   cycle, or a missing cursor while more results remain), the answer carries a
   note saying the results may be incomplete.
@@ -239,7 +242,7 @@ version, including parameter mapping, lives in
 | Result order | chosen by the model | `queryType` (`Latest`/`Top`), `replySort` |
 | Item-count control | ❌ | ✅ `count`, `limit` |
 | Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached when the model accepts images) |
-| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame only (chat models cannot ingest video) |
+| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame by default; opt-in `enableVideoProcessing` adds native video (Gemini) and/or frames + STT |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens — [cost comparison](docs/pricing-comparison.md) |

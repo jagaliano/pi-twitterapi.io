@@ -715,6 +715,105 @@ test("parseGeminiSections tolerates reordered and Markdown headings (P2-8)", () 
   assert.deepEqual(parseGeminiSections("## TRANSCRIPT\nhello"), { transcript: "hello" });
   assert.deepEqual(parseGeminiSections("VISUAL: only visuals"), { visual: "only visuals" });
   assert.deepEqual(parseGeminiSections("plain description"), { visual: "plain description" });
+  // A single-line reply must still classify the transcript, or STT runs again for
+  // nothing and the speech is capped as visual notes instead (P2-8).
+  assert.deepEqual(parseGeminiSections("VISUAL: a dog TRANSCRIPT: woof"), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+  assert.deepEqual(parseGeminiSections("VISUAL: a dog TRANSCRIPT: hello there, friend"), {
+    visual: "a dog",
+    transcript: "hello there, friend",
+  });
+});
+
+test("native upload is skipped when the duration cannot be established (P1-1)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/20",
+      media: videoMedia({ durationMillis: undefined }),
+      config: GEMINI_CONFIG,
+      // No ffmpeg: the clip cannot be bounded locally, so it must not be uploaded.
+      deps: { ...nativeDeps(fetcher, dir, 1), checkBinary: async () => false },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(!calls.some((c) => c.url.includes(":generateContent")), "nothing was uploaded");
+    assert.ok(!calls.some((c) => c.url.includes("/upload/")), "no resumable upload started");
+    assert.ok(result.notes.some((note) => /duration could not be determined/.test(note)));
+  });
+});
+
+test("an unknown-duration video is trimmed before any native upload (P1-1)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const invocations: string[][] = [];
+    const exec: ExecFn = async (_file, args) => {
+      invocations.push(args);
+      const output = args[args.length - 1];
+      if (args.includes("-i") && !args.includes("-y")) {
+        // A probe that yields no parseable Duration line.
+        const error = new Error("probe") as Error & { stderr?: string };
+        error.stderr = "ffmpeg version 7.0";
+        throw error;
+      }
+      if (output.endsWith(".mp4") || output.endsWith(".mp3")) await writeFile(output, new Uint8Array([1]));
+      return { stdout: "", stderr: "" };
+    };
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/21",
+      media: videoMedia({ durationMillis: undefined }),
+      config: GEMINI_CONFIG,
+      deps: { ...nativeDeps(fetcher, dir, 1), exec },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    const clip = invocations.find((args) => args.includes("-c") && args.includes("copy"));
+    assert.ok(clip, "the unknown-duration clip was trimmed first");
+    assert.equal(clip![clip!.indexOf("-t") + 1], "120");
+    assert.ok(calls.some((c) => c.url.includes(":generateContent")), "the bounded clip was analysed");
+    assert.ok(result.notes.some((note) => /duration could not be determined/.test(note)));
+  });
+});
+
+test("STT reports a non-format 400 instead of re-uploading the audio (P2-7)", async () => {
+  await withTempDir(async (dir) => {
+    let transcriptionCalls = 0;
+    const { exec } = fakeExec();
+    const fetcher = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/audio/transcriptions")) {
+        transcriptionCalls += 1;
+        return new Response(JSON.stringify({ error: { message: "invalid model name" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({
+      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/22",
+      media: videoMedia(),
+      config,
+      deps: {
+        fetcher,
+        env: { STT_API_KEY: "k" },
+        exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(transcriptionCalls, 1, "a 400 about the model is not a format rejection");
+    assert.ok(result.notes.some((note) => /HTTP 400/.test(note)));
+  });
 });
 
 test("STT reports auth failures instead of re-uploading the audio (P2-7)", async () => {
@@ -763,7 +862,10 @@ test("STT falls back to plain text only when the format itself is rejected (P2-7
         const format = String((init?.body as FormData).get("response_format"));
         formats.push(format);
         if (format === "text") return new Response("plain words", { status: 200, headers: { "content-type": "text/plain" } });
-        return new Response("unsupported", { status: 400 });
+        return new Response(JSON.stringify({ error: { message: "response_format is not supported" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
       }
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
