@@ -9,7 +9,6 @@ import {
   createProcessVideo,
   estimateVariantBytes,
   parseGeminiResponse,
-  parseGeminiSections,
   processVideo,
   selectVariant,
   type ExecFn,
@@ -321,10 +320,18 @@ test("createProcessVideo binds deps and returns evidence", async () => {
 
 // ---------------------------------------------------- native video / native STT
 
-test("parseGeminiSections splits VISUAL and TRANSCRIPT", () => {
-  assert.deepEqual(parseGeminiSections("VISUAL: a dog\nTRANSCRIPT: woof"), { visual: "a dog", transcript: "woof" });
-  assert.deepEqual(parseGeminiSections("just a description"), { visual: "just a description" });
-  assert.deepEqual(parseGeminiSections("   "), {});
+test("parseGeminiResponse reads the JSON the request asks for", () => {
+  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":"woof"}'), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+  // An empty transcript in JSON stays empty rather than being invented.
+  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":""}'), { visual: "a dog" });
+  assert.deepEqual(parseGeminiResponse('```json\n{"visual":"a dog","transcript":"woof"}\n```'), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+  assert.deepEqual(parseGeminiResponse("   "), {});
 });
 
 /** Serves the MP4, then the Gemini inline or Files lifecycle. */
@@ -350,7 +357,8 @@ function geminiFetcher(options: { uploadUrl?: boolean; deleteOk?: boolean } = {}
       return new Response(JSON.stringify({ state: "ACTIVE" }), { status: 200 });
     }
     if (url.includes(":generateContent")) {
-      const text = "VISUAL: a person speaks\nTRANSCRIPT: hello world";
+      // The request asks for structured JSON; a conforming model answers with it.
+      const text = '{"visual":"a person speaks","transcript":"hello world"}';
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
     }
     return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
@@ -704,79 +712,36 @@ test("a caller-built custom endpoint is refused without explicit authorization (
   });
 });
 
-test("parseGeminiSections tolerates reordered and Markdown headings (P2-8)", () => {
-  assert.deepEqual(parseGeminiSections("TRANSCRIPT: hello\nVISUAL: a dog"), {
-    transcript: "hello",
-    visual: "a dog",
-  });
-  assert.deepEqual(parseGeminiSections("**VISUAL:** a dog\n\n**TRANSCRIPT:** woof"), {
-    visual: "a dog",
-    transcript: "woof",
-  });
-  assert.deepEqual(parseGeminiSections("## TRANSCRIPT\nhello"), { transcript: "hello" });
-  assert.deepEqual(parseGeminiSections("VISUAL: only visuals"), { visual: "only visuals" });
-  assert.deepEqual(parseGeminiSections("plain description"), { visual: "plain description" });
-  // A single-line reply must still classify the transcript, or STT runs again for
-  // nothing and the speech is capped as visual notes instead (P2-8).
-  assert.deepEqual(parseGeminiSections("VISUAL: a dog TRANSCRIPT: woof"), {
-    visual: "a dog",
-    transcript: "woof",
-  });
-  assert.deepEqual(parseGeminiSections("VISUAL: a dog TRANSCRIPT: hello there, friend"), {
-    visual: "a dog",
-    transcript: "hello there, friend",
-  });
-});
-
-test("the inline fallback cannot invent a transcript out of quoted prose (P2-8)", () => {
-  // Both headings are recognised, so an empty transcript body is a real silence —
-  // re-splitting inline would treat the quoted label as a heading.
-  assert.deepEqual(parseGeminiSections('VISUAL: A sign reads "transcript: unavailable".\nTRANSCRIPT:'), {
-    visual: 'A sign reads "transcript: unavailable".',
-  });
-  // A heading-less paragraph that merely mentions a label keeps its introduction.
-  assert.deepEqual(
-    parseGeminiSections("The video shows a chart. The transcript: nobody speaks here."),
-    { visual: "The video shows a chart. The transcript: nobody speaks here." },
-  );
-  // Markdown-prefixed single-line still splits.
-  assert.deepEqual(parseGeminiSections("**VISUAL:** a dog **TRANSCRIPT:** woof"), {
-    visual: "a dog",
-    transcript: "woof",
-  });
-});
-
-test("parseGeminiSections only accepts complete heading tokens (P2-8)", () => {
-  // A word that merely starts with a label is not a heading.
-  assert.deepEqual(parseGeminiSections("VISUAL: A sign.\nTranscriptomics is printed on it.\nTRANSCRIPT:"), {
-    visual: "A sign.\nTranscriptomics is printed on it.",
-  });
-  assert.deepEqual(parseGeminiSections("Transcriptomics is printed on it."), {
-    visual: "Transcriptomics is printed on it.",
-  });
-  // Body punctuation is content, not heading decoration.
-  assert.deepEqual(parseGeminiSections("TRANSCRIPT: -5 degrees"), { transcript: "-5 degrees" });
-});
-
-test("a quoted label on one line cannot become an invented transcript (P2-8)", () => {
-  const parsed = parseGeminiSections('VISUAL: A sign reads "the transcript: unavailable". TRANSCRIPT:');
-  assert.equal(parsed.transcript, undefined, "no transcript is fabricated from quoted prose");
-  assert.equal(parsed.visual, 'A sign reads "the transcript: unavailable".');
-});
-
-test("parseGeminiResponse prefers the JSON the request asks for (P2-8)", () => {
-  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":"woof"}'), {
-    visual: "a dog",
-    transcript: "woof",
-  });
-  // An empty transcript in JSON stays empty rather than being invented.
-  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":""}'), { visual: "a dog" });
-  assert.deepEqual(parseGeminiResponse('```json\n{"visual":"a dog","transcript":""}\n```'), { visual: "a dog" });
-  // A reply that ignored the JSON request still falls back conservatively.
-  assert.deepEqual(parseGeminiResponse("VISUAL: a dog\nTRANSCRIPT: woof"), {
-    visual: "a dog",
-    transcript: "woof",
-  });
+test("a non-JSON reply is kept whole as visual evidence and never guesses speech", () => {
+  // Every one of these shapes defeated a heading heuristic in a real review round:
+  // the fallback must not try to find a transcript in any of them. Guessing wrong
+  // publishes fabricated speech as evidence AND suppresses the real STT pass.
+  const adversarial = [
+    "VISUAL: a dog\nTRANSCRIPT: woof",
+    "TRANSCRIPT: hello\nVISUAL: a dog",
+    "**VISUAL:** a dog\n\n**TRANSCRIPT:** woof",
+    "## TRANSCRIPT\nhello",
+    "VISUAL: a dog TRANSCRIPT: woof",
+    "VISUAL: a dog TRANSCRIPT: woof VISUAL: the dog leaves",
+    'VISUAL: A sign reads "the transcript: unavailable". TRANSCRIPT:',
+    "VISUAL: A sign reads 'the transcript: unavailable'. TRANSCRIPT:",
+    "VISUAL: A sign reads ‘the transcript: unavailable’. TRANSCRIPT:",
+    "VISUAL: A sign says:\n> TRANSCRIPT: unavailable\nTRANSCRIPT:",
+    "The video shows a chart. The transcript: nobody speaks here.",
+    "The overlay says VISUAL: cat TRANSCRIPT: unavailable.",
+    "VISUAL: A sign.\nTranscriptomics is printed on it.\nTRANSCRIPT:",
+    "Transcriptomics is printed on it.",
+    "TRANSCRIPT: -5 degrees",
+    "TRANSCRIPT: __init__",
+    "VISUAL: *hello*",
+    "A dog runs.\nTRANSCRIPT: woof",
+    "plain description",
+  ];
+  for (const reply of adversarial) {
+    const parsed = parseGeminiResponse(reply);
+    assert.equal(parsed.transcript, undefined, `invented a transcript from: ${JSON.stringify(reply)}`);
+    assert.equal(parsed.visual, reply, `content was dropped or rewritten for: ${JSON.stringify(reply)}`);
+  }
 });
 
 test("processVideo asks for JSON and reads a JSON reply without heuristics (P2-8)", async () => {

@@ -78,9 +78,10 @@ override — and set only the keys you need:
 > video is **not** enabled pending verification (Grok cannot take video input at
 > all). Sending video/audio to a third-party endpoint is disclosed in the answer.
 > The native request asks for structured JSON (`responseMimeType:
-> application/json`), so the model names the visual/transcript sections itself; a
-> reply that ignores that is parsed conservatively by complete heading tokens
-> only, and an empty or unparsable transcript is left empty rather than invented.
+> application/json`), so the model names the visual/transcript sections itself. A
+> reply that ignores that is kept whole as visual evidence: the transcript is
+> never inferred from prose (an invented transcript would be published as
+> evidence), and STT still recovers the real speech when it is configured.
 > Executable paths, endpoints and credential names are read from **user
 > settings only** — project `.pi/settings.json` values for those keys are
 > ignored and disclosed. A custom `videoEndpoint` is only honoured when

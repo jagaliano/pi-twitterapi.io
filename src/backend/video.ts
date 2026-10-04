@@ -95,8 +95,8 @@ const GEMINI_GENERATE_PROMPT =
 
 /** Structured-output schema, so the model declares the sections instead of us guessing. */
 const GEMINI_RESPONSE_SCHEMA = {
-  type: "object",
-  properties: { visual: { type: "string" }, transcript: { type: "string" } },
+  type: "OBJECT",
+  properties: { visual: { type: "STRING" }, transcript: { type: "STRING" } },
   required: ["visual", "transcript"],
 } as const;
 
@@ -373,88 +373,19 @@ function geminiConfigured(config: TwitterConfig, env: Record<string, string | un
 }
 
 /**
- * Conservative fallback parser for a reply that ignored the JSON request.
+ * Read a Gemini reply.
  *
- * A heading is only recognised as a *complete token on its own line* (optionally
- * wrapped in Markdown emphasis), so `Transcriptomics` is never a heading and a
- * label quoted inside prose is never a heading. When nothing matches, the whole
- * reply is treated as the visual description: losing a transcript degrades the
- * answer, whereas inventing one fabricates evidence, and STT can still recover
- * the real speech.
- */
-export function parseGeminiSections(text: string): { visual?: string; transcript?: string } {
-  const trimmed = text.trim();
-  if (!trimmed) return {};
-  const emphasis = "(?:\\*\\*|__|\\*|_|`)?";
-  // Emphasis is accepted on either side of the colon: `**VISUAL:**` and
-  // `**VISUAL**:` are both common ways to bold the label.
-  const withColon = new RegExp(
-    `^[ \\t>*_#-]*${emphasis}(VISUAL|TRANSCRIPT)${emphasis}[ \\t]*[:：][ \\t]*${emphasis}[ \\t]*(.*)$`,
-    "i",
-  );
-  const standalone = new RegExp(`^[ \\t>*_#-]*${emphasis}(VISUAL|TRANSCRIPT)${emphasis}[ \\t]*$`, "i");
-  const bodies: { visual: string[]; transcript: string[] } = { visual: [], transcript: [] };
-  let current: "visual" | "transcript" | undefined;
-  for (const line of trimmed.replace(/\r\n?/g, "\n").split("\n")) {
-    const match = line.match(withColon) ?? line.match(standalone);
-    if (match) {
-      current = match[1].toLowerCase() === "visual" ? "visual" : "transcript";
-      const rest = (match[2] ?? "").trim();
-      if (rest) bodies[current].push(rest);
-      continue;
-    }
-    if (current) bodies[current].push(line);
-  }
-  const build = (visualParts: string[], transcriptParts: string[]) => {
-    const built: { visual?: string; transcript?: string } = {};
-    const visual = visualParts.join("\n").trim();
-    const transcript = transcriptParts.join("\n").trim();
-    if (visual) built.visual = visual;
-    if (transcript) built.transcript = transcript;
-    return built;
-  };
-  const lineBased = build(bodies.visual, bodies.transcript);
-  if (lineBased.visual && lineBased.transcript) return lineBased;
-
-  // A single line that packs both labels inline. Splitting is allowed only when
-  // every separator is a complete, unquoted token followed by an explicit colon,
-  // so a label quoted inside prose can never become a heading.
-  if (!/\n/.test(trimmed)) {
-    const token =
-      /(?:^|[\s>*_#-])(?:\*\*|__|\*|_|`)?(VISUAL|TRANSCRIPT)(?:\*\*|__|\*|_|`)?[ \t]*[:：][ \t]*(?:\*\*|__|\*|_|`)?/gi;
-    const spans: { key: "visual" | "transcript"; start: number; end: number }[] = [];
-    for (const match of trimmed.matchAll(token)) {
-      const at = match.index ?? 0;
-      const tokenAt = at + match[0].indexOf(match[1]);
-      // An odd number of quotes before the token means it sits inside prose.
-      if ((trimmed.slice(0, tokenAt).match(/"/g) ?? []).length % 2 === 1) continue;
-      spans.push({
-        key: match[1].toLowerCase() === "visual" ? "visual" : "transcript",
-        start: at,
-        end: at + match[0].length,
-      });
-    }
-    if (new Set(spans.map((span) => span.key)).size >= 2) {
-      const inline = build([], []);
-      for (let i = 0; i < spans.length; i += 1) {
-        const stop = i + 1 < spans.length ? spans[i + 1].start : trimmed.length;
-        const body = trimmed.slice(spans[i].end, stop).trim();
-        if (!body) continue;
-        if (spans[i].key === "visual") inline.visual ??= body;
-        else inline.transcript ??= body;
-      }
-      // Only replace the line-based result when the inline split actually found
-      // something; an empty body must never become a transcript.
-      if (inline.visual || inline.transcript) return inline;
-    }
-  }
-  if (!lineBased.visual && !lineBased.transcript) return { visual: trimmed };
-  return lineBased;
-}
-
-/**
- * Read a Gemini reply. The request asks for JSON, so the model names the sections
- * itself; only a reply that ignored that falls back to heading heuristics.
+ * JSON is the only structured contract: the request asks for it (and the model
+ * may not comply), and the schema makes the model *state* which part is speech.
+ * Anything else is kept whole as the visual description, with no transcript.
+ *
+ * There used to be a heading heuristic here (`VISUAL:`/`TRANSCRIPT:` on their own
+ * lines). Six review rounds produced a defect in it every time — a label quoted
+ * inside prose, a blockquoted line, `Transcriptomics`, `__init__`, a heading-less
+ * sentence containing both labels — and each one fabricated speech out of visual
+ * content. Guessing where speech begins is not something this pipeline can do
+ * safely, and the two failure modes are not symmetric: a missing transcript is
+ * recoverable by STT, whereas a fabricated one is published as evidence.
  */
 export function parseGeminiResponse(text: string): { visual?: string; transcript?: string } {
   const trimmed = text.trim();
@@ -470,9 +401,9 @@ export function parseGeminiResponse(text: string): { visual?: string; transcript
       if (result.visual || result.transcript) return result;
     }
   } catch {
-    // Not JSON: fall through to the conservative heading parser.
+    // Not JSON: the whole reply is visual evidence below.
   }
-  return parseGeminiSections(trimmed);
+  return { visual: trimmed };
 }
 
 interface GeminiResult {
