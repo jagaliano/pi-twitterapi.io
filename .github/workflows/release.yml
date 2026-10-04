@@ -17,9 +17,12 @@
 #
 # A manual run must target a tag: workflow_dispatch uses the workflow as it
 # exists at that ref, so the ref has to contain the revision you want to run.
+#
+# Actions are pinned to commit SHAs (tag in the trailing comment) so a repointed
+# tag cannot inject code into a workflow that holds NPM_TOKEN.
 name: Release
 
-on:
+"on":
   push:
     tags:
       - "v*"
@@ -40,16 +43,17 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4
         with:
           version: 12
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: lts/*
-          cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Check the tag matches package.json
@@ -86,14 +90,60 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # A published version is immutable, so the publish and the GitHub release
+      # are decided separately: a rerun after a failed release step must skip
+      # the publish and repair the release instead of failing on npm's
+      # "version already exists" error.
+      - name: Decide whether to publish
+        id: npm_state
+        env:
+          PUBLISH_INPUT: ${{ inputs.publish }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          requested=false
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            requested=true
+          fi
+          if [ "${PUBLISH_INPUT}" = "true" ]; then
+            requested=true
+          fi
+          set +e
+          output=$(npm view "$name@$version" version 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exists=true
+            echo "$name@$version is already published."
+          elif printf '%s' "$output" | grep -qE "E404|404 Not Found"; then
+            exists=false
+            echo "$name@$version is not published yet."
+          else
+            printf '%s\n' "$output" >&2
+            echo "Could not tell whether $name@$version exists." >&2
+            exit 1
+          fi
+          publish=false
+          if [ "$requested" = "true" ] && [ "$exists" = "false" ]; then
+            publish=true
+          fi
+          if [ "$publish" = "false" ]; then
+            echo "Skipping publish (requested=$requested exists=$exists)."
+          fi
+          {
+            echo "exists=$exists"
+            echo "publish=$publish"
+            echo "requested=$requested"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish to npm
-        if: ${{ github.event_name == 'push' || inputs.publish }}
+        if: steps.npm_state.outputs.publish == 'true'
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create the GitHub release
-        if: ${{ github.event_name == 'push' || inputs.publish }}
+        if: steps.npm_state.outputs.requested == 'true'
         run: |
           tag="$GITHUB_REF_NAME"
           if gh release view "$tag" >/dev/null 2>&1; then

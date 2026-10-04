@@ -62,10 +62,12 @@ override — and set only the keys you need:
 | `minRequestIntervalMs` | no | Minimum spacing between upstream requests (default 5000). twitterapi.io allows 0.2 QPS on unpaid accounts; raise it if you are being throttled, lower it for a higher-QPS tier, or set it to 0 to disable pacing. |
 | `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). |
 
-> **Important:** `pi-twitterapi.io` requires a pi version whose
-> `ModelRegistry.complete` is available (verified absent on pi 0.80.6, present on
-> pi 0.99.2; the declared peer range is `>=0.99.2 <2`). Synthesis is a real model
-> call, so it consumes tokens on the configured model.
+> **Important:** the extension needs a pi version whose `ModelRegistry.complete`
+> exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on
+> pi 1.0.2. The host packages are declared as peers with a `"*"` range because pi
+> supplies them at runtime, so that range does not enforce the capability: check
+> your pi version if you are on an old release. Synthesis is a real model call, so
+> it consumes tokens on the configured model.
 
 ## The `twitter` tool
 
@@ -231,6 +233,10 @@ through [jiti](https://github.com/unjs/jiti), and the published package ships
 those sources, so `pi install npm:pi-twitterapi.io` and
 `pi install git:github.com/jagaliano/pi-twitterapi.io` both work without a
 compile step. `src/*.test.ts` files are excluded from the npm tarball.
+
+The dev dependencies are version ranges (pi 1.0.2, typebox 1.3.x) resolved by
+[`pnpm-lock.yaml`](pnpm-lock.yaml); CI installs them with `--frozen-lockfile`,
+so a build is reproducible from the lockfile rather than from the manifest.
 
 ## Releases
 

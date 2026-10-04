@@ -69,6 +69,17 @@ test("the mode, queryType and replySort parameters are closed sets", () => {
   assert.equal(Value.Check(parameters, { query: "q", mode: "nope" }), false);
   assert.equal(Value.Check(parameters, { query: "q", queryType: "Recent" }), false);
   assert.equal(Value.Check(parameters, { query: "q", replySort: "Top" }), false);
+
+  // The accepted side matters as much as the rejected side: every documented
+  // value validates, and an omitted mode stays valid because the tool defaults
+  // it to "posts" at runtime.
+  assert.equal(Value.Check(parameters, { query: "q" }), true);
+  for (const value of ["Latest", "Top"]) {
+    assert.equal(Value.Check(parameters, { query: "q", queryType: value }), true);
+  }
+  for (const value of ["Relevance", "Latest", "Likes"]) {
+    assert.equal(Value.Check(parameters, { query: "q", replySort: value }), true);
+  }
 });
 
 test("execute rejects with actionable guidance when no credentials exist", async () => {
