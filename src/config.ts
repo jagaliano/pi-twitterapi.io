@@ -109,7 +109,7 @@ export interface TwitterConfig {
   maxFrames: number;
   /** Videos processed per search (default 1, max 3). */
   maxVideosPerSearch: number;
-  /** Time budget for the video phase in ms (default 90_000, effective max 120_000). */
+  /** Time budget for the video phase in ms (default 180_000, effective max 300_000). */
   videoBudgetMs: number;
   /** Notes about ignored/overridden settings, appended to result disclosures. */
   configNotes: string[];

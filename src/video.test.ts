@@ -176,6 +176,30 @@ test("processVideo downloads the highest-quality variant that actually fits (P1-
   });
 });
 
+test("rankByMeasuredSize keeps the estimate's inline preference for unmeasured variants", () => {
+  // `mid` estimates inside the inline cap but its HEAD failed; `high` was measured
+  // over the inline cap though inside the download cap. The estimate must not be
+  // discarded for `mid`, or a partial sweep would needlessly take the Files path.
+  const candidates = [
+    { url: "high", bitrate: 2_400_000 },
+    { url: "mid", bitrate: 1_000_000 },
+  ];
+  const ranked = rankByMeasuredSize(candidates, new Map([["high", 3_000_000]]), {
+    maxBytes: 32 * 1024 * 1024,
+    inlineBytes: 2_000_000,
+    durationMs: 10_000,
+  });
+  assert.deepEqual(ranked.map((v) => v.url), ["mid", "high"], "estimated-inline variant stays first");
+});
+
+test("rankByMeasuredSize preserves order across duplicate URLs", () => {
+  // The parser does not deduplicate variants, and a URL-keyed position map would
+  // collapse these into the wrong order.
+  const candidates = [{ url: "a" }, { url: "b" }, { url: "a" }];
+  const ranked = rankByMeasuredSize(candidates, new Map(), { maxBytes: 1_000 });
+  assert.deepEqual(ranked.map((v) => v.url), ["a", "b", "a"]);
+});
+
 test("a hanging HEAD probe cannot spend the video budget", async () => {
   await withTempDir(async (dir) => {
     const downloads: string[] = [];
@@ -221,6 +245,57 @@ test("a hanging HEAD probe cannot spend the video budget", async () => {
     assert.ok(downloads.length > 0, "a variant was still downloaded after the probes timed out");
     assert.ok(Date.now() - started < 5_000, "the probe sweep was bounded");
     assert.equal(result.method, "frames-only");
+  });
+});
+
+test("a probe cannot run past the sweep budget", async () => {
+  await withTempDir(async (dir) => {
+    let headCalls = 0;
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
+        headCalls += 1;
+        // Responds slowly but honours abort, like a real fetch. The sweep budget
+        // (100 ms) is far below this latency (600 ms), so the probe must be cut off
+        // at the sweep deadline rather than running to its own 5 s timeout.
+        return await new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(resolve, 600);
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(new Error("aborted"));
+          };
+          if (init?.signal?.aborted) onAbort();
+          else init?.signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const variants = Array.from({ length: 6 }, (_, i) => ({
+      url: `https://video.twimg.com/v${i}.mp4`,
+      bitrate: 200_000 + i * 100_000,
+    }));
+    const started = Date.now();
+    await processVideo({
+      postUrl: "https://x.com/a/status/32",
+      media: { type: "video", url: "https://pbs.twimg.com/poster.jpg", durationMillis: 10_000, videoVariantsDetailed: variants },
+      config: loadTwitterConfig({ twitter: { maxFrames: 1 } }),
+      deps: {
+        fetcher,
+        env: {},
+        exec: fakeExec().exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => Date.now(),
+        probeTimeoutMs: 5_000,
+        probeBudgetMs: 100,
+      },
+      deadline: Date.now() + 60_000,
+      modelSupportsImage: true,
+    });
+    const elapsed = Date.now() - started;
+    assert.ok(headCalls >= 1, "at least one probe ran");
+    assert.ok(elapsed < 350, `probe was cut off at the sweep deadline (took ${elapsed}ms with ${headCalls} probes)`);
   });
 });
 

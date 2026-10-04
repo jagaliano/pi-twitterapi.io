@@ -254,24 +254,27 @@ export async function probeVariantBytes(
 }
 
 /**
- * Re-rank candidates using measured sizes where they are known, keeping
- * `orderVariants` order for the rest. Unknown sizes sit after everything known to
- * fit and before everything known to be over the cap, because they are still
- * worth one attempt and `downloadVideo` re-checks the declared length anyway.
+ * Re-rank candidates, preferring a measured size and falling back to the estimate
+ * for anything that could not be measured. Both are compared against the same
+ * caps, so a variant whose HEAD failed still keeps its estimate-based inline
+ * preference instead of being pushed behind a measured non-inline one — otherwise
+ * a partial sweep would route a run to the Files path needlessly.
+ *
+ * Groups: 0 fits inline, 1 fits the download cap, 2 unmeasurable and unestimated,
+ * 3 provably over the cap.
  */
 export function rankByMeasuredSize(
   candidates: { url: string; bitrate?: number }[],
   measured: ReadonlyMap<string, number>,
-  options: { maxBytes: number; inlineBytes?: number },
+  options: { maxBytes: number; inlineBytes?: number; durationMs?: number },
 ): { url: string; bitrate?: number }[] {
   const inlineCap = options.inlineBytes === undefined ? undefined : Math.min(options.inlineBytes, options.maxBytes);
-  const group = (v: { url: string }): number => {
-    const bytes = measured.get(v.url);
+  const group = (v: { url: string; bitrate?: number }): number => {
+    const bytes = measured.get(v.url) ?? estimateVariantBytes(v.bitrate, options.durationMs);
     if (bytes === undefined) return 2;
     if (bytes > options.maxBytes) return 3;
     return inlineCap !== undefined && bytes <= inlineCap ? 0 : 1;
   };
-  const position = new Map(candidates.map((v, i) => [v.url, i]));
   const desc = (a: { bitrate?: number }, b: { bitrate?: number }) => (b.bitrate ?? -1) - (a.bitrate ?? -1);
   const asc = (a: { bitrate?: number }, b: { bitrate?: number }) => (a.bitrate ?? -1) - (b.bitrate ?? -1);
   return [...candidates].sort((a, b) => {
@@ -281,7 +284,9 @@ export function rankByMeasuredSize(
     // Best quality first within a fitting group: a variant the estimate thought
     // was over the inline cap, but which actually fits, now outranks one that only
     // fitted by estimate.
-    if (ga === 2) return (position.get(a.url) ?? 0) - (position.get(b.url) ?? 0);
+    // Unknown-size variants keep their existing order; `0` rather than a position
+    // map, because duplicate URLs would collide in the map and reorder the list.
+    if (ga === 2) return 0;
     return ga === 3 ? asc(a, b) : desc(a, b);
   });
 }
@@ -793,20 +798,27 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
   });
   // Measure before choosing: the bitrate estimate overstates real bytes by ~3x,
   // so it picks a needlessly low quality and can misjudge the caps (P1-5). Each
-  // probe is bounded on its own as well as by the phase, and the sweep as a
-  // whole is bounded, so a slow host cannot spend the video budget on HEADs.
-  const probeTimeout = deps.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
-  const probeBudget = deps.probeBudgetMs ?? PROBE_BUDGET_MS;
+  // probe is bounded on its own as well as by the phase, and the sweep as a whole
+  // is bounded, so a slow host cannot spend the video budget on HEADs. The
+  // overrides are clamped so a caller cannot enlarge them past the defaults.
+  const clamp = (value: number | undefined, limit: number) =>
+    value === undefined ? limit : Math.min(Math.max(1, value), limit);
+  const probeTimeout = clamp(deps.probeTimeoutMs, PROBE_TIMEOUT_MS);
+  const probeBudget = clamp(deps.probeBudgetMs, PROBE_BUDGET_MS);
   const probeUntil = Math.min(deadline, now() + probeBudget);
   const measured = new Map<string, number>();
   for (const variant of candidates) {
     if (deps.signal?.aborted || remaining(deadline, now) <= 1 || now() >= probeUntil) break;
-    const bytes = await probeVariantBytes(variant.url, deps, Math.min(deadline, now() + probeTimeout), now);
+    // `probeUntil` is part of this probe's own deadline too, otherwise several
+    // probes that each stay under `probeTimeout` can together overrun the sweep.
+    const stop = Math.min(deadline, probeUntil, now() + probeTimeout);
+    const bytes = await probeVariantBytes(variant.url, deps, stop, now);
     if (bytes !== undefined) measured.set(variant.url, bytes);
   }
   const ordered = rankByMeasuredSize(candidates, measured, {
     maxBytes: config.maxVideoBytes,
     inlineBytes: inlinePreferred,
+    durationMs: media.durationMillis,
   });
 
   const dir = await mktemp();
