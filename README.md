@@ -255,8 +255,8 @@ is explicitly requested:
 
 ```bash
 gh workflow run verify-npm-token.yml --repo jagaliano/pi-twitterapi.io
-gh workflow run release.yml --ref v0.1.1                  # dry run
-gh workflow run release.yml --ref v0.1.1 -f publish=true  # the real publish
+gh workflow run release.yml --ref vX.Y.Z                  # dry run
+gh workflow run release.yml --ref vX.Y.Z -f publish=true  # the real publish
 ```
 
 `workflow_dispatch` runs the workflow as it exists at the given ref, so a manual
