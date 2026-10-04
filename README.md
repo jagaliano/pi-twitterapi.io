@@ -207,8 +207,13 @@ version, including parameter mapping, lives in
 | Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame only (chat models cannot ingest video) |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
-| Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens |
+| Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens — [cost comparison](docs/pricing-comparison.md) |
 | Shape | one `x_search` request | one `twitter` tool with 17 modes |
+
+Per-item costs differ by more than an order of magnitude, and the two routes
+meter different things: [a dated, sourced cost comparison](docs/pricing-comparison.md)
+covers the unit prices, the counting rules that change the bill, cost per mode,
+and how to add the answer model's tokens.
 
 **Summary.** `pi-twitterapi.io` matches `x_search` on keyword search, user search,
 thread fetch, handle filters, date ranges and image understanding, and adds a
