@@ -28,7 +28,8 @@
     "!src/**/*.test.ts",
     "README.md",
     "CHANGELOG.md",
-    "docs"
+    "docs",
+    "!docs/video-spike.md"
   ],
   "pi": {
     "extensions": [

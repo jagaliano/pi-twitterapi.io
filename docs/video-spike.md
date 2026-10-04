@@ -1,5 +1,10 @@
 # Video spike (M0) — observed API shapes
 
+Internal spike log. Deliberately **not** published to npm (`package.json` excludes
+it via `!docs/video-spike.md`): it records what was observed while building v1, so
+it is not an end-user document and nothing in the package links to it. Keep the
+findings accurate anyway — the implementation relies on them.
+
 Recorded 2026-10-04 while implementing v1. Update as items are confirmed.
 
 ## 1. twitterapi.io media shape — ✅ CONFIRMED (live)
