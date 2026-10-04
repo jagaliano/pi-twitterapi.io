@@ -84,12 +84,18 @@ override — and set only the keys you need:
 > key is never sent to another host.
 >
 > **Retention and duration.** When native video uses the Gemini Files API the
-> uploaded file is deleted after the call; if deletion fails the answer says so.
-> Only the first `maxVideoSeconds` (default 120 s) are analysed — the video is
-> trimmed locally when possible, otherwise the limit is disclosed as not applied.
-> Worst case a video call can take a few minutes (retrieval pacing + 60 s image
-> phase + up to 120 s video phase + synthesis), so expect a long tool call on a
-> media-heavy query.
+> upload is deleted on a **best-effort** basis once the call finishes, with its
+> own short timeout so a cancelled request cannot skip it. If deletion fails — or
+> an upload happened but generation failed, returned nothing, or was cancelled —
+> the answer says the file may be retained. Google's Files API keeps undeleted
+> uploads for roughly **48 hours**, so treat such a file as readable by that
+> project for about that long. Only the first `maxVideoSeconds` (default 120 s)
+> are analysed: the video is trimmed locally when possible, and a clip that
+> **cannot** be trimmed is not uploaded whole — the native path is skipped and
+> disclosed, while frames and audio stay limited to that window. Worst case a
+> single video call can take roughly **six minutes** (retrieval pacing + 60 s
+> media phase + up to 120 s video phase + synthesis), so expect a long tool call
+> on a media-heavy query.
 
 > **Important:** the extension needs a pi version whose `ModelRegistry.complete`
 > exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on

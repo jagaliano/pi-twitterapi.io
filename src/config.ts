@@ -70,6 +70,13 @@ export interface TwitterConfig {
   videoEndpointType: VideoEndpointType;
   /** Base URL override. `gemini-files` defaults to Google; other hosts need an explicit endpoint + key env. */
   videoEndpoint?: string;
+  /**
+   * True only when this loader accepted `videoEndpoint` after the P0-1 checks
+   * (explicit key env + https). The video adapter re-checks it so a programmatic
+   * caller cannot hand-build a config that redirects the default key to another
+   * host (P2-9).
+   */
+  videoEndpointExplicit: boolean;
   /** Native-video model id (e.g. "gemini-2.5-flash"). */
   videoModel?: string;
   /** Env var holding the native-video API key (default `GOOGLE_API_KEY`). */
@@ -211,6 +218,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     enableVideoProcessing: videoRequested && enableVideoUnderstanding,
     videoEndpointType,
     videoEndpoint,
+    videoEndpointExplicit: Boolean(videoEndpoint && explicitKeyEnv),
     videoModel: text(user.videoModel),
     videoApiKeyEnv: explicitKeyEnv ?? DEFAULT_VIDEO_API_KEY_ENV,
     sttEndpoint: text(user.sttEndpoint),

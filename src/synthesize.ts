@@ -289,6 +289,11 @@ export interface MediaCollection {
 }
 
 const MEDIA_PHASE_BUDGET_MS = 60_000;
+/**
+ * Reserved window for the poster fallback (P1-3). A video that consumes the whole
+ * media budget must not also cost the poster that was announced as its fallback.
+ */
+const POSTER_FALLBACK_BUDGET_MS = 15_000;
 
 /** A media item that represents a video (has playable variants / poster only). */
 function isVideoMedia(media: TweetMedia): boolean {
@@ -327,8 +332,6 @@ export async function collectMedia(
   const attemptCap = Math.max(1, config.maxMediaPerSearch) * 3;
   const budgetMs = deps.mediaBudgetMs ?? MEDIA_PHASE_BUDGET_MS;
   const deadline = clock() + budgetMs;
-  // One budget for the whole video phase, not per video (P1-3).
-  const videoPhaseDeadline = clock() + config.videoBudgetMs;
   let attempts = 0;
   // Photos and posters share `maxMediaPerSearch`; frames are capped separately
   // by `maxFrames` and do not consume this budget (P2-7).
@@ -347,6 +350,14 @@ export async function collectMedia(
     );
   }
 
+  // Posters keep a bounded reserved window past the media deadline, computed once
+  // and shared (P1-3).
+  let posterDeadline = 0;
+  const posterLimit = (): number => {
+    if (posterDeadline === 0) posterDeadline = clock() + POSTER_FALLBACK_BUDGET_MS;
+    return Math.max(deadline, posterDeadline);
+  };
+
   // Fetch a poster frame within the shared attachment budget.
   const fetchPoster = async (postUrl: string, media: TweetMedia): Promise<void> => {
     if (!config.enableVideoUnderstanding || !model.supportsImage || !fetchMedia || !media.url) return;
@@ -354,12 +365,13 @@ export async function collectMedia(
       skippedForCap += 1;
       return;
     }
-    if (attempts >= attemptCap || clock() >= deadline) {
+    const limit = posterLimit();
+    if (attempts >= attemptCap || clock() >= limit) {
       skippedForBudget += 1;
       return;
     }
     attempts += 1;
-    const attachment = await fetchMedia(media.url, Math.max(1, deadline - clock()));
+    const attachment = await fetchMedia(media.url, Math.max(1, limit - clock()));
     if (!attachment) {
       failed += 1;
       return;
@@ -398,6 +410,9 @@ export async function collectMedia(
   }
 
   const videoPosts = withMedia.filter((t) => (t.media ?? []).some(isVideoMedia));
+  // One budget for the whole video phase, not per video, started *after* the
+  // photo phase so slow photo downloads cannot consume it (P1-3, P2-5).
+  const videoPhaseDeadline = clock() + config.videoBudgetMs;
   let videosStarted = 0;
   for (const tweet of videoPosts) {
     const media = (tweet.media ?? []).find(isVideoMedia);

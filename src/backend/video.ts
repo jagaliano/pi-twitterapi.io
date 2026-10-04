@@ -37,8 +37,11 @@ export interface VideoDeps {
   /** Environment for credential lookup. Never read from `process.env` inside. */
   env?: Record<string, string | undefined>;
   exec?: ExecFn;
-  /** Whether a binary is available; injectable for tests. */
-  checkBinary?: (bin: string) => Promise<boolean>;
+  /**
+   * Whether a binary is available; injectable for tests. It receives the abort
+   * signal and remaining budget so detection can never outlive the phase (P1-2).
+   */
+  checkBinary?: (bin: string, options: { signal?: AbortSignal; timeoutMs: number }) => Promise<boolean>;
   mktemp?: () => Promise<string>;
   rmTemp?: (dir: string) => Promise<void>;
   now?: () => number;
@@ -104,9 +107,16 @@ function defaultExec(): ExecFn {
   };
 }
 
-async function defaultCheckBinary(exec: ExecFn, bin: string): Promise<boolean> {
+async function defaultCheckBinary(
+  exec: ExecFn,
+  bin: string,
+  options: { signal?: AbortSignal; timeoutMs: number },
+): Promise<boolean> {
   try {
-    await exec(bin, ["-version"], { timeout: 5_000 });
+    await exec(bin, ["-version"], {
+      timeout: Math.max(1, Math.min(5_000, options.timeoutMs)),
+      signal: options.signal,
+    });
     return true;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
@@ -156,6 +166,42 @@ function variantList(media: TweetMedia): { url: string; bitrate?: number }[] {
     : (media.videoVariants ?? []).map((url) => ({ url }));
 }
 
+export interface VariantOrderOptions {
+  maxBytes: number;
+  inlineBytes?: number;
+  durationMs?: number;
+}
+
+/**
+ * Rank every variant once, best first, so the selector and the production
+ * download retry loop can never disagree (P2-4):
+ *
+ *   1. fits the inline cap (and therefore the download cap) — highest bitrate first
+ *   2. fits only the download cap — highest bitrate first
+ *   3. not provably within the cap — smallest first, so an over-cap estimate is
+ *      rejected before a *larger* download is attempted
+ */
+export function orderVariants(media: TweetMedia, options: VariantOrderOptions): { url: string; bitrate?: number }[] {
+  const variants = variantList(media);
+  const durationMs = options.durationMs ?? media.durationMillis;
+  const size = (v: { bitrate?: number }) => estimateVariantBytes(v.bitrate, durationMs);
+  const downloadCap = options.maxBytes;
+  const inlineCap = options.inlineBytes === undefined ? undefined : Math.min(options.inlineBytes, downloadCap);
+  const desc = (a: { bitrate?: number }, b: { bitrate?: number }) => (b.bitrate ?? -1) - (a.bitrate ?? -1);
+  const asc = (a: { bitrate?: number }, b: { bitrate?: number }) => (a.bitrate ?? -1) - (b.bitrate ?? -1);
+  const group = (v: { bitrate?: number }): number => {
+    const bytes = size(v);
+    if (bytes === undefined || bytes > downloadCap) return 2;
+    return inlineCap !== undefined && bytes <= inlineCap ? 0 : 1;
+  };
+  return [...variants].sort((a, b) => {
+    const ga = group(a);
+    const gb = group(b);
+    if (ga !== gb) return ga - gb;
+    return ga === 2 ? asc(a, b) : desc(a, b);
+  });
+}
+
 /**
  * Pick the highest-bitrate variant that fits `maxBytes`; prefer one that also
  * fits `inlineBytes` when given (Gemini inline path). Falls back to the smallest
@@ -163,28 +209,9 @@ function variantList(media: TweetMedia): { url: string; bitrate?: number }[] {
  */
 export function selectVariant(
   media: TweetMedia,
-  options: { maxBytes: number; inlineBytes?: number; durationMs?: number },
+  options: VariantOrderOptions,
 ): { url: string; bitrate?: number } | undefined {
-  const variants = variantList(media);
-  if (variants.length === 0) return undefined;
-  const durationMs = options.durationMs ?? media.durationMillis;
-  const fits = (v: { bitrate?: number }, cap: number) => {
-    const size = estimateVariantBytes(v.bitrate, durationMs);
-    return size !== undefined && size <= cap;
-  };
-  // A variant must always fit the hard download cap; the inline cap is a
-  // preference within that (P2-6).
-  const downloadCap = options.maxBytes;
-  const inlineCap = options.inlineBytes === undefined ? undefined : Math.min(options.inlineBytes, downloadCap);
-  if (inlineCap !== undefined) {
-    for (let i = variants.length - 1; i >= 0; i -= 1) {
-      if (fits(variants[i], inlineCap)) return variants[i];
-    }
-  }
-  for (let i = variants.length - 1; i >= 0; i -= 1) {
-    if (fits(variants[i], downloadCap)) return variants[i];
-  }
-  return variants[0];
+  return orderVariants(media, options)[0];
 }
 
 /** Download an MP4 to `dest` with the SSRF guards shared with images. */
@@ -333,20 +360,36 @@ function geminiConfigured(config: TwitterConfig, env: Record<string, string | un
   return Boolean(config.videoModel && env[config.videoApiKeyEnv]);
 }
 
-/** Parse the VISUAL/TRANSCRIPT sections of a Gemini response (P2-9). */
+/**
+ * Parse the VISUAL/TRANSCRIPT sections of a Gemini response (P2-8). Sections are
+ * located *independently*, so a reordered reply (transcript first) or Markdown
+ * headings (`**VISUAL:**`) keep both parts instead of swallowing the other.
+ */
 export function parseGeminiSections(text: string): { visual?: string; transcript?: string } {
   const trimmed = text.trim();
   if (!trimmed) return {};
-  const transcriptAt = trimmed.search(/\bTRANSCRIPT\s*:/i);
-  if (transcriptAt < 0) {
-    return { visual: trimmed.replace(/^\s*VISUAL\s*:/i, "").trim() };
+  const clean = (value: string) => value.replace(/^[\s*_#>`\-]+/, "").replace(/[*_`]+\s*$/, "").trim();
+  const found: { key: "visual" | "transcript"; start: number; end: number }[] = [];
+  // Anchored to a line start (allowing Markdown prefixes) so the word inside
+  // prose is not mistaken for a heading, with an optional colon.
+  const heading = /(?:^|\n)[ \t>*_#-]*(VISUAL|TRANSCRIPT)[ \t]*[:：]?/gi;
+  for (const match of trimmed.matchAll(heading)) {
+    const at = match.index ?? 0;
+    found.push({
+      key: match[1].toLowerCase() === "visual" ? "visual" : "transcript",
+      start: at,
+      end: at + match[0].length,
+    });
   }
-  const visual = trimmed
-    .slice(0, transcriptAt)
-    .replace(/^\s*VISUAL\s*:/i, "")
-    .trim();
-  const transcript = trimmed.slice(transcriptAt).replace(/^\s*TRANSCRIPT\s*:/i, "").trim();
-  return { visual: visual || undefined, transcript: transcript || undefined };
+  // No recognisable heading: the whole reply is the visual description.
+  if (found.length === 0) return { visual: trimmed };
+  const sections: { visual?: string; transcript?: string } = {};
+  for (let i = 0; i < found.length; i += 1) {
+    const stop = i + 1 < found.length ? found[i + 1].start : trimmed.length;
+    const body = clean(trimmed.slice(found[i].end, stop));
+    if (body && sections[found[i].key] === undefined) sections[found[i].key] = body;
+  }
+  return sections;
 }
 
 interface GeminiResult {
@@ -523,17 +566,13 @@ async function remoteStt(
   const url = `${endpoint.replace(/\/$/, "")}/audio/transcriptions`;
   try {
     const bytes = await readFile(audioFile);
-    const attempt = async (verbose: boolean): Promise<Response> => {
+    const attempt = async (format: "verbose_json" | "json" | "text"): Promise<Response> => {
       const form = new FormData();
       form.append("model", model);
       form.append("file", new Blob([bytes], { type: "audio/mpeg" }), "audio.mp3");
       if (config.sttLanguage && config.sttLanguage !== "auto") form.append("language", config.sttLanguage);
-      if (verbose) {
-        form.append("response_format", "verbose_json");
-        form.append("timestamp_granularities[]", "segment");
-      } else {
-        form.append("response_format", "json");
-      }
+      form.append("response_format", format);
+      if (format === "verbose_json") form.append("timestamp_granularities[]", "segment");
       return deps.fetcher(url, {
         method: "POST",
         headers: { authorization: `Bearer ${apiKey}` },
@@ -542,12 +581,23 @@ async function remoteStt(
         redirect: "error",
       });
     };
-    // Prefer verbose JSON (timestamps); fall back to plain JSON for providers
-    // that reject it (P2-10).
-    let response = await attempt(true);
-    if (!response.ok) response = await attempt(false);
-    if (!response.ok) return { note: `STT endpoint returned HTTP ${response.status}.` };
-    const text = sttTextFromJson(await response.json().catch(() => undefined));
+    // Only a *capability* rejection (unsupported response_format) justifies
+    // paying for another upload. Auth, throttling and server failures are
+    // reported instead of re-posting the same audio (P2-7).
+    const unsupported = (status: number) => status === 400 || status === 415 || status === 422;
+    const formats: ("verbose_json" | "json" | "text")[] = ["verbose_json", "json", "text"];
+    let response: Response | undefined;
+    let used: "verbose_json" | "json" | "text" = "text";
+    for (const format of formats) {
+      response = await attempt(format);
+      used = format;
+      if (response.ok || !unsupported(response.status)) break;
+    }
+    if (!response || !response.ok) return { note: `STT endpoint returned HTTP ${response?.status ?? 0}.` };
+    const text =
+      used === "text"
+        ? (await response.text().catch(() => "")).trim() || undefined
+        : sttTextFromJson(await response.json().catch(() => undefined));
     return { transcript: text };
   } catch (error) {
     return { note: `STT failed: ${(error as Error).message}` };
@@ -595,7 +645,9 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
   const { media, config, deps, deadline, modelSupportsImage } = input;
   const now = deps.now ?? Date.now;
   const exec = deps.exec ?? defaultExec();
-  const checkBinary = deps.checkBinary ?? ((bin: string) => defaultCheckBinary(exec, bin));
+  const checkBinary =
+    deps.checkBinary ??
+    ((bin: string, options: { signal?: AbortSignal; timeoutMs: number }) => defaultCheckBinary(exec, bin, options));
   const mktemp = deps.mktemp ?? (() => mkdtemp(join(tmpdir(), "pi-twitter-video-")));
   const rmTemp = deps.rmTemp ?? ((dir: string) => rm(dir, { recursive: true, force: true }));
   const env = deps.env ?? {};
@@ -608,16 +660,13 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
 
   const isGif = media.type === "animated_gif";
   const inlineThreshold = deps.inlineRawBytes ?? GEMINI_INLINE_RAW_BYTES;
-  // Prefer variants that fit the Gemini inline threshold (cheaper, one request),
-  // then any variant within the download cap; never the largest blindly (P2-6).
+  // Same ranking as the selector, so the production retry loop can no longer
+  // start from the largest variant while `selectVariant` would pick a smaller
+  // one (P2-4).
   const inlinePreferred = config.videoEndpointType === "gemini-files" ? inlineThreshold : undefined;
-  const candidates = [...variantList(media)].reverse().sort((a, b) => {
-    if (inlinePreferred === undefined) return 0;
-    const fitsInline = (v: { bitrate?: number }) => {
-      const size = estimateVariantBytes(v.bitrate, media.durationMillis);
-      return size !== undefined && size <= inlinePreferred;
-    };
-    return (fitsInline(a) ? 0 : 1) - (fitsInline(b) ? 0 : 1);
+  const candidates = orderVariants(media, {
+    maxBytes: config.maxVideoBytes,
+    inlineBytes: inlinePreferred,
   });
 
   const dir = await mktemp();
@@ -644,7 +693,12 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     }
 
     const ffmpeg = config.ffmpegPath ?? "ffmpeg";
-    const haveFfmpeg = await checkBinary(ffmpeg);
+    // Detection shares the phase signal/deadline, so cancellation is not delayed
+    // by a hanging `-version` probe (P1-3).
+    const haveFfmpeg = await checkBinary(ffmpeg, {
+      signal: opSignal(deps, deadline, now),
+      timeoutMs: remaining(deadline, now),
+    });
     const ctx: FfmpegContext = { exec, bin: ffmpeg, now, signal: deps.signal, deps, deadline };
 
     let durationMs = media.durationMillis;
@@ -652,7 +706,8 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     const maxSeconds = config.maxVideoSeconds;
     const overLimit = durationMs !== undefined && durationMs > maxSeconds * 1000;
 
-    // Enforce the duration limit on the media actually sent/processed (P1-4).
+    // Enforce the duration limit on the media actually sent to a provider
+    // (P1-4). The local ffmpeg paths are additionally bounded by `-t maxSeconds`.
     let mediaFile = localFile;
     let trimmed = false;
     if (overLimit && haveFfmpeg) {
@@ -662,12 +717,16 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
         trimmed = true;
       }
     }
+    // An over-limit clip that could not be trimmed must never be uploaded whole:
+    // that would break the very cost/privacy bound the limit exists to enforce.
+    const nativeAllowed = !overLimit || trimmed;
     if (overLimit) {
       evidence.notes.push(
         trimmed
           ? `The video is ${Math.round((durationMs as number) / 1000)}s; only the first ${maxSeconds}s were analysed.`
-          : `The video is ${Math.round((durationMs as number) / 1000)}s and exceeds the ${maxSeconds}s limit; ` +
-              "it could not be trimmed locally, so the full clip was analysed.",
+          : `The video is ${Math.round((durationMs as number) / 1000)}s and exceeds the ${maxSeconds}s limit and ` +
+              "could not be trimmed locally, so native video analysis was skipped; frames and audio were " +
+              `limited to the first ${maxSeconds}s.`,
       );
     }
 
@@ -676,10 +735,19 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     let nativeMethod: VideoMethod | undefined;
 
     // Tier 1 — native video (v1: gemini-files only).
-    if (config.videoEndpointType === "gemini-files" && geminiConfigured(config, env)) {
+    if (nativeAllowed && config.videoEndpointType === "gemini-files" && geminiConfigured(config, env)) {
       const base = geminiBase(config);
+      // P2-9: authorisation is re-checked at the adapter boundary, not only where
+      // the config is loaded, so a caller-built config cannot send the default
+      // key to a host the user never explicitly authorised.
+      const authorized = config.videoEndpoint === undefined || config.videoEndpointExplicit === true;
       if (!/^https:\/\//i.test(base)) {
         evidence.notes.push("Native video was skipped: the configured endpoint is not https.");
+      } else if (!authorized) {
+        evidence.notes.push(
+          "Native video was skipped: a custom endpoint is only used when it was configured together with an " +
+            "explicit twitter.videoApiKeyEnv over https.",
+        );
       } else {
         const apiKey = env[config.videoApiKeyEnv] as string;
         const model = config.videoModel as string;
@@ -694,11 +762,13 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
           transcript = sections.transcript;
           nativeMethod = "gemini-native";
           evidence.notes.push("Video content was analysed by the configured Gemini endpoint.");
-          if (result.uploaded && result.deleted === false) {
-            evidence.notes.push("The uploaded video file could not be deleted from the endpoint and may be retained.");
-          }
         } else if (result.error) {
           evidence.notes.push(`Native video analysis failed: ${result.error}`);
+        }
+        // Retention is a property of the upload, not of a successful generation
+        // (P2-6): a failed, empty or cancelled run can still leave a file behind.
+        if (result.uploaded && result.deleted === false) {
+          evidence.notes.push("The uploaded video file could not be deleted from the endpoint and may be retained.");
         }
       }
     }
@@ -725,7 +795,9 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     // Tier 2 — STT (skip gifs: no audio track).
     const localStt = Boolean(config.whisperCppBinary && config.whisperModelPath);
     const remoteSttConfigured = Boolean(config.sttEndpoint && config.sttModel && config.sttApiKeyEnv && env[config.sttApiKeyEnv]);
-    if (!isGif && haveFfmpeg && (localStt || remoteSttConfigured)) {
+    // Skip STT when native analysis already produced a transcript (P2-7): re-running
+    // a paid transcription would add nothing.
+    if (!isGif && !transcript && haveFfmpeg && (localStt || remoteSttConfigured)) {
       const audioFile = join(dir, localStt ? "audio.wav" : "audio.mp3");
       const haveAudio = await extractAudio(ctx, mediaFile, audioFile, localStt, maxSeconds, remaining(deadline, now));
       if (haveAudio) {

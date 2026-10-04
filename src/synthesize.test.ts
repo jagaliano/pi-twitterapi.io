@@ -633,3 +633,54 @@ test("collectMedia keeps transcript evidence for a text-only model (M2)", async 
   assert.equal(result.images.length, 0, "text-only model gets no images");
   assert.equal(result.evidence?.[0]?.transcript, "the spoken line");
 });
+
+test("the poster fallback survives a video that exhausts the media budget (P1-3)", async () => {
+  const mediaTweet = tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] });
+  let now = 0;
+  let posterFetches = 0;
+  const result = await collectMedia([mediaTweet], VIDEO_CONFIG, VISION_MODEL, {
+    complete: async () => "",
+    now: () => now,
+    mediaBudgetMs: 60_000,
+    fetchMedia: async (): Promise<ImageAttachment | undefined> => {
+      posterFetches += 1;
+      return { data: "POSTER", mimeType: "image/jpeg" };
+    },
+    processVideo: async () => {
+      // Slow video work returns nothing *after* the media budget has expired —
+      // the announced poster fallback must still be attempted.
+      now += 90_000;
+      return { postUrl: mediaTweet.url!, method: "frames-only", frames: [], notes: [] };
+    },
+  });
+  assert.equal(posterFetches, 1, "the poster was still attempted");
+  assert.ok(result.images.some((image) => image.data === "POSTER"));
+});
+
+test("the video budget starts when video work starts, not before the photo phase (P2-5)", async () => {
+  const tweets = [
+    tweet({ id: "1", url: "https://x.com/a/status/1", media: [{ type: "photo", url: "https://pbs.twimg.com/photo.jpg" }] }),
+    tweet({ id: "2", url: "https://x.com/a/status/2", media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] }),
+  ];
+  const config = loadTwitterConfig({
+    twitter: { enableImageUnderstanding: true, enableVideoUnderstanding: true, enableVideoProcessing: true },
+  });
+  let now = 0;
+  let seenDeadline = -1;
+  await collectMedia(tweets, config, VISION_MODEL, {
+    complete: async () => "",
+    now: () => now,
+    mediaBudgetMs: 60_000,
+    fetchMedia: async (url): Promise<ImageAttachment | undefined> => {
+      // The photo phase alone burns 50s of the shared media budget.
+      if (url.includes("photo.jpg")) now += 50_000;
+      return { data: "X", mimeType: "image/jpeg" };
+    },
+    processVideo: async (input) => {
+      seenDeadline = input.deadline;
+      return { postUrl: input.postUrl, method: "frames-only", frames: [], notes: [] };
+    },
+  });
+  assert.equal(now >= 50_000, true);
+  assert.equal(seenDeadline, 50_000 + config.videoBudgetMs, "the video deadline is measured from the video phase");
+});

@@ -529,3 +529,299 @@ test("video processing requires both switches for all four combinations", () => 
   }
 });
 
+// --------------------------------------------- second-pass review regressions
+
+test("the loader marks an explicitly authorized custom endpoint (P2-9)", () => {
+  const authorized = loadTwitterConfig({ twitter: { videoEndpoint: "https://video.example", videoApiKeyEnv: "MY_KEY" } });
+  assert.equal(authorized.videoEndpoint, "https://video.example");
+  assert.equal(authorized.videoEndpointExplicit, true);
+
+  // Without an explicit key env the endpoint is dropped AND unmarked, so the
+  // adapter boundary cannot be talked into using it either.
+  const implicit = loadTwitterConfig({ twitter: { videoEndpoint: "https://video.example" } });
+  assert.equal(implicit.videoEndpoint, undefined);
+  assert.equal(implicit.videoEndpointExplicit, false);
+});
+
+test("processVideo never uploads an over-limit clip it could not trim (P1-1)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const exec: ExecFn = async (_file, args) => {
+      const output = args[args.length - 1];
+      if (args.includes("-i") && !args.includes("-y")) {
+        const error = new Error("probe") as Error & { stderr?: string };
+        error.stderr = "Duration: 00:10:00.00";
+        throw error;
+      }
+      // Clipping is unavailable/failing, so the duration limit cannot be met.
+      if (args.includes("-c") && args.includes("copy")) throw new Error("clip failed");
+      if (output.includes("frame-")) await writeFile(join(output.replace("%03d", "001")), new Uint8Array([1]));
+      else if (output.endsWith(".mp4") || output.endsWith(".mp3") || output.endsWith(".wav")) {
+        await writeFile(output, new Uint8Array([1]));
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const config = loadTwitterConfig({
+      twitter: {
+        videoEndpointType: "gemini-files",
+        videoModel: "gemini-2.5-flash",
+        videoApiKeyEnv: "GOOGLE_API_KEY",
+        maxVideoSeconds: 120,
+        maxFrames: 1,
+      },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/12",
+      media: videoMedia({ durationMillis: 600_000 }),
+      config,
+      deps: { ...nativeDeps(fetcher, dir, 1), exec },
+      deadline: 120_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(!calls.some((c) => c.url.includes(":generateContent")), "native analysis skipped");
+    assert.ok(!calls.some((c) => c.url.includes("/upload/")), "nothing was uploaded");
+    assert.ok(
+      result.notes.some((note) => /native video analysis was skipped/.test(note)),
+      "the skip is disclosed",
+    );
+  });
+});
+
+test("binary detection receives the phase signal so cancellation is not delayed (P1-2)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = videoFetcher();
+    const controller = new AbortController();
+    let captured: { signal?: AbortSignal; timeoutMs: number } | undefined;
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/13",
+      media: videoMedia(),
+      config: loadTwitterConfig({ twitter: {} }),
+      deps: {
+        fetcher,
+        env: {},
+        signal: controller.signal,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+        checkBinary: async (_bin, options) => {
+          captured = options;
+          return false;
+        },
+      },
+      deadline: 30_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(captured, "detection ran");
+    assert.ok(captured!.timeoutMs > 0 && captured!.timeoutMs <= 30_000, "detection is bounded by the phase deadline");
+    assert.equal(captured!.signal?.aborted, false);
+    controller.abort();
+    assert.equal(captured!.signal?.aborted, true, "detection aborts with the caller");
+    assert.equal(result.frames.length, 0);
+  });
+});
+
+test("processVideo starts from the highest variant that fits, not the largest (P2-4)", async () => {
+  await withTempDir(async (dir) => {
+    const downloads: string[] = [];
+    const fetcher = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes(".mp4")) downloads.push(url);
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({
+      twitter: { videoEndpointType: "gemini-files", videoModel: "gemini-2.5-flash", videoApiKeyEnv: "GOOGLE_API_KEY" },
+    });
+    await processVideo({
+      postUrl: "https://x.com/a/status/14",
+      media: {
+        type: "video",
+        url: "https://pbs.twimg.com/poster.jpg",
+        durationMillis: 10_000,
+        videoVariantsDetailed: [
+          { url: "https://video.twimg.com/low.mp4", bitrate: 200_000 },
+          { url: "https://video.twimg.com/mid.mp4", bitrate: 1_000_000 },
+          { url: "https://video.twimg.com/high.mp4", bitrate: 8_000_000 },
+        ],
+      },
+      config,
+      // Inline cap 2 MB: `mid` (~1.4 MB) fits, `high` (~11 MB) does not.
+      deps: nativeDeps(fetcher, dir, 2_000_000),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(downloads.length > 0, "a variant was downloaded");
+    assert.ok(downloads[0].includes("mid.mp4"), `first download was ${downloads[0]}`);
+  });
+});
+
+test("a failed Gemini delete is disclosed even when generation failed (P2-6)", async () => {
+  await withTempDir(async (dir) => {
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/upload/v1beta/files")) {
+        return new Response(JSON.stringify({}), { status: 200, headers: { "x-goog-upload-url": "https://upload.example/session" } });
+      }
+      if (url.includes("upload.example/session")) {
+        return new Response(JSON.stringify({ file: { name: "files/abc", uri: "files/abc" } }), { status: 200 });
+      }
+      if (url.includes("/v1beta/files/abc") && method === "DELETE") return new Response(null, { status: 500 });
+      if (url.includes("/v1beta/files/abc")) return new Response(JSON.stringify({ state: "ACTIVE" }), { status: 200 });
+      if (url.includes(":generateContent")) return new Response(JSON.stringify({ error: "boom" }), { status: 500 });
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/15",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.visualNotes, undefined, "no analysis was produced");
+    assert.ok(result.notes.some((note) => /could not be deleted/.test(note)), "retention is still disclosed");
+  });
+});
+
+test("a caller-built custom endpoint is refused without explicit authorization (P2-9)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const base = loadTwitterConfig({
+      twitter: { videoEndpointType: "gemini-files", videoModel: "gemini-2.5-flash", videoApiKeyEnv: "GOOGLE_API_KEY" },
+    });
+    const config = { ...base, videoEndpoint: "https://evil.example", videoEndpointExplicit: false };
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/17",
+      media: videoMedia(),
+      config,
+      deps: nativeDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(!calls.some((c) => c.url.includes("evil.example")), "the default key never reaches the other host");
+    assert.ok(result.notes.some((note) => /explicit twitter\.videoApiKeyEnv/.test(note)));
+  });
+});
+
+test("parseGeminiSections tolerates reordered and Markdown headings (P2-8)", () => {
+  assert.deepEqual(parseGeminiSections("TRANSCRIPT: hello\nVISUAL: a dog"), {
+    transcript: "hello",
+    visual: "a dog",
+  });
+  assert.deepEqual(parseGeminiSections("**VISUAL:** a dog\n\n**TRANSCRIPT:** woof"), {
+    visual: "a dog",
+    transcript: "woof",
+  });
+  assert.deepEqual(parseGeminiSections("## TRANSCRIPT\nhello"), { transcript: "hello" });
+  assert.deepEqual(parseGeminiSections("VISUAL: only visuals"), { visual: "only visuals" });
+  assert.deepEqual(parseGeminiSections("plain description"), { visual: "plain description" });
+});
+
+test("STT reports auth failures instead of re-uploading the audio (P2-7)", async () => {
+  await withTempDir(async (dir) => {
+    let transcriptionCalls = 0;
+    const { exec } = fakeExec();
+    const fetcher = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/audio/transcriptions")) {
+        transcriptionCalls += 1;
+        return new Response("unauthorized", { status: 401 });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({
+      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/16",
+      media: videoMedia(),
+      config,
+      deps: {
+        fetcher,
+        env: { STT_API_KEY: "k" },
+        exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(transcriptionCalls, 1, "a 401 is reported, not retried");
+    assert.ok(result.notes.some((note) => /HTTP 401/.test(note)));
+  });
+});
+
+test("STT falls back to plain text only when the format itself is rejected (P2-7)", async () => {
+  await withTempDir(async (dir) => {
+    const formats: string[] = [];
+    const { exec } = fakeExec();
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/audio/transcriptions")) {
+        const format = String((init?.body as FormData).get("response_format"));
+        formats.push(format);
+        if (format === "text") return new Response("plain words", { status: 200, headers: { "content-type": "text/plain" } });
+        return new Response("unsupported", { status: 400 });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = loadTwitterConfig({
+      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/18",
+      media: videoMedia(),
+      config,
+      deps: {
+        fetcher,
+        env: { STT_API_KEY: "k" },
+        exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.deepEqual(formats, ["verbose_json", "json", "text"]);
+    assert.equal(result.transcript, "plain words");
+  });
+});
+
+test("STT is skipped when native analysis already produced a transcript (P2-7)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const { exec } = fakeExec();
+    const config = loadTwitterConfig({
+      twitter: {
+        videoEndpointType: "gemini-files",
+        videoModel: "gemini-2.5-flash",
+        videoApiKeyEnv: "GOOGLE_API_KEY",
+        sttEndpoint: "https://stt.example/v1",
+        sttModel: "whisper-large-v3-turbo",
+      },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/19",
+      media: videoMedia(),
+      config,
+      deps: {
+        fetcher,
+        env: { GOOGLE_API_KEY: "k", STT_API_KEY: "k" },
+        exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(result.transcript, "hello world");
+    assert.ok(!calls.some((c) => c.url.includes("/audio/transcriptions")), "no redundant paid transcription");
+  });
+});
+
