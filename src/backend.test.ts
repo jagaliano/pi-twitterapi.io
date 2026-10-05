@@ -442,6 +442,21 @@ test("supportedReasoningEffort recovers the accepted value from a rejection", ()
   assert.equal(supportedReasoningEffort(new Error("429 too many requests")), undefined);
   assert.equal(supportedReasoningEffort(new Error("401 unauthorized")), undefined);
   assert.equal(supportedReasoningEffort(new Error("reasoning_effort not supported")), undefined, "no list, no retry");
+  // An unrelated rejection that lists its own values must not be reused. The list
+  // deliberately contains real effort names, so only tying the rejection to the
+  // reasoning-effort sentence can reject it.
+  assert.equal(
+    supportedReasoningEffort(
+      new Error("400 Invalid response_format. Supported values: [low, high]. Request included reasoning_effort=none."),
+    ),
+    undefined,
+    "the list belongs to response_format, not to the reasoning effort",
+  );
+  // Even a list near the reasoning wording must name real effort values.
+  assert.equal(
+    supportedReasoningEffort(new Error("reasoning_effort 'none' is not supported. Supported values: [json, text]")),
+    undefined,
+  );
 });
 
 test("a reasoning-only model is retried with a supported effort instead of failing", async () => {
@@ -471,6 +486,32 @@ test("a reasoning-only model is retried with a supported effort instead of faili
   assert.deepEqual(efforts, [undefined, "minimal"], "one retry, with the accepted effort");
   assert.match(result.markdown, /https:\/\/x\.com\/a\/status\/1/);
   assert.ok(!/produced by/.test(result.details.notes?.join(" ") ?? ""), "no fallback model was needed");
+});
+
+test("a cancelled attempt is not repaired with a reasoning-effort retry", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const registry = chainRegistry(async () => {
+    throw new Error("unused");
+  });
+  registry.complete = (async () => {
+    calls += 1;
+    // The caller gives up while the rejection is in flight.
+    controller.abort();
+    throw new Error("reasoning_effort 'none' is not supported. Supported values: [minimal, low]");
+  }) as never;
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku" } });
+  await assert.rejects(() =>
+    runTwitterApiSearch({
+      params: { query: "q" },
+      config,
+      env: { TWITTERAPI_IO_API_KEY: "k" },
+      registry,
+      fetcher: tweetsOnce(),
+      signal: controller.signal,
+    }),
+  );
+  assert.equal(calls, 1, "cancellation is authoritative, so no repair call was made");
 });
 
 test("an auth failure on the configured model moves to the next model", async () => {

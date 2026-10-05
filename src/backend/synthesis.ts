@@ -36,6 +36,9 @@ export function completionText(message: unknown): string {
 }
 
 
+/** The only efforts a provider can legitimately name for a reasoning model. */
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
 /**
  * Recover the cheapest accepted reasoning effort from a provider rejection.
  *
@@ -44,17 +47,24 @@ export function completionText(message: unknown): string {
  * requires reasoning answers 400 with the accepted list. Retrying once with the
  * first supported value keeps such models usable instead of failing synthesis
  * (measured live against `opencode-go/muse-spark-1.3-contributor`).
+ *
+ * The rejection and the list must belong to the *same* sentence mentioning the
+ * reasoning effort, and the recovered value must be a real effort name: an
+ * unrelated 400 that happens to list its own values (for example
+ * `Invalid response_format. Supported values: [json, text]`) must not trigger a
+ * repair that would mask the original cause.
  */
 export function supportedReasoningEffort(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message : String(error);
-  if (!/reasoning[_ ]effort/i.test(message)) return undefined;
-  if (!/not supported|unsupported|invalid/i.test(message)) return undefined;
+  const rejected = /reasoning[_ ]effort[^.;]{0,120}?(?:not supported|unsupported|invalid)/i.test(message)
+    || /(?:not supported|unsupported|invalid)[^.;]{0,120}?reasoning[_ ]effort/i.test(message);
+  if (!rejected) return undefined;
   const list = /supported values?:?\s*\[([^\]]+)\]/i.exec(message)?.[1];
   if (!list) return undefined;
   return list
     .split(",")
-    .map((value) => value.trim().replace(/^["']|["']$/g, ""))
-    .find((value) => /^[a-z]+$/.test(value));
+    .map((value) => value.trim().replace(/^["']|["']$/g, "").toLowerCase())
+    .find((value) => (REASONING_EFFORTS as readonly string[]).includes(value));
 }
 
 /**
@@ -100,6 +110,9 @@ function createCompletion(
     try {
       return completionText(await attempt());
     } catch (error) {
+      // Authoritative cancellation wins: never spend another registry call on a
+      // repair after the caller has gone away (P2-2).
+      if (classifySynthesisError(error, request.signal) === "cancelled") throw error;
       const effort = supportedReasoningEffort(error);
       if (!effort) throw error;
       return completionText(await attempt(effort));

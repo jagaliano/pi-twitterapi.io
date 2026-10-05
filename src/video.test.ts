@@ -554,7 +554,7 @@ test("parseGeminiResponse reads the JSON the request asks for", () => {
 });
 
 /** Serves the MP4, then the Gemini inline or Files lifecycle. */
-function geminiFetcher(options: { uploadUrl?: boolean; deleteOk?: boolean } = {}) {
+function geminiFetcher(options: { uploadUrl?: boolean; deleteOk?: boolean; fileStates?: string[] } = {}) {
   const calls: { url: string; method: string }[] = [];
   const fetcher = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
@@ -573,7 +573,9 @@ function geminiFetcher(options: { uploadUrl?: boolean; deleteOk?: boolean } = {}
       return new Response(null, { status: options.deleteOk === false ? 500 : 200 });
     }
     if (url.includes("/v1beta/files/abc")) {
-      return new Response(JSON.stringify({ state: "ACTIVE" }), { status: 200 });
+      // `fileStates` lets a test walk PROCESSING -> ACTIVE; default is ready at once.
+      const state = options.fileStates?.shift() ?? "ACTIVE";
+      return new Response(JSON.stringify({ state }), { status: 200 });
     }
     if (url.includes(":generateContent")) {
       // The request asks for structured JSON; a conforming model answers with it.
@@ -651,6 +653,78 @@ test("processVideo discloses a failed Gemini delete", async () => {
       modelSupportsImage: true,
     });
     assert.ok(result.notes.some((note) => /could not be deleted/.test(note)));
+  });
+});
+
+test("processVideo polls a Files upload until it reports ACTIVE", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher({ fileStates: ["PROCESSING", "PROCESSING", "ACTIVE"] });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/40",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 120_000,
+      modelSupportsImage: true,
+    });
+    const polls = calls.filter((c) => c.method === "GET" && c.url.includes("/v1beta/files/abc")).length;
+    assert.equal(polls, 3, "polled until ACTIVE rather than assuming readiness");
+    assert.equal(result.method, "gemini-native");
+    assert.equal(result.visualNotes, "a person speaks");
+    assert.ok(calls.some((c) => c.method === "DELETE"), "the upload is still deleted");
+  });
+});
+
+test("a Files upload that never becomes ACTIVE is disclosed and deleted", async () => {
+  await withTempDir(async (dir) => {
+    const removed: string[] = [];
+    // Never reports ACTIVE: the poll loop must end on the phase deadline.
+    const base = geminiFetcher({ fileStates: Array.from({ length: 60 }, () => "PROCESSING") });
+    let clock = 0;
+    // Each poll consumes the whole phase budget, so the loop ends after one poll
+    // instead of sleeping through 60 real seconds.
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const response = await base.fetcher(input, init);
+      if (url.includes("/v1beta/files/abc") && (init?.method ?? "GET").toUpperCase() === "GET") clock += 60_000;
+      return response;
+    }) as typeof fetch;
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/41",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: {
+        ...nativeDeps(fetcher, dir, 1),
+        now: () => clock,
+        rmTemp: async (d) => {
+          removed.push(d);
+        },
+      },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(result.notes.some((n) => /did not become ACTIVE/.test(n)), "the stall is disclosed");
+    assert.equal(result.visualNotes, undefined, "no evidence is invented");
+    assert.ok(base.calls.some((c) => c.method === "DELETE"), "a known upload is deleted even on failure");
+    assert.deepEqual(removed, [dir], "the temp directory is still cleaned up");
+  });
+});
+
+test("processVideo discloses a FAILED Files upload and deletes it", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher({ fileStates: ["PROCESSING", "FAILED"] });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/42",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 120_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(result.notes.some((n) => /FAILED/.test(n)));
+    assert.equal(result.visualNotes, undefined);
+    assert.ok(!calls.some((c) => c.url.includes(":generateContent")), "no generation on a FAILED file");
+    assert.ok(calls.some((c) => c.method === "DELETE"), "the failed upload is deleted");
   });
 });
 
