@@ -80,8 +80,10 @@ override — and set only the keys you need:
 > `gemini-files` (Google, direct) and `openai-compatible` (OpenRouter and other
 > chat-completions endpoints, verified with `google/gemini-2.5-flash-lite`);
 > frames are sent to your pi model. A model that does not accept video input simply
-> refuses the request, and the run degrades to frames and STT with that refusal
-> disclosed — check the model's declared input modalities before choosing one.
+> refuses the request, and the refusal is disclosed; the run then falls back to
+> frames (when your pi model accepts images) and to STT (when an endpoint is
+> configured), with whatever it could not use also disclosed. Check the model's
+> declared input modalities before choosing one.
 > Sending video/audio to a third-party endpoint is disclosed in the answer.
 > Both native adapters ask for the same JSON contract, by different means:
 > `gemini-files` constrains it with a response schema (`responseMimeType:

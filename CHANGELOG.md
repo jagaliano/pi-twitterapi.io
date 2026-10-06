@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-10-06
+
+Documentation only — no behaviour change, and the published `src/` is otherwise
+identical to 0.3.3.
+
+### Changed
+
+- The video opt-in note states the capability rule generically: a model that does not
+  declare video input refuses the request, the refusal is disclosed, and the run
+  degrades to frames and STT. Check the model's declared input modalities before
+  choosing one, rather than assuming.
+
 ## [0.3.3] - 2026-10-06
 
 Test and CI only. **No runtime behaviour changes** — the published `src/` is
@@ -239,10 +251,11 @@ runs and a video post is represented by its poster frame.
 - An empty native reply now reports the provider's `finish_reason`, which is what
   distinguishes a reasoning-only reply from a rate-limited shared pool.
 - A model that declares no video input refuses the request outright (HTTP 404 from
-the endpoint), and the refusal is disclosed; such a model remains a frames-only
-option. Free shared-pool models on OpenRouter (for example
-`google/gemma-4-*-it:free`) return HTTP 429 and degrade to `frames+stt`, which is
-also disclosed in the answer.
+the endpoint), and the refusal is disclosed. Frames then come from the pi model, but
+only when that model accepts image input; with a text-only pi model the run is
+transcript-only and the missing frames are disclosed. Free shared-pool models on
+OpenRouter (for example `google/gemma-4-*-it:free`) return HTTP 429 and degrade to
+`frames+stt`, which is also disclosed in the answer.
 
 ### Fixed
 
