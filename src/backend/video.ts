@@ -549,7 +549,7 @@ function geminiConfigured(config: TwitterConfig, env: Record<string, string | un
  * safely, and the two failure modes are not symmetric: a missing transcript is
  * recoverable by STT, whereas a fabricated one is published as evidence.
  */
-export function parseGeminiResponse(text: string): { visual?: string; transcript?: string } {
+export function parseGeminiResponse(text: string): { visual?: string; transcript?: string; structured?: boolean } {
   const trimmed = text.trim();
   if (!trimmed) return {};
   const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
@@ -557,10 +557,18 @@ export function parseGeminiResponse(text: string): { visual?: string; transcript
     const parsed: unknown = JSON.parse(unfenced);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const record = parsed as { visual?: unknown; transcript?: unknown };
-      const result: { visual?: string; transcript?: string } = {};
+      const result: { visual?: string; transcript?: string; structured?: boolean } = {};
       if (typeof record.visual === "string" && record.visual.trim()) result.visual = record.visual.trim();
       if (typeof record.transcript === "string" && record.transcript.trim()) result.transcript = record.transcript.trim();
-      if (result.visual || result.transcript) return result;
+      const hasVisual = typeof record.visual === "string";
+      const hasTranscript = typeof record.transcript === "string";
+      if (hasVisual || hasTranscript) {
+        // `structured` means the model *stated* the speech field. `{"transcript": ""}`
+        // is a statement that there is no speech, and re-running a paid STT tier
+        // over it adds nothing (V3). A reply that omits the field says nothing
+        // about speech, so the transcript stays unknown and STT may still run.
+        return { ...result, structured: hasTranscript };
+      }
     }
   } catch {
     // Not JSON: the whole reply is visual evidence below.
@@ -1136,6 +1144,8 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     let transcript: string | undefined;
     let visualNotes: string | undefined;
     let nativeMethod: VideoMethod | undefined;
+    /** Native analysis *stated* the speech field, so STT has nothing to add (V3). */
+    let nativeStructured = false;
 
     // Tier 1 — native video. `gemini-files` and `openai-compatible` are both
     // implemented (the latter spike-verified, `docs/video-spike.md`); `anthropic`
@@ -1183,6 +1193,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
             const sections = parseGeminiResponse(result.text);
             visualNotes = sections.visual;
             transcript = sections.transcript;
+            nativeStructured = sections.structured === true;
             nativeMethod = "gemini-native";
             evidence.notes.push("Video content was analysed by the configured Gemini endpoint.");
           } else if (result.error) {
@@ -1205,6 +1216,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
             const sections = parseGeminiResponse(result.text);
             visualNotes = sections.visual;
             transcript = sections.transcript;
+            nativeStructured = sections.structured === true;
             nativeMethod = "openai-compatible";
             evidence.notes.push("Video content was analysed by the configured OpenAI-compatible video endpoint.");
           } else if (result.error) {
@@ -1252,8 +1264,9 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     const localStt = Boolean(config.whisperCppBinary && config.whisperModelPath);
     const remoteSttConfigured = Boolean(config.sttEndpoint && config.sttModel && config.sttApiKeyEnv && env[config.sttApiKeyEnv]);
     // Skip STT when native analysis already produced a transcript (P2-7): re-running
-    // a paid transcription would add nothing.
-    if (!isGif && !transcript && haveFfmpeg && (localStt || remoteSttConfigured)) {
+    // a paid transcription would add nothing. Also skip it when native analysis
+    // stated that there is no speech at all (V3).
+    if (!isGif && !transcript && !nativeStructured && haveFfmpeg && (localStt || remoteSttConfigured)) {
       const audioFile = join(dir, localStt ? "audio.wav" : "audio.mp3");
       const haveAudio = await extractAudio(ctx, mediaFile, audioFile, localStt, maxSeconds, remaining(deadline, now));
       if (haveAudio) {
@@ -1270,6 +1283,10 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
       }
     } else if (isGif) {
       evidence.notes.push("Animated GIFs have no audio track, so no transcript was produced.");
+    } else if (nativeStructured && !transcript) {
+      evidence.notes.push(
+        "Native video analysis reported no speech, so no transcript was produced and the STT tier was not called.",
+      );
     }
 
     // A model without image input never receives frames, so say why they are missing

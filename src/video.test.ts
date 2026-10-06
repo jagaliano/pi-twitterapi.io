@@ -552,13 +552,21 @@ test("parseGeminiResponse reads the JSON the request asks for", () => {
   assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":"woof"}'), {
     visual: "a dog",
     transcript: "woof",
+    structured: true,
   });
-  // An empty transcript in JSON stays empty rather than being invented.
-  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":""}'), { visual: "a dog" });
+  // An empty transcript in JSON stays empty rather than being invented, and is
+  // still a *statement* about speech (V3).
+  assert.deepEqual(parseGeminiResponse('{"visual":"a dog","transcript":""}'), {
+    visual: "a dog",
+    structured: true,
+  });
   assert.deepEqual(parseGeminiResponse('```json\n{"visual":"a dog","transcript":"woof"}\n```'), {
     visual: "a dog",
     transcript: "woof",
+    structured: true,
   });
+  // Omitting the field says nothing about speech, so STT may still run.
+  assert.deepEqual(parseGeminiResponse('{"visual":"a dog"}'), { visual: "a dog", structured: false });
   assert.deepEqual(parseGeminiResponse("   "), {});
 });
 
@@ -2219,5 +2227,88 @@ test("a Gemini reply truncated at the token limit is refused, not published (V2)
     assert.match(failures[0], /truncated its answer at the token limit/);
     assert.equal(result.visualNotes, undefined, "the truncated fragment is not evidence");
     assert.ok(result.frames.length > 0, "the frame fallback still runs");
+  });
+});
+
+// ------------------------------------------------- native "no speech" (V3)
+
+/** Gemini native + a remote STT endpoint, recording every request. */
+function nativePlusSttFetcher(reply: string) {
+  const calls: string[] = [];
+  const fetcher = (async (input: string | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.includes(":generateContent")) {
+      return new Response(
+        JSON.stringify({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: reply }] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/audio/transcriptions")) {
+      return new Response(JSON.stringify({ text: "hello there" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(new Uint8Array(1_024).fill(1), {
+      status: 200,
+      headers: { "content-type": "video/mp4" },
+    });
+  }) as unknown as typeof fetch;
+  return { fetcher, calls };
+}
+
+const NATIVE_STT_CONFIG = loadTwitterConfig({
+  twitter: {
+    videoEndpointType: "gemini-files",
+    videoModel: "gemini-2.5-flash",
+    videoApiKeyEnv: "GOOGLE_API_KEY",
+    sttEndpoint: "https://stt.example/v1",
+    sttModel: "whisper-large-v3-turbo",
+  },
+});
+
+async function runNativePlusStt(dir: string, reply: string) {
+  const { fetcher, calls } = nativePlusSttFetcher(reply);
+  const result = await processVideo({
+    postUrl: "https://x.com/a/status/51",
+    media: videoMedia(),
+    config: NATIVE_STT_CONFIG,
+    deps: {
+      fetcher,
+      env: { GOOGLE_API_KEY: "k", STT_API_KEY: "s" },
+      exec: fakeExec().exec,
+      checkBinary: async () => true,
+      mktemp: async () => dir,
+      rmTemp: async () => {},
+      now: () => 0,
+    },
+    deadline: 60_000,
+    modelSupportsImage: true,
+  });
+  return { result, sttCalls: calls.filter((url) => url.includes("/audio/transcriptions")).length };
+}
+
+test("native analysis that reports no speech does not pay for STT (V3)", async () => {
+  await withTempDir(async (dir) => {
+    const { result, sttCalls } = await runNativePlusStt(dir, '{"visual":"a silent landscape","transcript":""}');
+    assert.equal(result.method, "gemini-native");
+    assert.equal(result.transcript, undefined);
+    assert.equal(sttCalls, 0, "an empty transcript from native analysis is a statement, not a gap");
+    assert.ok(
+      result.notes.some((note) => /reported no speech/.test(note)),
+      `expected a no-speech note, got ${JSON.stringify(result.notes)}`,
+    );
+  });
+});
+
+test("a native reply that says nothing about speech still allows STT (V3)", async () => {
+  await withTempDir(async (dir) => {
+    // Not the JSON contract: the transcript is unknown rather than declared empty,
+    // so recovering it is worth a call.
+    const { result, sttCalls } = await runNativePlusStt(dir, "a person walks past a wall");
+    assert.equal(result.method, "gemini-native");
+    assert.equal(sttCalls, 1, "an unstructured reply leaves the transcript unknown");
+    assert.equal(result.transcript, "hello there");
   });
 });
