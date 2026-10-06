@@ -64,8 +64,9 @@ Measured 2026-10-04 against `https://openrouter.ai/api/v1/chat/completions`.
 (`architecture.input_modalities`):
 
 - ✅ `google/gemini-2.5-flash-lite` — `["text","image","file","audio","video"]`, $0.10/$0.40 per Mtok.
-- ❌ `x-ai/grok-4.3` — `["text","image","file"]`, **no video**. A `video_url` request returns
-  **HTTP 404 "No endpoints found that support input video"**. Grok is frames-only.
+- ❌ A model that declares no `video` input returns **HTTP 404 "No endpoints found
+  that support input video"** for a `video_url` request. Nothing model-specific about
+  it: read `architecture.input_modalities` and pick a model that lists `video`.
 - Cheaper video-capable options exist if cost matters: `inclusionai/ling-3.0-flash-vl`
   ($0.021), `qwen/qwen3.7-flash` ($0.03), free `google/gemma-4-*-it:free` variants.
 
@@ -93,10 +94,6 @@ in this measurement (the largest carrying a 70.88 MB `.mp4`), i.e. past the 64 M
 limit or of any other host's. Unlike Gemini direct there is no upload lifecycle to manage,
 so the clip is always sent inline.
 
-## 4. xAI video understanding — ✅ CONFIRMED ABSENT (docs)
-
-`docs.x.ai` has no video-understanding capability; all video pages are Imagine (generation). Chat "files" are document-search oriented (`input_file`), with no video part type. → Grok is frames-only.
-
-## 5. Pi model layer video input — ✅ CONFIRMED ABSENT (bundle, ^1.0.2)
+## 4. Pi model layer video input — ✅ CONFIRMED ABSENT (bundle, ^1.0.2)
 
 The shipped `@earendil-works/pi-coding-agent` bundle has no video input type; `complete()` carries images only. Native video must be a direct endpoint call.

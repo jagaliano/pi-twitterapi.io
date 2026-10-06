@@ -238,11 +238,11 @@ runs and a video post is represented by its poster frame.
   models spend most of the budget thinking before they emit the JSON answer.
 - An empty native reply now reports the provider's `finish_reason`, which is what
   distinguishes a reasoning-only reply from a rate-limited shared pool.
-- **Grok cannot be used here.** `x-ai/grok-4.3` declares no video input and
-  rejects the request with HTTP 404 "No endpoints found that support input
-  video"; it remains a frames-only option. Free shared-pool models on OpenRouter
-  (for example `google/gemma-4-*-it:free`) return HTTP 429 and degrade to
-  `frames+stt`, which is disclosed in the answer.
+- A model that declares no video input refuses the request outright (HTTP 404 from
+the endpoint), and the refusal is disclosed; such a model remains a frames-only
+option. Free shared-pool models on OpenRouter (for example
+`google/gemma-4-*-it:free`) return HTTP 429 and degrade to `frames+stt`, which is
+also disclosed in the answer.
 
 ### Fixed
 

@@ -79,9 +79,9 @@ override — and set only the keys you need:
 > configured native-video / STT endpoint. Native video works two ways:
 > `gemini-files` (Google, direct) and `openai-compatible` (OpenRouter and other
 > chat-completions endpoints, verified with `google/gemini-2.5-flash-lite`);
-> frames are sent to your pi model. **Grok cannot accept video input at all** —
-> `x-ai/grok-4.3` declares no video modality and rejects a video request with
-> HTTP 404 "No endpoints found that support input video", so it is frames-only.
+> frames are sent to your pi model. A model that does not accept video input simply
+> refuses the request, and the run degrades to frames and STT with that refusal
+> disclosed — check the model's declared input modalities before choosing one.
 > Sending video/audio to a third-party endpoint is disclosed in the answer.
 > Both native adapters ask for the same JSON contract, by different means:
 > `gemini-files` constrains it with a response schema (`responseMimeType:

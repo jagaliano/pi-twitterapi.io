@@ -808,8 +808,10 @@ interface OpenAiCompatibleResult {
 
 /**
  * Native video through a video-capable chat-completions endpoint that accepts this
- * `video_url` shape (OpenRouter, verified below). Endpoints and models without that
- * modality do not work — Grok rejects video outright (HTTP 404).
+ * `video_url` shape (OpenRouter, verified below). A model that does not declare the
+ * video modality does not work here: the endpoint rejects the request outright, and
+ * the refusal is disclosed in the notes. Which models declare it is the endpoint's
+ * business, not ours — check the catalogue rather than assuming.
  *
  * The part shape is measured, not guessed. Verified against OpenRouter on
  * 2026-10-04 with `google/gemini-2.5-flash-lite`: the object form below attaches
