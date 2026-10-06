@@ -13,7 +13,8 @@
  * cannot bypass the SSRF guards in `media.ts`.
  */
 import { execFile } from "node:child_process";
-import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -330,13 +331,37 @@ async function downloadVideo(
     const response = await deps.fetcher(url, { signal: opSignal(deps, deadline, now), redirect: "error" });
     if (!response.ok) return false;
     const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
-    if (mimeType && !mimeType.startsWith("video/")) return false;
+    // Twitter serves video/mp4. A missing header is tolerated because some hosts
+    // omit it, but any other declared type is refused rather than written to disk
+    // and handed to ffmpeg (V10).
+    if (mimeType && mimeType !== "video/mp4") return false;
     const declared = Number(response.headers.get("content-length") ?? Number.NaN);
     if (Number.isFinite(declared) && declared > maxBytes) return false;
-    await writeFile(dest, new Uint8Array());
-    return await readCapped(response, maxBytes, async (chunk) => {
-      await appendFile(dest, chunk);
-    });
+    // One open handle for the whole download; `appendFile` re-opened the file per
+    // chunk (V11).
+    const out = createWriteStream(dest);
+    try {
+      const complete = await readCapped(
+        response,
+        maxBytes,
+        (chunk) =>
+          new Promise<void>((resolve, reject) => {
+            out.write(Buffer.from(chunk), (error) => (error ? reject(error) : resolve()));
+          }),
+      );
+      if (!complete) {
+        out.destroy();
+        return false;
+      }
+      await new Promise<void>((resolve, reject) => {
+        out.once("error", reject);
+        out.end(() => resolve());
+      });
+      return true;
+    } catch {
+      out.destroy();
+      return false;
+    }
   } catch {
     return false;
   }
@@ -522,7 +547,7 @@ async function geminiInline(
     generationConfig: GEMINI_GENERATION_CONFIG,
   };
   try {
-    const response = await deps.fetcher(`${base}/v1beta/models/${model}:generateContent`, {
+    const response = await deps.fetcher(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(body),
@@ -535,6 +560,21 @@ async function geminiInline(
     return { text: text || undefined };
   } catch (error) {
     return { error: (error as Error).message };
+  }
+}
+
+/**
+ * The upload URL is chosen by the endpoint, not by us, and the video bytes are
+ * POSTed to it. Accept it only when it is https on the same host we already
+ * authorised, so a compromised or misconfigured reply cannot redirect the clip
+ * (V9).
+ */
+function isUploadUrlOnHost(uploadUrl: string, base: string): boolean {
+  try {
+    const upload = new URL(uploadUrl);
+    return upload.protocol === "https:" && upload.host === new URL(base).host;
+  } catch {
+    return false;
   }
 }
 
@@ -568,6 +608,9 @@ async function geminiFiles(
       if (!start.ok) return { error: `Gemini upload start returned HTTP ${start.status}.` };
       const uploadUrl = start.headers.get("x-goog-upload-url");
       if (!uploadUrl) return { error: "Gemini upload start returned no upload URL." };
+      if (!isUploadUrlOnHost(uploadUrl, base)) {
+        return { error: "Gemini upload start returned an upload URL that is not https on the configured host." };
+      }
 
       const upload = await deps.fetcher(uploadUrl, {
         method: "POST",
@@ -607,7 +650,7 @@ async function geminiFiles(
       }
       if (!active) return { error: "Gemini file did not become ACTIVE before the deadline.", uploaded: true };
 
-      const generated = await deps.fetcher(`${base}/v1beta/models/${model}:generateContent`, {
+      const generated = await deps.fetcher(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({

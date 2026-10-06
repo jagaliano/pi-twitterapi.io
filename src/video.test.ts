@@ -570,10 +570,10 @@ function geminiFetcher(options: { uploadUrl?: boolean; deleteOk?: boolean; fileS
     if (url.includes("/upload/v1beta/files")) {
       return new Response(JSON.stringify({}), {
         status: 200,
-        headers: options.uploadUrl === false ? {} : { "x-goog-upload-url": "https://upload.example/session" },
+        headers: options.uploadUrl === false ? {} : { "x-goog-upload-url": "https://generativelanguage.googleapis.com/upload/session" },
       });
     }
-    if (url.includes("upload.example/session")) {
+    if (url.includes("generativelanguage.googleapis.com/upload/session")) {
       return new Response(JSON.stringify({ file: { name: "files/abc", uri: "files/abc" } }), { status: 200 });
     }
     if (url.includes("/v1beta/files/abc") && method === "DELETE") {
@@ -1546,9 +1546,9 @@ test("a failed Gemini delete is disclosed even when generation failed (P2-6)", a
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       if (url.includes("/upload/v1beta/files")) {
-        return new Response(JSON.stringify({}), { status: 200, headers: { "x-goog-upload-url": "https://upload.example/session" } });
+        return new Response(JSON.stringify({}), { status: 200, headers: { "x-goog-upload-url": "https://generativelanguage.googleapis.com/upload/session" } });
       }
-      if (url.includes("upload.example/session")) {
+      if (url.includes("generativelanguage.googleapis.com/upload/session")) {
         return new Response(JSON.stringify({ file: { name: "files/abc", uri: "files/abc" } }), { status: 200 });
       }
       if (url.includes("/v1beta/files/abc") && method === "DELETE") return new Response(null, { status: 500 });
@@ -1890,3 +1890,125 @@ test("STT is skipped when native analysis already produced a transcript (P2-7)",
   });
 });
 
+
+test("an upload URL off the configured host is refused (V9)", async () => {
+  await withTempDir(async (dir) => {
+    const posts: string[] = [];
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET").toUpperCase() === "POST") posts.push(url);
+      if (url.includes("/upload/v1beta/files")) {
+        // A reply that points the upload somewhere else: the video bytes must not
+        // follow it, and neither must any credential.
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "x-goog-upload-url": "https://attacker.example/collect" },
+        });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/40",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+
+    assert.ok(
+      result.notes.some((note) => /not https on the configured host/.test(note)),
+      `expected an off-host upload refusal, got ${JSON.stringify(result.notes)}`,
+    );
+    assert.ok(
+      !posts.some((url) => url.includes("attacker.example")),
+      "no request may be sent to the host the endpoint named",
+    );
+    assert.notEqual(result.method, "gemini-native", "a refused upload is not native evidence");
+  });
+});
+
+test("a video served as something other than mp4 is refused (V10)", async () => {
+  await withTempDir(async (dir) => {
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-length": "1024" } });
+      }
+      if (url.includes("twimg.com")) {
+        // The old check only required `video/*`, so this used to be written to disk
+        // and handed to ffmpeg as if it were the MP4 the pipeline promised.
+        return new Response(new Uint8Array(1_024).fill(1), {
+          status: 200,
+          headers: { "content-type": "video/webm" },
+        });
+      }
+      return new Response(JSON.stringify({ text: "x" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/41",
+      media: videoMedia(),
+      config: loadTwitterConfig({ twitter: { maxFrames: 1 } }),
+      deps: {
+        fetcher,
+        env: {},
+        exec: fakeExec().exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+
+    assert.ok(
+      result.notes.some((note) => /could not be downloaded/.test(note)),
+      `a non-mp4 body must not be accepted, got ${JSON.stringify(result.notes)}`,
+    );
+    assert.equal(result.frames.length, 0, "nothing was written to disk to extract frames from");
+  });
+});
+
+test("the video model id is URL-encoded in the request path (V11)", async () => {
+  await withTempDir(async (dir) => {
+    const seen: string[] = [];
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET").toUpperCase() === "POST" && url.includes(":generateContent")) seen.push(url);
+      if (url.includes(":generateContent")) {
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"visual":"v"}' }] } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      });
+    }) as unknown as typeof fetch;
+
+    const config = loadTwitterConfig({
+      twitter: { videoEndpointType: "gemini-files", videoModel: "models/gemini-2.5-flash", videoApiKeyEnv: "GOOGLE_API_KEY" },
+    });
+    await processVideo({
+      postUrl: "https://x.com/a/status/42",
+      media: videoMedia(),
+      config,
+      deps: nativeDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+
+    assert.ok(seen.length > 0, "a generateContent request was made");
+    assert.ok(
+      seen[0].includes("models%2Fgemini-2.5-flash:generateContent"),
+      `the model id must be encoded, got ${seen[0]}`,
+    );
+  });
+});
