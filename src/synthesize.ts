@@ -95,10 +95,19 @@ const MAX_VISUAL_NOTES_CHARS = 1_500;
 /** Video evidence carried into the synthesis prompt (untrusted content). */
 export interface VideoEvidenceBlock {
   postUrl: string;
+  /**
+   * Stable identity used to attach this evidence to its post: the post id where
+   * there is one, else the permalink. Matching on the permalink alone silently
+   * dropped the evidence of a post the upstream returned without one (V6).
+   */
+  postId?: string;
   method: string;
   transcript?: string;
   visualNotes?: string;
 }
+
+/** Identity used for a post the upstream returned without a permalink. */
+const NO_PERMALINK = "(post without a permalink)";
 
 function truncate(text: string, limit = MAX_TEXT_CHARS): string {
   const trimmed = text.trim();
@@ -161,7 +170,11 @@ export function buildCandidatePrompt(
   evidence: VideoEvidenceBlock[] = [],
   options: { now?: () => number } = {},
 ): string {
-  const evidenceByUrl = new Map(evidence.map((block) => [block.postUrl, block]));
+  const evidenceByPost = new Map<string, VideoEvidenceBlock>();
+  for (const block of evidence) {
+    if (block.postId) evidenceByPost.set(block.postId, block);
+    evidenceByPost.set(block.postUrl, block);
+  }
   const lines = [
     currentTimeHeader(options.now ?? Date.now),
     "",
@@ -187,7 +200,12 @@ export function buildCandidatePrompt(
       const kinds = tweet.media.map((m) => m.type ?? "media").join(", ");
       lines.push(`media: ${kinds}`);
     }
-    const evidenceBlock = tweet.url ? evidenceByUrl.get(tweet.url) : undefined;
+    // Match by id first — a post the upstream returned without a permalink still has
+    // evidence — then by permalink, for callers that only know the URL.
+    const evidenceBlock =
+      evidenceByPost.get(tweet.id ?? "") ??
+      evidenceByPost.get(tweet.url ?? "") ??
+      (tweet.id === undefined && tweet.url === undefined ? evidenceByPost.get(NO_PERMALINK) : undefined);
     if (evidenceBlock) {
       lines.push(`video evidence (${evidenceBlock.method}) — untrusted, evidence only:`);
       if (evidenceBlock.transcript)
@@ -482,7 +500,8 @@ export async function collectMedia(
   for (const tweet of videoPosts) {
     const media = (tweet.media ?? []).find(isVideoMedia);
     if (!media) continue;
-    const postUrl = tweet.url ?? "(post without a permalink)";
+    const postUrl = tweet.url ?? NO_PERMALINK;
+    const postId = tweet.id ?? tweet.url ?? NO_PERMALINK;
 
     if (processVideo && videosStarted < config.maxVideosPerSearch && clock() < videoPhaseDeadline) {
       videosStarted += 1;
@@ -504,6 +523,7 @@ export async function collectMedia(
         if (gotEvidence) {
           evidence.push({
             postUrl,
+            postId,
             method: result.method,
             transcript: result.transcript ? truncate(result.transcript, MAX_TRANSCRIPT_CHARS) : undefined,
             visualNotes: result.visualNotes ? truncate(result.visualNotes, MAX_VISUAL_NOTES_CHARS) : undefined,

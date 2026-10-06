@@ -840,3 +840,28 @@ test("an unparseable upstream date is passed through rather than dropped (G4)", 
   const prompt = buildCandidatePrompt("q", [tweet({ createdAt: "sometime last week" })], [], { now: CLOCK });
   assert.match(prompt, /\[1\] @alice — sometime last week/);
 });
+
+// -------------------------------------------- evidence without permalink (V6)
+
+test("video evidence reaches a post that has an id but no permalink (V6)", () => {
+  // The upstream sometimes returns no `url`. Keying evidence by permalink alone
+  // meant the transcript was collected, billed, and then never shown to the model,
+  // while the run still reported "processed via".
+  const prompt = buildCandidatePrompt(
+    "what is said?",
+    [tweet({ id: "42", url: undefined, text: "video post" })],
+    [{ postUrl: "(post without a permalink)", postId: "42", method: "frames+stt", transcript: "spoken words" }],
+    { now: CLOCK },
+  );
+  assert.match(prompt, /transcript: spoken words/, `evidence was dropped, got ${prompt}`);
+});
+
+test("video evidence still attaches by permalink when no id is known (V6)", () => {
+  const prompt = buildCandidatePrompt(
+    "what is said?",
+    [tweet({ id: undefined, url: "https://x.com/alice/status/111" })],
+    [{ postUrl: "https://x.com/alice/status/111", method: "gemini-native", visualNotes: "a dog" }],
+    { now: CLOCK },
+  );
+  assert.match(prompt, /visual: a dog/);
+});
