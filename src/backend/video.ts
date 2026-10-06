@@ -421,37 +421,85 @@ function timestamp(seconds: number): string {
   return `${mm}:${ss}`;
 }
 
-/** Uniformly sample up to `maxFrames` frames (primary method; M10/F4). */
+export interface FrameTiming {
+  /** Seconds of video sampled (bounded by `maxSeconds`). */
+  span: number;
+  /** Frames requested. */
+  count: number;
+  /** Seconds between sampled frames. */
+  interval: number;
+  /** Input-seek offset, so frame *i* lands at `(i + 0.5) * interval`. */
+  offset: number;
+}
+
+/**
+ * Uniform-sampling timing.
+ *
+ * `fps=N/D` emits frames at interval *starts* (0, D/N, 2D/N …), so labelling them
+ * as interval midpoints was wrong by D/2N — 7.5 s per frame on a 120 s clip — and
+ * frame 1 was always t=0, which on a real video is often a black frame or a title
+ * card (V1). Seeking half an interval in before decoding makes the midpoint labels
+ * true and drops that frame. Measured with ffmpeg 9.0.2, 30 s clip, 8 frames: pts
+ * 0, 3.75, 7.5 … 26.25 before, 1.875, 5.625, 9.375 … after.
+ */
+export function frameTiming(durationMs: number, maxFrames: number, maxSeconds: number): FrameTiming {
+  const span = Math.max(0.1, Math.min(durationMs / 1000, maxSeconds));
+  const count = Math.max(1, Math.min(maxFrames, Math.round(maxFrames)));
+  const interval = span / count;
+  // Clamped to half the clip so a very short video still yields a frame; for a
+  // single frame this is exactly the midpoint.
+  const offset = Math.max(0, Math.min(interval / 2, span / 2));
+  return { span, count, interval, offset };
+}
+
+/**
+ * Extract one frame per labelled timestamp.
+ *
+ * `fps=N/D` is the obvious single-pass sampler, but it does not compose with `-ss`:
+ * measured with ffmpeg 9.0.2, `-ss 2 -i clip -vf fps=8/32` emitted source frames
+ * from t≈3.97 rather than t=2.0, so the frames did not come from where the labels
+ * said. One seek per frame is exact — `-ss T -i clip -frames:v 1` returns the frame
+ * at T, verified against `select=eq(n,60)` and `eq(n,180)` on a 30 fps source — and
+ * `maxFrames` is at most 16, so the extra spawns stay bounded.
+ */
 async function extractFrames(
   ctx: FfmpegContext,
   localFile: string,
   outDir: string,
-  durationMs: number,
-  maxFrames: number,
-  maxSeconds: number,
-  timeoutMs: number,
+  timing: FrameTiming,
+  timeoutMs: () => number,
 ): Promise<string[]> {
-  const durationSec = Math.max(0.1, Math.min(durationMs / 1000, maxSeconds));
-  const n = Math.max(1, Math.min(maxFrames, Math.round(maxFrames)));
-  const output = join(outDir, "frame-%03d.jpg");
-  const args = [
-    "-y",
-    "-i",
-    localFile,
-    "-t",
-    String(maxSeconds),
-    "-vf",
-    `fps=${n}/${durationSec},scale='min(768,iw)':-2`,
-    "-frames:v",
-    String(n),
-    "-q:v",
-    "5",
-    output,
-  ];
-  await runFfmpeg(ctx, args, timeoutMs);
   const files: string[] = [];
-  for (const name of (await readdir(outDir)).filter((f) => f.startsWith("frame-") && f.endsWith(".jpg")).sort()) {
-    files.push(join(outDir, name));
+  for (let i = 0; i < timing.count; i += 1) {
+    const at = timing.offset + i * timing.interval;
+    const output = join(outDir, `frame-${String(i + 1).padStart(3, "0")}.jpg`);
+    try {
+      await runFfmpeg(
+        ctx,
+        [
+          "-y",
+          // Input seek, before `-i`, so this really is the frame at `at`.
+          "-ss",
+          String(at),
+          "-i",
+          localFile,
+          "-frames:v",
+          "1",
+          "-vf",
+          "scale='min(768,iw)':-2",
+          "-q:v",
+          "5",
+          output,
+        ],
+        timeoutMs(),
+      );
+    } catch {
+      // Past the end of the file, or a decode failure: keep the frames already
+      // taken rather than losing all of them.
+      break;
+    }
+    if (!(await stat(output).then(() => true, () => false))) break;
+    files.push(output);
   }
   return files;
 }
@@ -1138,11 +1186,15 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     const frameDurationMs = durationKnown ? (durationMs as number) : trimmed ? maxSeconds * 1000 : undefined;
     if (!nativeMethod && modelSupportsImage && haveFfmpeg && frameDurationMs) {
       try {
-        const files = await extractFrames(ctx, mediaFile, dir, frameDurationMs, config.maxFrames, maxSeconds, remaining(deadline, now));
+        const timing = frameTiming(frameDurationMs, config.maxFrames, maxSeconds);
+        const files = await extractFrames(ctx, mediaFile, dir, timing, () => remaining(deadline, now));
         const total = files.length;
         for (let i = 0; i < files.length; i += 1) {
           const bytes = await readFile(files[i]);
-          const at = (Math.min(frameDurationMs, maxSeconds * 1000) / 1000) * ((i + 0.5) / total);
+          // The frame's real position, from the same timing the filter used — not
+          // `total`, which shrinks when ffmpeg emits fewer frames than requested
+          // and would stretch the labels back over the clip (V1).
+          const at = timing.offset + i * timing.interval;
           evidence.frames.push({
             data: Buffer.from(bytes).toString("base64"),
             mimeType: "image/jpeg",

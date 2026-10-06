@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { loadTwitterConfig } from "./config.js";
 import {
   createProcessVideo,
   estimateVariantBytes,
+  frameTiming,
   orderVariants,
   parseGeminiResponse,
   probeVariantBytes,
@@ -420,11 +421,12 @@ test("processVideo extracts frames and never hands ffmpeg a URL (B2/F4)", async 
       assert.ok(!args.some((a) => /^https?:\/\//.test(a)), `ffmpeg got a URL: ${args.join(" ")}`);
       assert.ok(args.includes("-protocol_whitelist") && args.includes("file"));
     }
-    // F4: the frame filter does uniform sampling via `fps=`.
+    // F4/V1: uniform sampling by explicit input seek, one frame per timestamp.
     const frameArgs = invocations.find((args) => args.some((a) => a.includes("frame-")));
     assert.ok(frameArgs, "frame extraction ran");
-    const filter = frameArgs![frameArgs!.indexOf("-vf") + 1];
-    assert.match(filter, /fps=/);
+    const ssAt = frameArgs!.indexOf("-ss");
+    const iAt = frameArgs!.indexOf("-i");
+    assert.ok(ssAt >= 0 && ssAt < iAt, `the frame is taken by an input seek: ${frameArgs!.join(" ")}`);
     assert.equal(result.frames.length, 3);
     assert.match(result.frames[0].label, /frame 1\/3 @ \d\d:\d\d/);
     assert.equal(result.method, "frames-only");
@@ -2010,5 +2012,144 @@ test("the video model id is URL-encoded in the request path (V11)", async () => 
       seen[0].includes("models%2Fgemini-2.5-flash:generateContent"),
       `the model id must be encoded, got ${seen[0]}`,
     );
+  });
+});
+
+// ------------------------------------------------------- real ffmpeg (V1)
+
+/** Run a real binary; the real-ffmpeg tests are skipped when it is absent. */
+function realExec(): ExecFn {
+  return async (file, args, options) => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = promisify(execFile) as unknown as (
+      f: string,
+      a: string[],
+      o: Record<string, unknown>,
+    ) => Promise<{ stdout: string; stderr: string }>;
+    const { stdout, stderr } = await run(file, args, {
+      timeout: options.timeout,
+      signal: options.signal,
+      killSignal: "SIGKILL",
+      maxBuffer: options.maxBuffer,
+    });
+    return { stdout: String(stdout), stderr: String(stderr) };
+  };
+}
+
+async function haveFfmpeg(): Promise<boolean> {
+  try {
+    await realExec()("ffmpeg", ["-version"], { timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("frame labels match the real decoded frame times (V1)", async (t) => {
+  if (!(await haveFfmpeg())) {
+    t.skip("ffmpeg is not installed");
+    return;
+  }
+  await withTempDir(async (dir) => {
+    const clip = join(dir, "clip.mp4");
+    // 30 s of testsrc: a moving pattern, so a frame taken at the wrong time is a
+    // visibly different picture.
+    await realExec()(
+      "ffmpeg",
+      [
+        "-nostdin", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=30",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", clip,
+      ],
+      { timeout: 60_000 },
+    );
+    const clipBytes = new Uint8Array(await readFile(clip));
+
+    const ffmpegCalls: string[][] = [];
+    const exec: ExecFn = async (file, args, options) => {
+      if (file === "ffmpeg") ffmpegCalls.push(args);
+      return realExec()(file, args, options);
+    };
+
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-length": String(clipBytes.byteLength) } });
+      }
+      return new Response(clipBytes, { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+
+    const config = loadTwitterConfig({ twitter: { maxFrames: 8, maxVideoSeconds: 120 } });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/99",
+      media: videoMedia({ durationMillis: 30_000 }),
+      config,
+      deps: {
+        fetcher,
+        env: {},
+        exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 300_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.frames.length, 8, "eight frames were extracted");
+
+    const timing = frameTiming(30_000, 8, 120);
+    assert.equal(timing.interval, 3.75);
+    assert.equal(timing.offset, 1.875, "half an interval, so frame i lands on the midpoint");
+
+    const frameArgs = ffmpegCalls.find((args) => args.some((a) => a.includes("frame-")));
+    assert.ok(frameArgs, "frame extraction ran");
+    // The seek must be an *input* option: after `-i` it would only skip decoded
+    // frames and the first frame would still be t=0.
+    const ssAt = frameArgs!.indexOf("-ss");
+    const iAt = frameArgs!.indexOf("-i");
+    assert.ok(ssAt >= 0 && ssAt < iAt, `-ss must precede -i, got ${frameArgs!.join(" ")}`);
+
+    // Ground truth, independent of the code under test: pick source frame
+    // `select=eq(n,K)` by index. The clip is 30 fps, so the frame at or after a
+    // label's timestamp is `ceil(t * 30)`.
+    const reference = async (index: number): Promise<string> => {
+      const file = join(dir, `ref-${index}.jpg`);
+      await realExec()(
+        "ffmpeg",
+        [
+          "-nostdin", "-loglevel", "error", "-y",
+          "-i", clip,
+          "-vf", `select=eq(n\\,${index}),scale='min(768,iw)':-2`,
+          "-frames:v", "1", "-q:v", "5", file,
+        ],
+        { timeout: 60_000 },
+      );
+      return (await readFile(file)).toString("base64");
+    };
+
+    for (let i = 0; i < 8; i += 1) {
+      const at: number = timing.offset + i * timing.interval;
+      const index = Math.ceil(at * 30);
+      const frameTime = index / 30;
+      assert.ok(
+        Math.abs(frameTime - at) <= 0.1,
+        `frame ${i + 1} is labelled ${at.toFixed(3)}s but the nearest frame is ${frameTime.toFixed(3)}s`,
+      );
+      assert.equal(
+        result.frames[i].data,
+        await reference(index),
+        `frame ${i + 1} must be the source frame at ~${at.toFixed(3)}s, not some other time`,
+      );
+    }
+
+    // The bug being fixed: frame 1 used to be the t=0 frame — a black frame or a
+    // title card on real video — a half-interval away from its label.
+    assert.notEqual(
+      result.frames[0].data,
+      await reference(0),
+      "the first frame is no longer the t=0 frame",
+    );
+    assert.match(result.frames[0].label, /@ 00:01$/, "the label renders the midpoint, not 00:00");
   });
 });
