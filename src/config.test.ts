@@ -30,7 +30,7 @@ test("loadTwitterConfig ignores malformed values instead of throwing", () => {
   const config = loadTwitterConfig({
     twitter: {
       synthesisModel: "   ",
-      maxMediaPerSearch: -3,
+      maxMediaPerSearch: "many",
       enableImageUnderstanding: "yes",
       enableVideoUnderstanding: 1,
     },
@@ -39,6 +39,37 @@ test("loadTwitterConfig ignores malformed values instead of throwing", () => {
   assert.equal(config.maxMediaPerSearch, DEFAULT_MAX_MEDIA_PER_SEARCH);
   assert.equal(config.enableImageUnderstanding, false);
   assert.equal(config.enableVideoUnderstanding, false);
+  assert.ok(
+    config.configNotes.some((note) => /twitter\.maxMediaPerSearch .* is not an integer/.test(note)),
+    "a non-integer falls back to the default and says so",
+  );
+});
+
+test("an out-of-range numeric setting is clamped and disclosed (G8)", () => {
+  const config = loadTwitterConfig({ twitter: { maxMediaPerSearch: -3, maxFrames: 99 } });
+  assert.equal(config.maxMediaPerSearch, 0, "-3 clamps to the supported minimum");
+  assert.equal(config.maxFrames, 16, "99 clamps to the supported maximum");
+  assert.ok(
+    config.configNotes.some((note) =>
+      /twitter\.maxMediaPerSearch -3 is outside the supported range 0\.\.20; using 0\./.test(note),
+    ),
+  );
+  assert.ok(
+    config.configNotes.some((note) =>
+      /twitter\.maxFrames 99 is outside the supported range 1\.\.16; using 16\./.test(note),
+    ),
+  );
+});
+
+test("a numeric setting inside its range is used as-is, without a note (G8)", () => {
+  const config = loadTwitterConfig({
+    twitter: { maxMediaPerSearch: 3, maxFrames: 8, maxVideoSeconds: 600, videoBudgetMs: 300_000 },
+  });
+  assert.equal(config.maxMediaPerSearch, 3);
+  assert.equal(config.maxFrames, 8);
+  assert.equal(config.maxVideoSeconds, 600);
+  assert.equal(config.videoBudgetMs, 300_000);
+  assert.deepEqual(config.configNotes, []);
 });
 
 test("loadTwitterConfig caps maxMediaPerSearch", () => {

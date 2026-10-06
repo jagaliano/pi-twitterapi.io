@@ -62,10 +62,17 @@ test("video config defaults and clamps", () => {
   const clamped = loadTwitterConfig({
     twitter: { maxVideoSeconds: 9_999, maxFrames: 99, maxVideosPerSearch: 99, videoBudgetMs: 10_000_000 },
   });
-  assert.equal(clamped.maxVideoSeconds, 120, "out-of-range duration falls back to the default");
-  assert.equal(clamped.maxFrames, 8, "out-of-range frame cap falls back to the default");
-  assert.equal(clamped.maxVideosPerSearch, 1);
+  assert.equal(clamped.maxVideoSeconds, 600, "an over-range duration is clamped to the maximum, not defaulted");
+  assert.equal(clamped.maxFrames, 16, "an over-range frame cap is clamped to the maximum, not defaulted");
+  assert.equal(clamped.maxVideosPerSearch, 3);
   assert.equal(clamped.videoBudgetMs, 300_000, "budget is clamped to the effective max");
+  // Every clamp is disclosed: the whole point of G8 is that these were silent.
+  for (const key of ["maxVideoSeconds", "maxFrames", "maxVideosPerSearch", "videoBudgetMs"]) {
+    assert.ok(
+      clamped.configNotes.some((note) => note.includes(`twitter.${key} `)),
+      `the ${key} clamp is disclosed`,
+    );
+  }
 });
 
 // -------------------------------------------------------------- variant logic

@@ -169,9 +169,30 @@ function pageCount(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 ? Math.min(value, 100) : fallback;
 }
 
-/** Integer in [min, max], or the fallback when absent/invalid. */
-function intInRange(value: unknown, fallback: number, min: number, max: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+/**
+ * Integer in [min, max]: an out-of-range number is clamped, a value that is not an
+ * integer at all falls back to the default. Both outcomes are disclosed, because
+ * silently using a different number than the one written is exactly what made these
+ * settings inconsistent — some clamped, some fell back, none said so (G8).
+ */
+function intInRange(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+  key: string,
+  notes: string[],
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    notes.push(`twitter.${key} ${JSON.stringify(value)} is not an integer; using ${fallback}.`);
+    return fallback;
+  }
+  const clamped = Math.min(Math.max(value, min), max);
+  if (clamped !== value) {
+    notes.push(`twitter.${key} ${value} is outside the supported range ${min}..${max}; using ${clamped}.`);
+  }
+  return clamped;
 }
 
 function text(value: unknown): string | undefined {
@@ -272,16 +293,50 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     ffmpegPath: text(user.ffmpegPath),
     whisperCppBinary: text(user.whisperCppBinary),
     whisperModelPath: text(user.whisperModelPath),
-    maxVideoSeconds: intInRange(config.maxVideoSeconds, DEFAULT_MAX_VIDEO_SECONDS, 1, 600),
-    maxVideoBytes: intInRange(config.maxVideoBytes, DEFAULT_MAX_VIDEO_BYTES, 1_024, MAX_VIDEO_BYTES_CEILING),
-    maxFrames: intInRange(config.maxFrames, DEFAULT_MAX_FRAMES, 1, 16),
-    maxVideosPerSearch: intInRange(config.maxVideosPerSearch, DEFAULT_MAX_VIDEOS_PER_SEARCH, 1, 3),
-    videoBudgetMs: Math.min(intervalMs(config.videoBudgetMs, DEFAULT_VIDEO_BUDGET_MS), MAX_VIDEO_BUDGET_MS),
+    maxVideoSeconds: intInRange(
+      config.maxVideoSeconds,
+      DEFAULT_MAX_VIDEO_SECONDS,
+      1,
+      600,
+      "maxVideoSeconds",
+      configNotes,
+    ),
+    maxVideoBytes: intInRange(
+      config.maxVideoBytes,
+      DEFAULT_MAX_VIDEO_BYTES,
+      1_024,
+      MAX_VIDEO_BYTES_CEILING,
+      "maxVideoBytes",
+      configNotes,
+    ),
+    maxFrames: intInRange(config.maxFrames, DEFAULT_MAX_FRAMES, 1, 16, "maxFrames", configNotes),
+    maxVideosPerSearch: intInRange(
+      config.maxVideosPerSearch,
+      DEFAULT_MAX_VIDEOS_PER_SEARCH,
+      1,
+      3,
+      "maxVideosPerSearch",
+      configNotes,
+    ),
+    videoBudgetMs: intInRange(
+      config.videoBudgetMs,
+      DEFAULT_VIDEO_BUDGET_MS,
+      1,
+      MAX_VIDEO_BUDGET_MS,
+      "videoBudgetMs",
+      configNotes,
+    ),
     configNotes,
-    maxMediaPerSearch:
-      typeof maxMedia === "number" && Number.isInteger(maxMedia) && maxMedia >= 0
-        ? Math.min(maxMedia, 20)
-        : DEFAULT_MAX_MEDIA_PER_SEARCH,
+    // Same helper as the video keys: 500 clamps to 20, -3 clamps to 0 (which is a
+    // meaningful "attach no media"), 1.5 falls back to the default with a note.
+    maxMediaPerSearch: intInRange(
+      maxMedia,
+      DEFAULT_MAX_MEDIA_PER_SEARCH,
+      0,
+      20,
+      "maxMediaPerSearch",
+      configNotes,
+    ),
     minRequestIntervalMs: intervalMs(config.minRequestIntervalMs, DEFAULT_MIN_REQUEST_INTERVAL_MS),
     retryBaseDelayMs: intervalMs(config.retryBaseDelayMs, DEFAULT_RETRY_BASE_DELAY_MS),
     maxPages: Math.min(pageCount(config.maxPages, DEFAULT_MAX_PAGES), ceiling),
