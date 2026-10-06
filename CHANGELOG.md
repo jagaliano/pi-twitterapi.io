@@ -74,9 +74,12 @@ No new features.
 
 ### Changed
 
-- `peerDependencies` for `@earendil-works/pi-coding-agent` is `^1.0.0`, the first
-  release whose `ModelRegistry` exposes `complete()`. `*` let a pi without it satisfy
-  the range.
+- `peerDependencies` for `@earendil-works/pi-coding-agent` is `^1.0.0`, so a package
+  manager that resolves peers refuses a pi older than that. `*` let any version satisfy
+  the range. `^1.0.0` is the **supported minimum**, not the first release with the
+  capability: `ModelRegistry` exists on 0.80.6 but has no `complete()` there, and
+  `complete()` is present from 0.99.2 (both verified against the published tarballs).
+  1.0.0 is the line this extension is actually tested against.
 - The test glob is quoted. Unquoted, `sh` expanded `src/**/*.test.ts` to
   `src/*/*.test.ts`, so the first test added in a sub-directory would have silently
   reduced the whole run to that one file.

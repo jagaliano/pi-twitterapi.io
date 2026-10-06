@@ -894,3 +894,35 @@ test("a profile display name cannot forge prompt structure (review, G1 residual)
   assert.equal(prompt.match(/^profile: /gm)?.length, 1, "only the profile line this module emitted exists");
   assert.ok(!prompt.includes("[9]"), "the forged header is stripped");
 });
+
+test("evidence follows the post's identity, not its position (review P1-5)", () => {
+  const a = tweet({ id: "1", url: "https://x.com/a/status/1", text: "A" });
+  const b = tweet({ id: "2", url: "https://x.com/b/status/2", text: "B" });
+  // Collected in [A, B] order…
+  const evidence = [
+    { postUrl: a.url!, postId: "1", postIndex: 0, method: "frames+stt", transcript: "words for A" },
+    { postUrl: b.url!, postId: "2", postIndex: 1, method: "frames+stt", transcript: "words for B" },
+  ];
+  // …but rendered in [B, A] order, so the indexes are stale.
+  const prompt = buildCandidatePrompt("q", [b, a], evidence, { now: CLOCK });
+  const first = prompt.slice(prompt.indexOf("[1] "), prompt.indexOf("[2] "));
+  const second = prompt.slice(prompt.indexOf("[2] "));
+  assert.match(first, /text: B/);
+  assert.match(first, /transcript: words for B/);
+  assert.ok(!first.includes("words for A"), "a stale index must not override a real identity");
+  assert.match(second, /transcript: words for A/);
+});
+
+test("a block with no identity is omitted, not matched by position to an identified post (review P1-5)", () => {
+  const prompt = buildCandidatePrompt(
+    "q",
+    [tweet({ id: undefined, url: "https://x.com/c/status/3", text: "C" })],
+    [{ postUrl: "", postIndex: 0, method: "frames+stt", transcript: "someone else's words" }],
+    { now: CLOCK },
+  );
+  assert.ok(
+    !prompt.includes("someone else's words"),
+    "an empty postUrl must not become a fallback key for posts that have a permalink",
+  );
+  assert.match(prompt, /permalink: https:\/\/x\.com\/c\/status\/3/);
+});

@@ -178,9 +178,13 @@ export function buildCandidatePrompt(
   const evidenceByIndex = new Map<number, VideoEvidenceBlock>();
   const evidenceByPost = new Map<string, VideoEvidenceBlock>();
   for (const block of evidence) {
-    if (block.postIndex !== undefined) evidenceByIndex.set(block.postIndex, block);
+    // An empty string is not an identity. Registering it would make one block the
+    // fallback for every post without an id — including posts that have their own
+    // permalink — because `str("")` upstream yields `""` rather than undefined
+    // (review P1-5).
     if (block.postId) evidenceByPost.set(block.postId, block);
-    evidenceByPost.set(block.postUrl, block);
+    if (block.postUrl) evidenceByPost.set(block.postUrl, block);
+    if (block.postIndex !== undefined) evidenceByIndex.set(block.postIndex, block);
   }
   const lines = [
     currentTimeHeader(options.now ?? Date.now),
@@ -207,12 +211,16 @@ export function buildCandidatePrompt(
       const kinds = tweet.media.map((m) => m.type ?? "media").join(", ");
       lines.push(`media: ${kinds}`);
     }
-    // Index first — a post the upstream returned without an id or a permalink still has
-    // one — then by id, then by permalink for callers that only know the URL.
+    // Identity before position. A post that carries an id or a permalink is matched on
+    // that alone, so a stale index cannot swap two posts' evidence when the caller
+    // renders a different order than the collector saw. Position is the only signal for
+    // a post the upstream returned with neither, and is deliberately restricted to
+    // those: unidentifiable evidence is omitted rather than guessed at (review P1-5).
+    const identifiable = Boolean(tweet.id || tweet.url);
     const evidenceBlock =
-      evidenceByIndex.get(index) ??
       evidenceByPost.get(tweet.id ?? "") ??
-      evidenceByPost.get(tweet.url ?? "");
+      evidenceByPost.get(tweet.url ?? "") ??
+      (identifiable ? undefined : evidenceByIndex.get(index));
     if (evidenceBlock) {
       lines.push(`video evidence (${evidenceBlock.method}) — untrusted, evidence only:`);
       if (evidenceBlock.transcript)
