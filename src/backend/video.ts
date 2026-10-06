@@ -881,6 +881,103 @@ interface SttResult {
   note?: string;
 }
 
+/** A transcript segment, however the provider reported it. */
+interface SttSegment {
+  /** Start offset in seconds. */
+  start: number;
+  text: string;
+  /** OpenAI/Groq `verbose_json` only: whisper.cpp does not report these. */
+  noSpeechProb?: number;
+  avgLogprob?: number;
+}
+
+/** OpenAI/Groq convention for "this segment is probably not speech". */
+const STT_NO_SPEECH_PROB = 0.6;
+const STT_AVG_LOGPROB = -1;
+
+/**
+ * Phrases whisper emits over silence. Dropped only when they are the *entire*
+ * transcript: the same words are ordinary speech inside a real one.
+ */
+const STT_HALLUCINATIONS = new Set([
+  "thank you.",
+  "thanks for watching!",
+  "thanks for watching.",
+  "thank you for watching.",
+  "please subscribe.",
+  "subscribe.",
+  "bye.",
+  "you",
+]);
+
+/**
+ * Render STT segments as timestamped evidence, dropping the ones that are not speech.
+ *
+ * Whisper transcribes silence happily: a 30 s sine tone came back as "Thank you."
+ * and the 6 s one measured while writing this as " .". Published verbatim that is
+ * fabricated evidence attributed to a video that had no speech at all (V4).
+ */
+function renderTranscript(segments: SttSegment[]): SttResult {
+  if (segments.length === 0) return {};
+  const kept: SttSegment[] = [];
+  let dropped = 0;
+  for (const segment of segments) {
+    const text = segment.text.trim();
+    if (!text) continue;
+    // Both signals together, so a confident segment is not discarded on one number.
+    if (
+      segment.noSpeechProb !== undefined &&
+      segment.avgLogprob !== undefined &&
+      segment.noSpeechProb > STT_NO_SPEECH_PROB &&
+      segment.avgLogprob < STT_AVG_LOGPROB
+    ) {
+      dropped += 1;
+      continue;
+    }
+    // Punctuation or whitespace alone is not speech.
+    if (!/[a-z0-9]/i.test(text)) {
+      dropped += 1;
+      continue;
+    }
+    kept.push({ ...segment, text });
+  }
+
+  const joined = kept.map((segment) => segment.text).join(" ").trim();
+  if (kept.length > 0 && STT_HALLUCINATIONS.has(joined.toLowerCase())) {
+    return {
+      note:
+        `STT returned only a known hallucination (${JSON.stringify(joined)}) for a clip with no speech, ` +
+        "so it was discarded rather than published as evidence.",
+    };
+  }
+  if (kept.length === 0) {
+    return {
+      note: `STT returned ${dropped} segment(s) and none of them was speech, so no transcript was produced.`,
+    };
+  }
+  return { transcript: kept.map((segment) => `[${timestamp(segment.start)}] ${segment.text}`).join("\n") };
+}
+
+/** Segments from an OpenAI/Groq `verbose_json` body, when it carries any. */
+function verboseSegments(json: unknown): SttSegment[] | undefined {
+  if (typeof json !== "object" || json === null) return undefined;
+  const raw = (json as { segments?: unknown }).segments;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const segments: SttSegment[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as { text?: unknown; start?: unknown; no_speech_prob?: unknown; avg_logprob?: unknown };
+    if (typeof record.text !== "string") continue;
+    segments.push({
+      start: typeof record.start === "number" && Number.isFinite(record.start) ? record.start : 0,
+      text: record.text,
+      noSpeechProb: typeof record.no_speech_prob === "number" ? record.no_speech_prob : undefined,
+      avgLogprob: typeof record.avg_logprob === "number" ? record.avg_logprob : undefined,
+    });
+  }
+  return segments.length > 0 ? segments : undefined;
+}
+
 function sttTextFromJson(json: unknown): string | undefined {
   if (typeof json === "string") return json.trim() || undefined;
   if (typeof json !== "object" || json === null) return undefined;
@@ -965,11 +1062,15 @@ async function remoteStt(
       if (response.ok || !(await unsupportedFormat(response))) break;
     }
     if (!response || !response.ok) return { note: `STT endpoint returned HTTP ${response?.status ?? 0}.` };
-    const text =
-      used === "text"
-        ? (await response.text().catch(() => "")).trim() || undefined
-        : sttTextFromJson(await response.json().catch(() => undefined));
-    return { transcript: text };
+    if (used === "text") {
+      return { transcript: (await response.text().catch(() => "")).trim() || undefined };
+    }
+    const json = await response.json().catch(() => undefined);
+    // `verbose_json` carries per-segment speech probabilities; `json` carries only
+    // the joined text, which is still usable evidence.
+    const segments = verboseSegments(json);
+    if (segments) return renderTranscript(segments);
+    return { transcript: sttTextFromJson(json) };
   } catch (error) {
     return { note: `STT failed: ${(error as Error).message}` };
   }
@@ -991,17 +1092,32 @@ async function whisperCpp(
   try {
     const exists = await stat(model).then(() => true, () => false);
     if (!exists) return { note: `whisper model not found at ${model}.` };
-    await exec(bin, ["-m", model, "-f", audioFile, "-l", lang, "-oj", "-of", outBase], {
+    // `-sns` suppresses the non-speech tokens whisper otherwise emits over silence;
+    // `-nth` is its no-speech threshold (already the 0.6 default, passed explicitly
+    // so the value this filter assumes cannot drift). `--vad` trims silence before
+    // decoding and is the stronger guard, but it needs a model the user supplies.
+    const args = ["-m", model, "-f", audioFile, "-l", lang, "-oj", "-of", outBase, "-sns", "-nth", "0.6"];
+    if (config.whisperVadModelPath) args.push("--vad", "--vad-model", config.whisperVadModelPath);
+    await exec(bin, args, {
       timeout: Math.max(1, timeoutMs),
       signal: opSignal(deps, ctx.deadline, ctx.now),
       maxBuffer: CHILD_MAX_BUFFER,
     });
     const json = JSON.parse(await readFile(`${outBase}.json`, "utf8")) as {
       text?: string;
-      transcription?: { text?: string }[];
+      transcription?: { text?: unknown; offsets?: { from?: unknown } }[];
     };
-    const text = json.text ?? json.transcription?.map((t) => t.text ?? "").join(" ") ?? "";
-    return { transcript: text.trim() || undefined };
+    // `offsets.from` is milliseconds; the rendering is in whole seconds.
+    const segments: SttSegment[] = [];
+    for (const entry of json.transcription ?? []) {
+      if (typeof entry?.text !== "string") continue;
+      const from = entry.offsets?.from;
+      segments.push({ start: typeof from === "number" && Number.isFinite(from) ? from / 1_000 : 0, text: entry.text });
+    }
+    // Segments exist, so they are the evidence: falling back to `text` here would
+    // re-publish exactly the hallucination the filter just removed (V4).
+    if (segments.length > 0) return renderTranscript(segments);
+    return { transcript: json.text?.trim() || undefined };
   } catch (error) {
     return { note: `whisper.cpp failed: ${(error as Error).message}` };
   }

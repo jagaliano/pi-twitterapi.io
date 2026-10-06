@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -1326,9 +1327,11 @@ test("processVideo runs local whisper.cpp and reads the JSON output file", async
   await withTempDir(async (dir) => {
     const modelPath = join(dir, "ggml.bin");
     await writeFile(modelPath, "model");
+    const whisperArgs: string[][] = [];
     const whisperExec: ExecFn = async (_file, args) => {
       const output = args[args.length - 1];
       if (args.includes("-oj")) {
+        whisperArgs.push(args);
         const ofIndex = args.indexOf("-of");
         await writeFile(`${args[ofIndex + 1]}.json`, JSON.stringify({ text: "whispered words" }));
         return { stdout: "", stderr: "" };
@@ -1356,6 +1359,11 @@ test("processVideo runs local whisper.cpp and reads the JSON output file", async
     assert.equal(result.transcript, "whispered words");
     assert.equal(result.method, "transcript-only");
     assert.ok(result.notes.some((note) => /local whisper.cpp/.test(note)));
+    // V4: silence is fought at the decoder as well as in the filter.
+    const sttArgs = whisperArgs[0];
+    assert.ok(sttArgs.includes("-sns"), "non-speech tokens are suppressed");
+    assert.equal(sttArgs[sttArgs.indexOf("-nth") + 1], "0.6");
+    assert.ok(!sttArgs.includes("--vad"), "no VAD model is configured");
   });
 });
 
@@ -2310,5 +2318,254 @@ test("a native reply that says nothing about speech still allows STT (V3)", asyn
     assert.equal(result.method, "gemini-native");
     assert.equal(sttCalls, 1, "an unstructured reply leaves the transcript unknown");
     assert.equal(result.transcript, "hello there");
+  });
+});
+
+// ------------------------------------- STT hallucination filter + times (V4)
+
+const STT_CONFIG = loadTwitterConfig({
+  twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+});
+
+/** Serves the MP4, then an STT reply. */
+function sttReplyFetcher(body: unknown, contentType = "application/json"): typeof fetch {
+  return (async (input: string | URL) => {
+    const url = String(input);
+    if (url.includes("/audio/transcriptions")) {
+      return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": contentType },
+      });
+    }
+    return new Response(new Uint8Array(1_024).fill(1), {
+      status: 200,
+      headers: { "content-type": "video/mp4" },
+    });
+  }) as unknown as typeof fetch;
+}
+
+async function runStt(dir: string, fetcher: typeof fetch) {
+  return processVideo({
+    postUrl: "https://x.com/a/status/60",
+    media: videoMedia(),
+    config: STT_CONFIG,
+    deps: {
+      fetcher,
+      env: { STT_API_KEY: "s" },
+      exec: fakeExec().exec,
+      checkBinary: async () => true,
+      mktemp: async () => dir,
+      rmTemp: async () => {},
+      now: () => 0,
+    },
+    deadline: 60_000,
+    modelSupportsImage: false,
+  });
+}
+
+test("segments that are not speech are dropped and the rest are timestamped (V4)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({
+        text: " Thank you. hello world .",
+        segments: [
+          // High no-speech probability *and* a poor average logprob.
+          { start: 0, text: " Thank you.", no_speech_prob: 0.9, avg_logprob: -1.5 },
+          { start: 12.5, text: " hello world", no_speech_prob: 0.1, avg_logprob: -0.3 },
+          // Punctuation only: whisper's favourite thing to emit over silence.
+          { start: 40, text: " .", no_speech_prob: 0.1, avg_logprob: -0.2 },
+        ],
+      }),
+    );
+    assert.equal(result.transcript, "[00:12] hello world");
+  });
+});
+
+test("a segment is kept when only one of the two signals looks bad (V4)", async () => {
+  await withTempDir(async (dir) => {
+    // A high no_speech_prob with a healthy logprob is a quiet speaker, not silence.
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({
+        segments: [{ start: 3, text: "quiet but real", no_speech_prob: 0.95, avg_logprob: -0.2 }],
+      }),
+    );
+    assert.equal(result.transcript, "[00:03] quiet but real");
+  });
+});
+
+test("a transcript that is entirely a known hallucination is discarded (V4)", async () => {
+  await withTempDir(async (dir) => {
+    // Both signals look healthy, so only the phrase itself identifies this as
+    // whisper transcribing silence.
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({ segments: [{ start: 0, text: " Thank you.", no_speech_prob: 0.05, avg_logprob: -0.2 }] }),
+    );
+    assert.equal(result.transcript, undefined);
+    assert.ok(
+      result.notes.some((note) => /known hallucination/.test(note)),
+      `expected a hallucination note, got ${JSON.stringify(result.notes)}`,
+    );
+  });
+});
+
+test("a hallucination phrase inside real speech is kept (V4)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({
+        segments: [
+          { start: 0, text: " we asked the model and it said", no_speech_prob: 0.05, avg_logprob: -0.2 },
+          { start: 4, text: " thank you.", no_speech_prob: 0.05, avg_logprob: -0.2 },
+        ],
+      }),
+    );
+    assert.equal(result.transcript, "[00:00] we asked the model and it said\n[00:04] thank you.");
+  });
+});
+
+test("dropping every segment is disclosed rather than returning an empty transcript (V4)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({
+        segments: [
+          { start: 0, text: " .", no_speech_prob: 0.1, avg_logprob: -0.2 },
+          { start: 5, text: "  ", no_speech_prob: 0.1, avg_logprob: -0.2 },
+        ],
+      }),
+    );
+    assert.equal(result.transcript, undefined);
+    assert.ok(
+      result.notes.some((note) => /none of them was speech/.test(note)),
+      `expected a no-speech note, got ${JSON.stringify(result.notes)}`,
+    );
+  });
+});
+
+test("a plain json STT reply without segments still supplies the transcript (V4)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await runStt(dir, sttReplyFetcher({ text: "no segments here" }));
+    assert.equal(result.transcript, "no segments here");
+  });
+});
+
+// ------------------------------------------- real whisper.cpp on silence (V4)
+
+/** A real whisper.cpp model, if one is installed. */
+function whisperModelForTest(): string | undefined {
+  const candidates = [
+    process.env.PI_TWITTERAPI_WHISPER_MODEL,
+    "/usr/local/share/whisper.cpp/for-tests-ggml-tiny.bin",
+    join(homedir(), ".cache/whisper.cpp/ggml-large-v3-turbo-q5_0.bin"),
+  ];
+  return candidates.find((path) => path && existsSync(path));
+}
+
+test("real whisper.cpp over a tone with no speech publishes no transcript (V4)", async (t) => {
+  const model = whisperModelForTest();
+  if (!model || !(await haveFfmpeg())) {
+    t.skip("ffmpeg or a whisper.cpp model is not installed");
+    return;
+  }
+  try {
+    await realExec()("whisper-cli", ["--help"], { timeout: 10_000 });
+  } catch {
+    t.skip("whisper-cli is not installed");
+    return;
+  }
+  await withTempDir(async (dir) => {
+    // A real mp4 whose audio is a 440 Hz tone: no speech at all, which is exactly
+    // the input whisper hallucinates over ("Thank you." over a 30 s tone).
+    const clip = join(dir, "clip.mp4");
+    await realExec()(
+      "ffmpeg",
+      [
+        "-nostdin", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=6",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip,
+      ],
+      { timeout: 60_000 },
+    );
+    const clipBytes = new Uint8Array(await readFile(clip));
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-length": String(clipBytes.byteLength) } });
+      }
+      return new Response(clipBytes, { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+
+    const config = loadTwitterConfig({ twitter: { whisperCppBinary: "whisper-cli", whisperModelPath: model } });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/61",
+      media: videoMedia({ durationMillis: 6_000 }),
+      config,
+      deps: {
+        fetcher,
+        env: {},
+        exec: realExec(),
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => Date.now(),
+      },
+      deadline: Date.now() + 300_000,
+      modelSupportsImage: false,
+    });
+
+    assert.equal(
+      result.transcript,
+      undefined,
+      `a tone with no speech must not produce a transcript, got ${JSON.stringify(result.transcript)}`,
+    );
+    assert.equal(result.method, "frames-only");
+  });
+});
+
+test("a configured VAD model is passed to whisper.cpp (V4)", async () => {
+  await withTempDir(async (dir) => {
+    const modelPath = join(dir, "ggml.bin");
+    const vadPath = join(dir, "ggml-silero.bin");
+    await writeFile(modelPath, "model");
+    await writeFile(vadPath, "vad");
+    const seen: string[][] = [];
+    const exec: ExecFn = async (_file, args) => {
+      const output = args[args.length - 1];
+      if (args.includes("-oj")) {
+        seen.push(args);
+        const ofIndex = args.indexOf("-of");
+        await writeFile(`${args[ofIndex + 1]}.json`, JSON.stringify({ text: "words" }));
+        return { stdout: "", stderr: "" };
+      }
+      if (args.includes("-i") && !args.includes("-y")) {
+        const error = new Error("probe") as Error & { stderr?: string };
+        error.stderr = "Duration: 00:00:05.00";
+        throw error;
+      }
+      if (!output.includes("frame-")) await writeFile(output, new Uint8Array([1]));
+      return { stdout: "", stderr: "" };
+    };
+    const { fetcher } = videoFetcher();
+    const config = loadTwitterConfig({
+      twitter: {
+        whisperCppBinary: "/usr/bin/whisper-cli",
+        whisperModelPath: modelPath,
+        whisperVadModelPath: vadPath,
+      },
+    });
+    await processVideo({
+      postUrl: "https://x.com/a/status/62",
+      media: videoMedia(),
+      config,
+      deps: { fetcher, env: {}, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(seen.length, 1, "whisper ran once");
+    assert.ok(seen[0].includes("--vad"), "VAD is enabled when a model is supplied");
+    assert.equal(seen[0][seen[0].indexOf("--vad-model") + 1], vadPath);
   });
 });

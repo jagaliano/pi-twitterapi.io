@@ -54,6 +54,7 @@ export const USER_ONLY_CONFIG_KEYS = [
   "ffmpegPath",
   "whisperCppBinary",
   "whisperModelPath",
+  "whisperVadModelPath",
 ] as const;
 
 export interface TwitterConfig {
@@ -112,6 +113,12 @@ export interface TwitterConfig {
   whisperCppBinary?: string;
   /** whisper.cpp GGML model path (user-installed). */
   whisperModelPath?: string;
+  /**
+   * Optional whisper.cpp VAD model (user-installed, e.g. `ggml-silero-v5.1.2.bin`).
+   * When set, whisper.cpp runs with `--vad`, which trims silence before decoding and
+   * is the most effective guard against transcribing it (V4).
+   */
+  whisperVadModelPath?: string;
   /** Duration guard in seconds (default 120, max 600). */
   maxVideoSeconds: number;
   /** Byte cap for a single video download (default 32 MiB, max 64 MiB). */
@@ -293,6 +300,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     ffmpegPath: text(user.ffmpegPath),
     whisperCppBinary: text(user.whisperCppBinary),
     whisperModelPath: text(user.whisperModelPath),
+    whisperVadModelPath: text(user.whisperVadModelPath),
     maxVideoSeconds: intInRange(
       config.maxVideoSeconds,
       DEFAULT_MAX_VIDEO_SECONDS,
