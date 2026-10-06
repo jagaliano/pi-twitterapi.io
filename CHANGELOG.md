@@ -5,6 +5,65 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-05
+
+A second native-video provider, so video understanding is no longer tied to
+Google. Still **off by default**: without `enableVideoProcessing` nothing here
+runs and a video post is represented by its poster frame.
+
+### Added
+
+- `videoEndpointType: openai-compatible` — native video through any video-capable
+  chat-completions endpoint that accepts the `video_url` data-URL shape, such as
+  OpenRouter (`videoEndpoint`, `videoModel`, `videoApiKeyEnv`). Verified live with
+  `google/gemini-2.5-flash-lite` and `qwen/qwen3.7-flash`, both of which read
+  on-screen text out of a real post. Because the measured endpoint accepted
+  request bodies past the `maxVideoBytes` ceiling, this adapter sends the clip
+  inline and has no upload lifecycle: nothing is uploaded and nothing has to be
+  deleted afterwards.
+- README documents the OpenRouter configuration with a copy-ready JSON block.
+
+### Security
+
+- The `openai-compatible` endpoint keeps the existing key-to-host rules: it is
+  used only when `videoApiKeyEnv` is set explicitly and the URL is `https://`, and
+  that authorization is re-checked at the adapter boundary, so a caller-built
+  config cannot send a key to a host the user never named.
+- The clip is sent as a non-redirecting POST, so an authenticated body cannot be
+  re-sent elsewhere by a redirect.
+
+### Behaviour notes
+
+- A native reply cut off at the token limit is **refused** rather than published.
+  Half-written JSON would otherwise be kept whole as the visual description and
+  suppress the frame fallback, which would put a broken answer into the notes as
+  evidence. Frames and STT still supply the visuals in that case.
+- The per-video analysis token cap is raised to 4,000, because reasoning-style
+  models spend most of the budget thinking before they emit the JSON answer.
+- An empty native reply now reports the provider's `finish_reason`, which is what
+  distinguishes a reasoning-only reply from a rate-limited shared pool.
+- **Grok cannot be used here.** `x-ai/grok-4.3` declares no video input and
+  rejects the request with HTTP 404 "No endpoints found that support input
+  video"; it remains a frames-only option. Free shared-pool models on OpenRouter
+  (for example `google/gemma-4-*-it:free`) return HTTP 429 and degrade to
+  `frames+stt`, which is disclosed in the answer.
+
+### Fixed
+
+- Selection of the clip to analyse is unchanged, but the `openai-compatible`
+  adapter now prefers the same small, low-resolution variant as the Gemini path:
+  native video models sample at roughly 1 fps, so the smaller upload is faster and
+  cheaper without losing evidence.
+
+### Documentation
+
+- `docs/video-spike.md` records the measured results for both providers: the
+  working `video_url` shape, the two plausible alternative spellings that fail
+  **silently** with HTTP 200 while ignoring the video, the accepted request sizes,
+  and the reachability of the Gemini Files path.
+- A truncated or empty native reply is described in the README, and the claim that
+  every chat-completions endpoint works is narrowed to video-capable ones.
+
 ## [0.2.0] - 2026-10-04
 
 Opt-in real video understanding. **Off by default:** without
@@ -99,6 +158,9 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jagaliano/pi-twitterapi.io/releases/tag/v0.1.0
