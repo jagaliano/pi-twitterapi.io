@@ -5,6 +5,90 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-06
+
+Correctness pass from a review of the whole extension, not only the video tiers. This
+release fixes output that was **wrong**, failures that were **silent**, and two
+settings problems that could remove the tool or change a number without saying so.
+No new features.
+
+### Fixed
+
+- **Frame labels were wrong by half a sampling interval.** `fps=N/D` emits frames at
+  interval *starts*, but the labels assumed midpoints, so on a 120 s clip every frame
+  was labelled 7.5 s away from where it was — and frame 1 was always the t=0 frame,
+  which on real video is a black frame or a title card. Frames are now taken with one
+  input seek per labelled timestamp, which is exact. Note that the obvious fix —
+  seeking half an interval in and keeping `fps=N/D` — **does not work**: the `fps`
+  filter does not compose with `-ss` (measured: it emitted frames from t≈3.97 when
+  asked for t=2.0). The new test compares produced frames byte-for-byte against source
+  frames selected independently by index, with real ffmpeg.
+- **A blocked, empty or truncated native-video reply was silent.** Gemini answers a
+  safety block with HTTP 200 and no parts; the adapter returned neither text nor
+  error, so the run degraded to frames+STT and reported nothing. The reason
+  (`promptFeedback.blockReason` / `finishReason`) is now disclosed, a `MAX_TOKENS`
+  reply is refused instead of being published as a half-written visual description,
+  and both adapters disclose a reply that is neither text nor error.
+- **STT re-ran after native analysis had already said there was no speech.**
+  `{"transcript": ""}` was normalised to `undefined`, which the `!transcript` gate
+  could not tell apart from "not transcribed yet", so silent clips paid for a second
+  transcription whose output was then published as native evidence. The gate now
+  distinguishes the two, and a reply that says nothing about speech still allows STT.
+- **Whisper hallucinations were published as evidence.** Whisper transcribes silence
+  happily: a 30 s sine tone came back as "Thank you." and the 6 s one measured here
+  as " .". `verbose_json` segment data was requested and then thrown away. Remote STT
+  now drops a segment when `no_speech_prob > 0.6` **and** `avg_logprob < -1`, renders
+  the rest as `[mm:ss] text`, and discards a transcript that is entirely a known
+  hallucination phrase (while keeping the same phrase inside real speech).
+  `whisper.cpp` gains `-sns`, an explicit `-nth 0.6`, and `--vad` when the new
+  `whisperVadModelPath` is set.
+- **Local transcription started without enough budget to finish** and was killed late
+  after spending the whole video phase. It is now skipped up front with a disclosure
+  when the remaining budget is below `clipSeconds × whisperRealtimeFactor`, and
+  `whisperThreads` controls `-t` (default `min(8, availableParallelism())`).
+- **Retrieved text could forge an evidence block.** A post, transcript or bio
+  containing a newline plus `[n] @handle` and `permalink: <url>` could emit a block
+  that the citation filter *accepted*, because the permalink it cited was one we
+  really fetched: citations could not be invented, but attribution could be spoofed.
+  All untrusted fields now go through one helper that owns the prompt's structure.
+- **A malformed settings file removed the tool entirely.** A stray trailing comma in
+  a cloned repo's `.pi/settings.json` threw during registration, so `twitter` was
+  never registered — a silent, total failure. The file is now reported in Notes and
+  registration proceeds with whatever the readable files supplied.
+- **Numeric settings behaved inconsistently and silently.** Out-of-range values fell
+  back to the default for some keys and clamped for others, with no note either way.
+  All of them now clamp to the supported bound, fall back only when the value is not
+  an integer, and disclose which value was used.
+- **The model did not know what time it is**, so "today", "this week" and "latest"
+  were answered against a training cutoff next to raw upstream dates. All four
+  prompts now open with `Current time: <ISO UTC> (local: <zone>)` and post/account
+  dates are rendered as ISO.
+- **`mode="tweets"` did not disclose ids the upstream never returned**: asking for
+  five posts and getting three reported only "3 post(s)".
+- **Video evidence for a post without a permalink never reached the model** — it was
+  collected, billed and then dropped, while the run still said "processed via".
+- A download is accepted only as `video/mp4` (or with no content type at all) rather
+  than any `video/*`, the Gemini upload URL from the endpoint's reply is accepted only
+  when it is https on the host already configured, and the video model id is
+  URL-encoded in the request path.
+
+### Changed
+
+- `peerDependencies` for `@earendil-works/pi-coding-agent` is `^1.0.0`, the first
+  release whose `ModelRegistry` exposes `complete()`. `*` let a pi without it satisfy
+  the range.
+- The test glob is quoted. Unquoted, `sh` expanded `src/**/*.test.ts` to
+  `src/*/*.test.ts`, so the first test added in a sub-directory would have silently
+  reduced the whole run to that one file.
+- The download streams through one `createWriteStream` instead of re-opening the file
+  per chunk.
+- New user-only keys: `whisperThreads`, `whisperRealtimeFactor`, `whisperVadModelPath`.
+
+### Added
+
+- CI installs ffmpeg so the real-frame-timing test actually runs, and the matrix now
+  covers the `engines` floor (22.19) as well as `lts/*`.
+
 ## [0.3.1] - 2026-10-05
 
 Hardening and disclosure fixes for the video tiers, found by reviewing and
