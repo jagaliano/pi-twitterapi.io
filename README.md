@@ -116,7 +116,12 @@ override — and set only the keys you need:
 > phase spends only what it needs, and the poster window is a shared deadline, not
 > a guaranteed extra wait. Provider video analysis is the slow part and its latency
 > varies: measured live on 2026-10-05, one call over a 65 s clip took 33 s once and
-> ~71 s another time, so expect a long tool call on a media-heavy query.
+> ~71 s another time, so expect a long tool call on a media-heavy query. Local
+> transcription is bound by your hardware instead: the same day, `whisper.cpp` with
+> `large-v3-turbo` on CPU took about **3 minutes** to transcribe a 30 s clip, so a
+> large GGML model can cost far more wall-clock time than the clip is long — a
+> smaller model is considerably faster. Enable the local tier only when you have
+> tested that model on your machine.
 >
 > **Cost.** Native video is billed by whichever endpoint you configure, and video is
 > tokenised by **duration** rather than file size. In one measurement on
