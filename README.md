@@ -189,10 +189,11 @@ For native video through OpenRouter instead of Google:
 
 > **Important:** the extension needs a pi version whose `ModelRegistry.complete`
 > exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on
-> pi 1.0.2. The host packages are declared as peers with a `"*"` range because pi
-> supplies them at runtime, so that range does not enforce the capability: check
-> your pi version if you are on an old release. Synthesis is a real model call, so
-> it consumes tokens on the configured model.
+> pi 1.0.2. `@earendil-works/pi-coding-agent` is declared as a peer with a
+> `^1.0.0` range, so a package manager that resolves peers will refuse a pi older
+> than the first release with that method; `pi-tui` and `typebox` stay at `"*"`
+> because pi supplies them at runtime. Synthesis is a real model call, so it
+> consumes tokens on the configured model.
 
 ## The `twitter` tool
 

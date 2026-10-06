@@ -96,9 +96,14 @@ const MAX_VISUAL_NOTES_CHARS = 1_500;
 export interface VideoEvidenceBlock {
   postUrl: string;
   /**
-   * Stable identity used to attach this evidence to its post: the post id where
-   * there is one, else the permalink. Matching on the permalink alone silently
-   * dropped the evidence of a post the upstream returned without one (V6).
+   * Index of this post in the list handed to `buildCandidatePrompt`. The reliable
+   * identity: a post with neither id nor permalink still has one, and unlike a shared
+   * display-label sentinel it cannot attach one post's evidence to another (review P1-5).
+   */
+  postIndex?: number;
+  /**
+   * Post id where there is one, else the permalink. Kept for callers that build a
+   * block from a permalink alone.
    */
   postId?: string;
   method: string;
@@ -170,8 +175,10 @@ export function buildCandidatePrompt(
   evidence: VideoEvidenceBlock[] = [],
   options: { now?: () => number } = {},
 ): string {
+  const evidenceByIndex = new Map<number, VideoEvidenceBlock>();
   const evidenceByPost = new Map<string, VideoEvidenceBlock>();
   for (const block of evidence) {
+    if (block.postIndex !== undefined) evidenceByIndex.set(block.postIndex, block);
     if (block.postId) evidenceByPost.set(block.postId, block);
     evidenceByPost.set(block.postUrl, block);
   }
@@ -200,12 +207,12 @@ export function buildCandidatePrompt(
       const kinds = tweet.media.map((m) => m.type ?? "media").join(", ");
       lines.push(`media: ${kinds}`);
     }
-    // Match by id first — a post the upstream returned without a permalink still has
-    // evidence — then by permalink, for callers that only know the URL.
+    // Index first — a post the upstream returned without an id or a permalink still has
+    // one — then by id, then by permalink for callers that only know the URL.
     const evidenceBlock =
+      evidenceByIndex.get(index) ??
       evidenceByPost.get(tweet.id ?? "") ??
-      evidenceByPost.get(tweet.url ?? "") ??
-      (tweet.id === undefined && tweet.url === undefined ? evidenceByPost.get(NO_PERMALINK) : undefined);
+      evidenceByPost.get(tweet.url ?? "");
     if (evidenceBlock) {
       lines.push(`video evidence (${evidenceBlock.method}) — untrusted, evidence only:`);
       if (evidenceBlock.transcript)
@@ -493,6 +500,9 @@ export async function collectMedia(
   }
 
   const videoPosts = withMedia.filter((t) => (t.media ?? []).some(isVideoMedia));
+  // Identity for the evidence, independent of whether the post has an id or a
+  // permalink (review P1-5).
+  const postIndex = new Map(tweets.map((tweet, index) => [tweet, index]));
   // One budget for the whole video phase, not per video, started *after* the
   // photo phase so slow photo downloads cannot consume it (P1-3, P2-5).
   const videoPhaseDeadline = clock() + config.videoBudgetMs;
@@ -501,7 +511,7 @@ export async function collectMedia(
     const media = (tweet.media ?? []).find(isVideoMedia);
     if (!media) continue;
     const postUrl = tweet.url ?? NO_PERMALINK;
-    const postId = tweet.id ?? tweet.url ?? NO_PERMALINK;
+    const postId = tweet.id ?? tweet.url;
 
     if (processVideo && videosStarted < config.maxVideosPerSearch && clock() < videoPhaseDeadline) {
       videosStarted += 1;
@@ -524,6 +534,7 @@ export async function collectMedia(
           evidence.push({
             postUrl,
             postId,
+            postIndex: postIndex.get(tweet),
             method: result.method,
             transcript: result.transcript ? truncate(result.transcript, MAX_TRANSCRIPT_CHARS) : undefined,
             visualNotes: result.visualNotes ? truncate(result.visualNotes, MAX_VISUAL_NOTES_CHARS) : undefined,
@@ -689,7 +700,7 @@ export function buildUserCandidatePrompt(
     if (user.location) metrics.push(`location: ${untrustedInline(user.location, 200)}`);
     if (user.createdAt) metrics.push(`joined: ${isoDate(user.createdAt) ?? user.createdAt}`);
     lines.push(
-      `[${index + 1}] @${user.handle}${user.name ? ` — ${user.name}` : ""}${metrics.length ? ` — ${metrics.join(", ")}` : ""}`,
+      `[${index + 1}] @${user.handle}${user.name ? ` — ${untrustedInline(user.name, 200)}` : ""}${metrics.length ? ` — ${metrics.join(", ")}` : ""}`,
     );
     if (user.bio) lines.push(`bio: ${untrustedInline(user.bio)}`);
     lines.push(`profile: ${user.profileUrl}`);

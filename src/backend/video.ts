@@ -340,22 +340,36 @@ async function downloadVideo(
     // One open handle for the whole download; `appendFile` re-opened the file per
     // chunk (V11).
     const out = createWriteStream(dest);
+    // Attach an error listener *before* writing: an 'error' event with no listener is
+    // re-thrown as an uncaught exception and takes the host process with it, which
+    // rejecting a write callback does not prevent (review P1-3).
+    let streamError: Error | undefined;
+    out.on("error", (error: Error) => {
+      streamError = error;
+    });
     try {
       const complete = await readCapped(
         response,
         maxBytes,
         (chunk) =>
           new Promise<void>((resolve, reject) => {
+            if (streamError) {
+              reject(streamError);
+              return;
+            }
             out.write(Buffer.from(chunk), (error) => (error ? reject(error) : resolve()));
           }),
       );
-      if (!complete) {
+      if (!complete || streamError) {
         out.destroy();
         return false;
       }
+      // `finish` rather than the `end()` callback: if the stream errors instead, the
+      // callback may never run and this promise would hang for the whole phase.
       await new Promise<void>((resolve, reject) => {
+        out.once("finish", resolve);
         out.once("error", reject);
-        out.end(() => resolve());
+        out.end();
       });
       return true;
     } catch {
@@ -934,8 +948,10 @@ function renderTranscript(segments: SttSegment[]): SttResult {
       dropped += 1;
       continue;
     }
-    // Punctuation or whitespace alone is not speech.
-    if (!/[a-z0-9]/i.test(text)) {
+    // Punctuation, whitespace or symbols alone are not speech. Unicode properties,
+    // not [a-z0-9]: a confident segment of 你好 or こんにちは is speech too, and with
+    // `-l auto` an ASCII-only test discarded every non-Latin segment (review P1-1).
+    if (!/[\p{L}\p{N}]/u.test(text)) {
       dropped += 1;
       continue;
     }
@@ -945,9 +961,11 @@ function renderTranscript(segments: SttSegment[]): SttResult {
   const joined = kept.map((segment) => segment.text).join(" ").trim();
   if (kept.length > 0 && STT_HALLUCINATIONS.has(joined.toLowerCase())) {
     return {
+      // Deliberately does not claim the clip had no speech: the phrase alone is what
+      // identifies this, so the note states what was observed and what was decided.
       note:
-        `STT returned only a known hallucination (${JSON.stringify(joined)}) for a clip with no speech, ` +
-        "so it was discarded rather than published as evidence.",
+        `STT returned only the phrase ${JSON.stringify(joined)}, which whisper commonly emits over silence; ` +
+        "it was discarded as a likely hallucination rather than published as evidence.",
     };
   }
   if (kept.length === 0) {
@@ -955,7 +973,14 @@ function renderTranscript(segments: SttSegment[]): SttResult {
       note: `STT returned ${dropped} segment(s) and none of them was speech, so no transcript was produced.`,
     };
   }
-  return { transcript: kept.map((segment) => `[${timestamp(segment.start)}] ${segment.text}`).join("\n") };
+  return {
+    transcript: kept.map((segment) => `[${timestamp(segment.start)}] ${segment.text}`).join("\n"),
+    // A partial transcript is a degradation, so it is disclosed (review P2-1).
+    note:
+      dropped > 0
+        ? `${dropped} STT segment(s) were dropped as non-speech, so this transcript may be partial.`
+        : undefined,
+  };
 }
 
 /** Segments from an OpenAI/Groq `verbose_json` body, when it carries any. */
@@ -1379,6 +1404,15 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
         const timing = frameTiming(frameDurationMs, config.maxFrames, maxSeconds);
         const files = await extractFrames(ctx, mediaFile, dir, timing, () => remaining(deadline, now));
         const total = files.length;
+        if (total < timing.count) {
+          // A short file and a failed seek are indistinguishable here, so both are
+          // stated rather than reporting fewer frames as if that were the plan
+          // (review P1-4).
+          evidence.notes.push(
+            `Frame extraction produced ${total} of ${timing.count} requested frame(s); the video may be ` +
+              "shorter than its declared duration, or a seek may have failed.",
+          );
+        }
         for (let i = 0; i < files.length; i += 1) {
           const bytes = await readFile(files[i]);
           // The frame's real position, from the same timing the filter used — not

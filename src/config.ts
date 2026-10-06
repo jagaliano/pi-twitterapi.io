@@ -194,8 +194,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Non-negative finite milliseconds, clamped, or the fallback when absent/invalid. */
-function intervalMs(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(value, MAX_INTERVAL_MS) : fallback;
+function intervalMs(value: unknown, fallback: number, key: string, notes: string[]): number {
+  return numberInRange(value, fallback, 0, MAX_INTERVAL_MS, key, notes);
 }
 
 /** Positive finite number, clamped, or the fallback when absent/invalid. */
@@ -220,8 +220,8 @@ function numberInRange(
 }
 
 /** Positive integer page count, clamped, or the fallback when absent/invalid. */
-function pageCount(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? Math.min(value, 100) : fallback;
+function pageCount(value: unknown, fallback: number, key: string, notes: string[]): number {
+  return intInRange(value, fallback, 1, 100, key, notes);
 }
 
 /**
@@ -282,7 +282,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
   }
 
   const maxMedia = config.maxMediaPerSearch;
-  const ceiling = pageCount(config.maxPagesCeiling, DEFAULT_MAX_PAGES_CEILING);
+  const ceiling = pageCount(config.maxPagesCeiling, DEFAULT_MAX_PAGES_CEILING, "maxPagesCeiling", configNotes);
   const synthesisModel = text(config.synthesisModel);
 
   const enableVideoUnderstanding = config.enableVideoUnderstanding === true;
@@ -409,9 +409,19 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
       "maxMediaPerSearch",
       configNotes,
     ),
-    minRequestIntervalMs: intervalMs(config.minRequestIntervalMs, DEFAULT_MIN_REQUEST_INTERVAL_MS),
-    retryBaseDelayMs: intervalMs(config.retryBaseDelayMs, DEFAULT_RETRY_BASE_DELAY_MS),
-    maxPages: Math.min(pageCount(config.maxPages, DEFAULT_MAX_PAGES), ceiling),
+    minRequestIntervalMs: intervalMs(config.minRequestIntervalMs, DEFAULT_MIN_REQUEST_INTERVAL_MS, "minRequestIntervalMs", configNotes),
+    retryBaseDelayMs: intervalMs(config.retryBaseDelayMs, DEFAULT_RETRY_BASE_DELAY_MS, "retryBaseDelayMs", configNotes),
+    maxPages: maxPages(config.maxPages, DEFAULT_MAX_PAGES, ceiling, configNotes),
     maxPagesCeiling: ceiling,
   };
+}
+
+/** `maxPages`, capped by the ceiling, with the cap disclosed when it bites. */
+function maxPages(value: unknown, fallback: number, ceiling: number, notes: string[]): number {
+  const requested = pageCount(value, fallback, "maxPages", notes);
+  if (requested > ceiling) {
+    notes.push(`twitter.maxPages ${requested} is above twitter.maxPagesCeiling ${ceiling}; using ${ceiling}.`);
+    return ceiling;
+  }
+  return requested;
 }

@@ -83,6 +83,37 @@ No new features.
 - The download streams through one `createWriteStream` instead of re-opening the file
   per chunk.
 - New user-only keys: `whisperThreads`, `whisperRealtimeFactor`, `whisperVadModelPath`.
+- Every numeric key now behaves the same way, including the pacing and page budgets
+  (`minRequestIntervalMs`, `retryBaseDelayMs`, `maxPages`, `maxPagesCeiling`), which
+  were the last ones still clamping or falling back silently.
+
+### Fixed (review pass)
+
+A review of the pass above found six further defects, all fixed and each covered by a
+falsified test:
+
+- **Non-Latin speech was discarded as "punctuation".** The filter tested `[a-z0-9]`,
+  so a confident `你好` or `こんにちは` segment was dropped — every segment of a
+  non-Latin clip, including with `sttLanguage: "auto"`. It now uses Unicode letter and
+  number properties.
+- **A write failure could take the host process down.** The download's write stream had
+  no `error` listener until after all writes finished, and an `error` event with no
+  listener is re-thrown as an uncaught exception. The listener is now attached before
+  the first write, and the stream's `finish` event — not the `end()` callback, which may
+  never fire after an error — settles the promise.
+- **Failed frame seeks truncated the evidence silently.** Extraction returns the frames
+  already taken, but the caller reported nothing when fewer arrived than were requested.
+  It now discloses the requested and extracted counts (a short file and a failed seek
+  are indistinguishable at that point, so both are stated).
+- **Evidence could be attached to the wrong post.** Posts with neither an id nor a
+  permalink all shared one placeholder key, so the last video block attached to every
+  one of them. Evidence is now keyed by the post's position in the result list.
+- **A partially filtered transcript was not disclosed.** Dropping some segments changed
+  the answer with no note; it now says the transcript may be partial.
+- **The hallucination note overclaimed.** It said the clip had "no speech" when the
+  phrase alone was the evidence. It now states what was observed and what was decided.
+- A profile display name reached the prompt raw, so a name containing a newline could
+  forge structure the same way post text could.
 
 ### Added
 

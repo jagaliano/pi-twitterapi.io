@@ -2405,8 +2405,13 @@ test("a transcript that is entirely a known hallucination is discarded (V4)", as
     );
     assert.equal(result.transcript, undefined);
     assert.ok(
-      result.notes.some((note) => /known hallucination/.test(note)),
+      result.notes.some((note) => /likely hallucination/.test(note)),
       `expected a hallucination note, got ${JSON.stringify(result.notes)}`,
+    );
+    // The note must not claim the clip had no speech: the phrase is the only signal.
+    assert.ok(
+      !result.notes.some((note) => /no speech/.test(note)),
+      `the note overclaims, got ${JSON.stringify(result.notes)}`,
     );
   });
 });
@@ -2499,6 +2504,13 @@ test("real whisper.cpp over a tone with no speech publishes no transcript (V4)",
     }) as unknown as typeof fetch;
 
     const config = loadTwitterConfig({ twitter: { whisperCppBinary: "whisper-cli", whisperModelPath: model } });
+    // Record what actually ran: a whisper failure also yields an undefined transcript
+    // and `frames-only`, so the assertions below must distinguish the two (P2-2).
+    const ran: string[] = [];
+    const exec: ExecFn = async (file, args, options) => {
+      ran.push(file);
+      return realExec()(file, args, options);
+    };
     const result = await processVideo({
       postUrl: "https://x.com/a/status/61",
       media: videoMedia({ durationMillis: 6_000 }),
@@ -2506,7 +2518,7 @@ test("real whisper.cpp over a tone with no speech publishes no transcript (V4)",
       deps: {
         fetcher,
         env: {},
-        exec: realExec(),
+        exec,
         checkBinary: async () => true,
         mktemp: async () => dir,
         rmTemp: async () => {},
@@ -2516,6 +2528,13 @@ test("real whisper.cpp over a tone with no speech publishes no transcript (V4)",
       modelSupportsImage: false,
     });
 
+    // `realExec` rejects on a non-zero exit, so reaching here with whisper-cli in the
+    // list means the decoder ran and succeeded.
+    assert.ok(ran.includes("whisper-cli"), `whisper must have run, got ${JSON.stringify(ran)}`);
+    assert.ok(
+      !result.notes.some((note) => /whisper\.cpp failed|whisper model not found|would exceed the video budget/.test(note)),
+      `whisper must not have failed or been skipped, got ${JSON.stringify(result.notes)}`,
+    );
     assert.equal(
       result.transcript,
       undefined,
@@ -2661,5 +2680,101 @@ test("a raised whisperRealtimeFactor makes the guard stricter (V5)", async () =>
     assert.equal(fits.seen.length, 1, "the default factor fits");
     const skipped = await runWhisper(dir, { durationMs: 10_000, deadline: 30_000, factor: 10 });
     assert.equal(skipped.seen.length, 0, "a 10x factor does not fit");
+  });
+});
+
+// -------------------------------------------------- review pass (2026-10-06)
+
+test("non-Latin speech is kept, not treated as punctuation (review P1-1)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({
+        segments: [
+          { start: 0, text: " 你好，世界", no_speech_prob: 0.1, avg_logprob: -0.3 },
+          { start: 4, text: "こんにちは", no_speech_prob: 0.1, avg_logprob: -0.3 },
+        ],
+      }),
+    );
+    assert.match(result.transcript ?? "", /\[00:00\] 你好，世界/);
+    assert.match(result.transcript ?? "", /\[00:04\] こんにちは/);
+  });
+});
+
+test("a partially filtered transcript says it may be partial (review P2-1)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await runStt(
+      dir,
+      sttReplyFetcher({
+        segments: [
+          { start: 0, text: " real speech", no_speech_prob: 0.1, avg_logprob: -0.3 },
+          { start: 5, text: " .", no_speech_prob: 0.1, avg_logprob: -0.3 },
+        ],
+      }),
+    );
+    assert.equal(result.transcript, "[00:00] real speech");
+    assert.ok(
+      result.notes.some((note) => /may be partial/.test(note)),
+      `expected a partial-transcript note, got ${JSON.stringify(result.notes)}`,
+    );
+  });
+});
+
+test("fewer frames than requested is disclosed (review P1-4)", async () => {
+  await withTempDir(async (dir) => {
+    let seeks = 0;
+    const exec: ExecFn = async (_file, args) => {
+      const output = args[args.length - 1];
+      if (args.includes("-ss") && output.includes("frame-")) {
+        seeks += 1;
+        if (seeks > 3) throw new Error("ffmpeg: seek past the end of the file");
+        await writeFile(output, new Uint8Array([1, 2, 3]));
+        return { stdout: "", stderr: "" };
+      }
+      if (!output.includes("frame-")) await writeFile(output, new Uint8Array([1]));
+      return { stdout: "", stderr: "" };
+    };
+    const { fetcher } = videoFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/70",
+      media: videoMedia({ durationMillis: 5_000 }),
+      config: loadTwitterConfig({ twitter: { maxFrames: 8 } }),
+      deps: { fetcher, env: {}, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.frames.length, 3, "the frames already taken are kept");
+    assert.ok(
+      result.notes.some((note) => /3 of 8 requested frame/.test(note)),
+      `expected a truncation note, got ${JSON.stringify(result.notes)}`,
+    );
+  });
+});
+
+test("a write failure fails the download instead of taking the process down (review P1-3)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = videoFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/71",
+      media: videoMedia(),
+      config: loadTwitterConfig({ twitter: { maxFrames: 1 } }),
+      deps: {
+        fetcher,
+        env: {},
+        exec: fakeExec().exec,
+        checkBinary: async () => true,
+        // A directory that does not exist: the write stream emits 'error' on open, and
+        // an 'error' event with no listener is re-thrown as an uncaught exception.
+        mktemp: async () => join(dir, "missing-directory"),
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(
+      result.notes.some((note) => /could not be downloaded/.test(note)),
+      `expected an honest download failure, got ${JSON.stringify(result.notes)}`,
+    );
   });
 });
