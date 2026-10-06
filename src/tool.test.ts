@@ -1202,3 +1202,68 @@ test("a malformed project settings file is disclosed, not fatal (G2)", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("mode=tweets discloses ids the upstream did not return (G9)", async () => {
+  const { pi, tool } = captureTool();
+  const fetcher = (async () =>
+    new Response(
+      JSON.stringify({
+        tweets: [
+          { id: "1", url: "https://x.com/a/status/1", text: "one", author: { userName: "a" } },
+          { id: "2", url: "https://x.com/a/status/2", text: "two", author: { userName: "a" } },
+          { id: "3", url: "https://x.com/a/status/3", text: "three", author: { userName: "a" } },
+        ],
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute(
+    "id",
+    { query: "summarise these", mode: "tweets", ids: ["1", "2", "3", "4", "5"] },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Summary (https://x.com/a/status/1)") },
+  );
+
+  const text = result.content[0].text;
+  assert.match(text, /Answered from 3 post\(s\) fetched by id/);
+  assert.match(
+    text,
+    /2 requested post id\(s\) were not returned by the upstream: 4, 5/,
+    `expected the missing ids in Notes, got ${text}`,
+  );
+});
+
+test("mode=tweets stays quiet when every requested id came back (G9)", async () => {
+  const { pi, tool } = captureTool();
+  const fetcher = (async () =>
+    new Response(
+      JSON.stringify({
+        tweets: [{ id: "1", url: "https://x.com/a/status/1", text: "one", author: { userName: "a" } }],
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+  registerTwitterTool(pi as any, {
+    env: { TWITTERAPI_IO_API_KEY: "key" },
+    fetcher,
+    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+  });
+
+  const result = await tool().execute(
+    "id",
+    // The same id twice: duplicates collapse, and the single post satisfies both.
+    { query: "q", mode: "tweets", ids: ["1", "https://x.com/a/status/1"] },
+    undefined,
+    undefined,
+    { modelRegistry: userRegistry("Summary (https://x.com/a/status/1)") },
+  );
+  assert.ok(
+    !/were not returned/.test(result.content[0].text),
+    `nothing is missing, so nothing should be disclosed: ${result.content[0].text}`,
+  );
+});

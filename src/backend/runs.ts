@@ -27,6 +27,7 @@ import {
   normalizeParams,
   searchTweets,
   searchUsers,
+  tweetIdFromInput,
   type ReplySort,
   type Tweet,
   type TwitterApiSearchParams,
@@ -553,10 +554,25 @@ export async function runTwitterApiTweetsByIds(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options);
   const result = await fetchTweetsByIds(options.ids, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const notes = [`Answered from ${result.tweets.length} post(s) fetched by id.`];
+  // Asking for five posts and reporting "3 post(s)" hides the fact that two were
+  // never returned — deleted, protected, or simply missing upstream (G9).
+  const requested = new Set(
+    options.ids.map((raw) => tweetIdFromInput(raw)).filter((id): id is string => Boolean(id)),
+  );
+  const returned = new Set(result.tweets.map((tweet) => tweet.id).filter((id): id is string => Boolean(id)));
+  const missing = [...requested].filter((id) => !returned.has(id));
+  if (missing.length > 0) {
+    const shown = missing.slice(0, 10).join(", ");
+    notes.push(
+      `${missing.length} requested post id(s) were not returned by the upstream: ${shown}` +
+        `${missing.length > 10 ? `, and ${missing.length - 10} more` : ""}.`,
+    );
+  }
   return completeTweetAnswer(backend, options, {
     query: options.query,
     tweets: result.tweets,
-    notes: [`Answered from ${result.tweets.length} post(s) fetched by id.`],
+    notes,
   });
 }
 
