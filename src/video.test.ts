@@ -215,9 +215,18 @@ test("a hanging HEAD probe cannot spend the video budget", async () => {
     const fetcher = (async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if ((init?.method ?? "GET").toUpperCase() === "HEAD") {
-        // Never answers; only the probe timeout can end it.
+        // Never answers; only the probe timeout can end it. The ref'd fallback matters:
+        // `AbortSignal.timeout` is unref'd, so without something holding the event loop
+        // open the process can exit before the abort fires (Node 22.19 does; Node 26
+        // happens to keep a handle alive). It never wins in a passing run.
         return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error("probe aborted")));
+          const fallback = setTimeout(() => reject(new Error("probe never aborted")), 10_000);
+          const onAbort = () => {
+            clearTimeout(fallback);
+            reject(new Error("probe aborted"));
+          };
+          if (init?.signal?.aborted) onAbort();
+          else init?.signal?.addEventListener("abort", onAbort, { once: true });
         });
       }
       downloads.push(url.includes("high") ? "high" : "low");
