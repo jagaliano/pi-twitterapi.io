@@ -4,6 +4,7 @@ import test from "node:test";
 import { loadTwitterConfig } from "./config.js";
 import {
   buildCandidatePrompt,
+  buildTrendCandidatePrompt,
   buildUserCandidatePrompt,
   deriveUserCitations,
   collectMedia,
@@ -785,4 +786,57 @@ test("with video processing off, posters keep the unchanged media deadline (P2-3
   assert.equal(posters, 0, "no reservation is made when there is no video phase to reserve for");
   assert.equal(result.images.length, 0);
   assert.ok(result.notes.some((note) => /were not attempted/.test(note)));
+});
+
+// ------------------------------------------------- current time in prompt (G4)
+
+const CLOCK = () => Date.parse("2026-10-06T16:23:11Z");
+
+test("the post prompt states the current time and renders dates as ISO (G4)", () => {
+  const prompt = buildCandidatePrompt("what happened today?", [tweet()], [], { now: CLOCK });
+  assert.match(prompt, /^Current time: 2026-10-06T16:23:11Z \(local: .+\)$/m);
+  assert.match(prompt, /\[1\] @alice — 2026-09-21T10:00:00Z/);
+  assert.ok(
+    !prompt.includes("Mon Sep 21 10:00:00 +0000 2026"),
+    "the raw upstream date is not what the model has to compare against",
+  );
+  // The clock is injected, so the header is deterministic.
+  assert.equal(buildCandidatePrompt("what happened today?", [tweet()], [], { now: CLOCK }), prompt);
+});
+
+test("the account prompt states the current time and renders joined dates as ISO (G4)", () => {
+  const prompt = buildUserCandidatePrompt("who is grok", [{ ...USER, createdAt: "2009-06-02T20:12:29.000000Z" }], {
+    now: CLOCK,
+  });
+  assert.match(prompt, /^Current time: 2026-10-06T16:23:11Z \(local: .+\)$/m);
+  assert.match(prompt, /joined: 2009-06-02T20:12:29Z/);
+});
+
+test("the trends prompt states the current time (G4)", () => {
+  const prompt = buildTrendCandidatePrompt("what is trending", [{ name: "#pi", rank: 1 }], { now: CLOCK });
+  assert.match(prompt, /^Current time: 2026-10-06T16:23:11Z \(local: .+\)$/m);
+});
+
+test("the document prompt states the current time (G4)", async () => {
+  let seen = "";
+  await synthesizeDocument({
+    query: "what is this?",
+    title: "About @grok",
+    body: "handle: grok",
+    citations: ["https://x.com/grok"],
+    model: MODEL,
+    deps: {
+      complete: async (request) => {
+        seen = request.prompt;
+        return "ok";
+      },
+      now: CLOCK,
+    },
+  });
+  assert.match(seen, /^Current time: 2026-10-06T16:23:11Z \(local: .+\)$/m);
+});
+
+test("an unparseable upstream date is passed through rather than dropped (G4)", () => {
+  const prompt = buildCandidatePrompt("q", [tweet({ createdAt: "sometime last week" })], [], { now: CLOCK });
+  assert.match(prompt, /\[1\] @alice — sometime last week/);
 });
