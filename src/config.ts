@@ -194,11 +194,23 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     );
   }
 
+  // Disclose an unrecognised provider string while keeping the existing fallback.
+  // Other unusable values in this loader are still silently defaulted (numeric bounds
+  // clamp, non-strings are dropped); this one is called out because it decides which
+  // provider runs, so a typo would otherwise pick one the user never asked for.
   const endpointTypeRaw = text(user.videoEndpointType);
-  const videoEndpointType: VideoEndpointType =
-    endpointTypeRaw && (VIDEO_ENDPOINT_TYPES as readonly string[]).includes(endpointTypeRaw)
-      ? (endpointTypeRaw as VideoEndpointType)
-      : DEFAULT_VIDEO_ENDPOINT_TYPE;
+  const knownEndpointType = Boolean(
+    endpointTypeRaw && (VIDEO_ENDPOINT_TYPES as readonly string[]).includes(endpointTypeRaw),
+  );
+  if (endpointTypeRaw && !knownEndpointType) {
+    configNotes.push(
+      `twitter.videoEndpointType "${endpointTypeRaw}" is not one of ${VIDEO_ENDPOINT_TYPES.join(", ")}; ` +
+        `using ${DEFAULT_VIDEO_ENDPOINT_TYPE}.`,
+    );
+  }
+  const videoEndpointType: VideoEndpointType = knownEndpointType
+    ? (endpointTypeRaw as VideoEndpointType)
+    : DEFAULT_VIDEO_ENDPOINT_TYPE;
 
   // F3/P0-1: a custom endpoint may only be used when the user ALSO names the
   // credential env var explicitly, and only over HTTPS. Otherwise the default

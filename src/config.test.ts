@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_MAX_MEDIA_PER_SEARCH, loadTwitterConfig } from "./config.js";
+import { DEFAULT_MAX_MEDIA_PER_SEARCH, VIDEO_ENDPOINT_TYPES, loadTwitterConfig } from "./config.js";
 
 test("loadTwitterConfig defaults the media settings and leaves synthesisModel unset", () => {
   const config = loadTwitterConfig({});
@@ -50,6 +50,53 @@ test("loadTwitterConfig caps maxMediaPerSearch", () => {
 test("loadTwitterConfig tolerates a non-object twitter block", () => {
   assert.equal(loadTwitterConfig({ twitter: "nope" }).synthesisModel, undefined);
   assert.equal(loadTwitterConfig({ twitter: [] }).synthesisModel, undefined);
+});
+
+test("an unrecognised videoEndpointType falls back to the default and discloses it", () => {
+  const config = loadTwitterConfig({ twitter: { videoEndpointType: "openai-compat" } });
+  assert.equal(config.videoEndpointType, "gemini-files");
+  // Assert the whole note: a loose pattern would still pass if the message dropped
+  // the accepted values, which is the part that makes the typo fixable.
+  assert.deepEqual(config.configNotes, [
+    `twitter.videoEndpointType "openai-compat" is not one of ${VIDEO_ENDPOINT_TYPES.join(", ")}; ` +
+      "using gemini-files.",
+  ]);
+});
+
+test("a recognised videoEndpointType is accepted without a note", () => {
+  const config = loadTwitterConfig({ twitter: { videoEndpointType: "openai-compatible" } });
+  assert.equal(config.videoEndpointType, "openai-compatible");
+  assert.deepEqual(config.configNotes, []);
+});
+
+test("only a non-empty unrecognised videoEndpointType is disclosed", () => {
+  for (const value of [undefined, "", "   "]) {
+    const config = loadTwitterConfig({ twitter: { videoEndpointType: value } });
+    assert.equal(config.videoEndpointType, "gemini-files");
+    assert.deepEqual(config.configNotes, [], `${JSON.stringify(value)} must stay silent`);
+  }
+});
+
+test("every accepted videoEndpointType is taken as-is, padding included", () => {
+  for (const value of VIDEO_ENDPOINT_TYPES) {
+    assert.equal(loadTwitterConfig({ twitter: { videoEndpointType: value } }).videoEndpointType, value);
+    const padded = loadTwitterConfig({ twitter: { videoEndpointType: `  ${value}  ` } });
+    assert.equal(padded.videoEndpointType, value);
+    assert.deepEqual(padded.configNotes, []);
+  }
+  // Padding does not rescue an unrecognised value.
+  assert.equal(loadTwitterConfig({ twitter: { videoEndpointType: " openrouter " } }).configNotes.length, 1);
+});
+
+test("a project-level videoEndpointType cannot select the adapter", () => {
+  const config = loadTwitterConfig(
+    {},
+    { projectSettings: { twitter: { videoEndpointType: "openai-compatible" } } },
+  );
+  assert.equal(config.videoEndpointType, "gemini-files");
+  assert.ok(
+    config.configNotes.some((note) => /twitter\.videoEndpointType from project settings was ignored/.test(note)),
+  );
 });
 
 test("only the twitter settings block is read", () => {

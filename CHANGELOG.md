@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `twitter.videoEndpointType` is now disclosed when it holds an unrecognised
+  value, naming the bad value, the accepted set and the default actually used.
+  Previously such a value fell back to `gemini-files` in silence, so a typo could
+  run a different provider than the one configured — and, when a custom
+  `videoEndpoint` was also set, send Gemini's request format to a host that was
+  intended for `openai-compatible`, carrying the key named for that host.
+
 ## [0.3.0] - 2026-10-05
 
 A second native-video provider, so video understanding is no longer tied to
@@ -118,6 +129,24 @@ represented by its poster frame.
   and 120 s. Live measurement showed one provider call over a 65 s clip taking
   33 s to ~71 s with run-to-run variance, so the old ceiling aborted long videos
   and silently fell back to the poster frame.
+
+## [0.1.2] - 2026-10-03
+
+A dated, sourced cost comparison against xAI's `x_search`. No runtime change:
+same tool, same modes, same behaviour.
+
+### Added
+
+- [`docs/pricing-comparison.md`](docs/pricing-comparison.md): unit prices for both
+  routes, the counting rules that actually change the bill, cost per mode, worked
+  retrieval-only examples, how to add the answer model's tokens, what the
+  comparison excludes, and its sources.
+
+### Changed
+
+- The README comparison table links to that document, noting that the two routes
+  meter different things: xAI bills tokens and per post/profile, while
+  twitterapi.io bills credits plus your own model's tokens.
 
 ## [0.1.1] - 2026-10-03
 
