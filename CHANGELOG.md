@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format to a host that was set up for another. Frames and STT still run, so a typo
   costs native analysis rather than producing a malformed request.
 
+### Fixed
+
+- A synthesis model without image input now says that its frames were skipped rather
+  than dropping the visual half of the evidence silently, and it states what replaced
+  them: a transcript, or nothing. Two claims that were not always true were caught in
+  review and removed — that a transcript was *used* (it may never reach synthesis for
+  a post with no permalink), and that a poster fallback had happened.
+- A run that produced no video evidence no longer announces a poster-frame fallback
+  to a model that cannot accept images: such a model can never receive the poster, so
+  the answer now says the poster could not be attached.
+
 ## [0.3.0] - 2026-10-05
 
 A second native-video provider, so video understanding is no longer tied to

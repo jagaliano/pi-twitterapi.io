@@ -455,11 +455,18 @@ export async function collectMedia(
             visualNotes: result.visualNotes ? truncate(result.visualNotes, MAX_VISUAL_NOTES_CHARS) : undefined,
           });
           notes.push(`Video for ${postUrl} processed via ${result.method}.`);
-        } else {
+        } else if (model.supportsImage) {
           // No evidence at all: fall back to the poster rather than producing
           // nothing (P1-5).
           notes.push(`Video processing produced no evidence for ${postUrl}; falling back to its poster frame.`);
           await fetchPoster(postUrl, media);
+        } else {
+          // fetchPoster returns immediately for a model without image input, so
+          // announcing a fallback here would describe something that cannot happen.
+          notes.push(
+            `Video processing produced no evidence for ${postUrl}, and ${model.provider}/${model.id} does not ` +
+              "accept image input, so its poster frame could not be attached either.",
+          );
         }
       } catch (error) {
         notes.push(`Video processing failed for ${postUrl}: ${(error as Error).message}`);

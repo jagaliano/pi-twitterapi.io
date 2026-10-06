@@ -1135,6 +1135,22 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
       evidence.notes.push("Animated GIFs have no audio track, so no transcript was produced.");
     }
 
+    // A model without image input never receives frames, so say why they are missing
+    // instead of dropping the visual half of the evidence silently (plan M2/F9).
+    // Emitted here, after STT, because the alternative is not always a transcript:
+    // with no STT configured, or on a clip with no audio track, there is none, and
+    // claiming otherwise would be the kind of false disclosure this pipeline bans.
+    // Stays quiet when nativeMethod is set, since native already supplied text.
+    if (!nativeMethod && !modelSupportsImage) {
+      evidence.notes.push(
+        transcript
+          ? "Frames were not extracted: the configured synthesis model does not accept image input, so only " +
+              "transcript evidence was produced."
+          : "Frames were not extracted: the configured synthesis model does not accept image input, and no " +
+              "transcript was produced either.",
+      );
+    }
+
     evidence.transcript = transcript;
     evidence.visualNotes = visualNotes;
     evidence.method = nativeMethod

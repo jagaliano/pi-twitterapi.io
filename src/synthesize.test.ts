@@ -575,6 +575,30 @@ test("collectMedia falls back to the poster when processing yields no evidence (
   assert.ok(!result.notes.some((note) => /processed via/.test(note)), "no false success note");
 });
 
+test("collectMedia says so when a text-only model cannot use the poster fallback (P1-5)", async () => {
+  const mediaTweet = tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] });
+  let posterFetches = 0;
+  const result = await collectMedia([mediaTweet], VIDEO_CONFIG, MODEL, {
+    complete: async () => "",
+    fetchMedia: async (): Promise<ImageAttachment | undefined> => {
+      posterFetches += 1;
+      return { data: "POSTER", mimeType: "image/jpeg" };
+    },
+    processVideo: async () => ({ postUrl: mediaTweet.url!, method: "transcript-only", frames: [], notes: [] }),
+  });
+  assert.equal(posterFetches, 0, "no poster is fetched for a model that cannot take images");
+  assert.equal(result.images.length, 0);
+  assert.ok(
+    result.notes.some((note) => /does not accept image input, so its poster frame could not be attached/.test(note)),
+    "the unavailability is disclosed instead of announcing a fallback that cannot happen",
+  );
+  assert.equal(
+    result.notes.some((note) => /falling back to its poster frame/.test(note)),
+    false,
+    "no fallback claim for a model that can never receive the poster",
+  );
+});
+
 test("collectMedia falls back to the poster when processing throws (P1-5)", async () => {
   const mediaTweet = tweet({ media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }] });
   const result = await collectMedia([mediaTweet], VIDEO_CONFIG, VISION_MODEL, {

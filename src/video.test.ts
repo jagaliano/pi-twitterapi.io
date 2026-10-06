@@ -802,6 +802,110 @@ test("an unrecognised videoEndpointType still lets the STT fallback answer", asy
   });
 });
 
+test("a text-only synthesis model is told its frames were skipped (M2/F9)", async () => {
+  await withTempDir(async (dir) => {
+    const fetcher = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/audio/transcriptions")) {
+        return new Response(JSON.stringify({ text: "spoken words" }), { status: 200 });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const base = loadTwitterConfig({
+      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+    });
+    const { exec, invocations } = fakeExec();
+    const deps: VideoDeps = {
+      fetcher,
+      env: { STT_API_KEY: "k" },
+      exec,
+      checkBinary: async () => true,
+      mktemp: async () => dir,
+      rmTemp: async () => {},
+      now: () => 0,
+    };
+    const withoutImages = await processVideo({
+      postUrl: "https://x.com/a/status/70",
+      media: videoMedia(),
+      config: base,
+      deps,
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(withoutImages.method, "transcript-only");
+    assert.equal(withoutImages.frames.length, 0);
+    assert.equal(
+      invocations.some((args) => args.some((a) => a.includes("frame-"))),
+      false,
+      "frame extraction is never invoked for a model that cannot take images",
+    );
+    assert.ok(
+      withoutImages.notes.some((n) => /does not accept image input, so only transcript evidence was produced/.test(n)),
+      "the omission is explained rather than silent",
+    );
+
+    // The same run with an image-capable model must not claim frames were skipped.
+    const withImages = await processVideo({
+      postUrl: "https://x.com/a/status/71",
+      media: videoMedia(),
+      config: base,
+      deps,
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.ok(withImages.frames.length > 0, "an image-capable model still gets frames");
+    assert.equal(
+      withImages.notes.some((n) => /does not accept image input/.test(n)),
+      false,
+      "no skip notice when frames are actually used",
+    );
+
+    // No STT configured and a text-only model: there is no transcript either, and the
+    // notice must not claim one.
+    const noTranscript = await processVideo({
+      postUrl: "https://x.com/a/status/72",
+      media: videoMedia(),
+      config: loadTwitterConfig({}),
+      deps: { ...deps, env: {} },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(noTranscript.transcript, undefined);
+    assert.ok(
+      noTranscript.notes.some((n) => /no transcript was produced either/.test(n)),
+      "does not claim a transcript that does not exist",
+    );
+    assert.equal(
+      noTranscript.notes.some((n) => /transcript evidence was produced/.test(n)),
+      false,
+      "the transcript-success wording never appears without a transcript",
+    );
+  });
+});
+
+test("native video success is not followed by a frame-omission notice", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = geminiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/73",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: nativeDeps(fetcher, dir),
+      deadline: 60_000,
+      // Text-only synthesis model: native video still supplies text evidence, so
+      // nothing was omitted and the reader should not be told otherwise.
+      modelSupportsImage: false,
+    });
+    assert.equal(result.method, "gemini-native");
+    assert.equal(result.transcript, "hello world");
+    assert.equal(
+      result.notes.some((n) => /does not accept image input/.test(n)),
+      false,
+      "native success means frames were not needed, not skipped",
+    );
+  });
+});
+
 test("a caller-built OpenAI-compatible config is rejected without an explicit key env (P2-9)", async () => {
   await withTempDir(async (dir) => {
     const { fetcher, calls } = openAiFetcher();
