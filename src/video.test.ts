@@ -2153,3 +2153,71 @@ test("frame labels match the real decoded frame times (V1)", async (t) => {
     assert.match(result.frames[0].label, /@ 00:01$/, "the label renders the midpoint, not 00:00");
   });
 });
+
+// ------------------------------------------------ blocked / empty native (V2)
+
+/** Serves the MP4, then an arbitrary Gemini generateContent reply. */
+function geminiReplyFetcher(reply: unknown): typeof fetch {
+  return (async (input: string | URL) => {
+    const url = String(input);
+    if (url.includes(":generateContent")) {
+      return new Response(JSON.stringify(reply), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(new Uint8Array(1_024).fill(1), {
+      status: 200,
+      headers: { "content-type": "video/mp4" },
+    });
+  }) as unknown as typeof fetch;
+}
+
+async function blockedNative(dir: string, reply: unknown) {
+  return processVideo({
+    postUrl: "https://x.com/a/status/50",
+    media: videoMedia(),
+    config: GEMINI_CONFIG,
+    deps: nativeDeps(geminiReplyFetcher(reply), dir),
+    deadline: 60_000,
+    modelSupportsImage: true,
+  });
+}
+
+test("a Gemini reply blocked by safety policy is disclosed, not silently degraded (V2)", async () => {
+  await withTempDir(async (dir) => {
+    // HTTP 200 with no candidates at all: the old code returned neither text nor
+    // error, so nothing was reported and the run looked like a normal fallback.
+    const result = await blockedNative(dir, { promptFeedback: { blockReason: "SAFETY" } });
+    const failures = result.notes.filter((note) => /Native video analysis/.test(note));
+    assert.equal(failures.length, 1, `exactly one native-failure note, got ${JSON.stringify(result.notes)}`);
+    assert.match(failures[0], /no usable content/);
+    assert.match(failures[0], /blockReason: SAFETY/);
+    assert.notEqual(result.method, "gemini-native", "a blocked reply is not native evidence");
+    assert.equal(result.visualNotes, undefined);
+  });
+});
+
+test("a Gemini reply with an empty candidate is disclosed with its finish reason (V2)", async () => {
+  await withTempDir(async (dir) => {
+    const result = await blockedNative(dir, { candidates: [{ finishReason: "RECITATION" }] });
+    const failures = result.notes.filter((note) => /Native video analysis/.test(note));
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /finishReason: RECITATION/);
+  });
+});
+
+test("a Gemini reply truncated at the token limit is refused, not published (V2)", async () => {
+  await withTempDir(async (dir) => {
+    // Half-written JSON: keeping it would publish a fragment as the visual
+    // description and suppress the frame fallback.
+    const result = await blockedNative(dir, {
+      candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: '{"visual":"a person' }] } }],
+    });
+    const failures = result.notes.filter((note) => /Native video analysis/.test(note));
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /truncated its answer at the token limit/);
+    assert.equal(result.visualNotes, undefined, "the truncated fragment is not evidence");
+    assert.ok(result.frames.length > 0, "the frame fallback still runs");
+  });
+});

@@ -574,6 +574,42 @@ interface GeminiResult {
   uploaded?: boolean;
   deleted?: boolean;
 }
+
+interface GeminiReply {
+  candidates?: { finishReason?: unknown; content?: { parts?: { text?: string }[] } }[];
+  promptFeedback?: { blockReason?: unknown };
+}
+
+/**
+ * Read a Gemini reply, refusing anything that is not usable evidence.
+ *
+ * A blocked or empty reply arrives as HTTP 200 with no parts. It used to return
+ * neither `text` nor `error`, so `processVideo` said nothing at all: the run
+ * degraded to frames+STT with no note that native analysis had failed, which
+ * breaks the invariant that every degradation is disclosed (V2).
+ *
+ * A token-limited reply is half-written JSON. `parseGeminiResponse` would keep
+ * that fragment as the visual description, mark the run native and suppress the
+ * frame fallback, publishing a broken answer as a complete one — the same trap the
+ * OpenAI-compatible path already refuses.
+ */
+function readGeminiReply(json: GeminiReply): GeminiResult {
+  const candidate = json.candidates?.[0];
+  const text = candidate?.content?.parts?.map((p) => p.text ?? "").join("").trim();
+  if (!text) {
+    const reason =
+      typeof json.promptFeedback?.blockReason === "string"
+        ? `blockReason: ${json.promptFeedback.blockReason}`
+        : typeof candidate?.finishReason === "string"
+          ? `finishReason: ${candidate.finishReason}`
+          : undefined;
+    return { error: `The Gemini endpoint returned no usable content${reason ? ` (${reason})` : ""}.` };
+  }
+  if (candidate?.finishReason === "MAX_TOKENS") {
+    return { error: "The Gemini endpoint truncated its answer at the token limit." };
+  }
+  return { text };
+}
 async function geminiInline(
   base: string,
   model: string,
@@ -603,9 +639,7 @@ async function geminiInline(
       redirect: "error",
     });
     if (!response.ok) return { error: `Gemini inline request returned HTTP ${response.status}.` };
-    const json = (await response.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim();
-    return { text: text || undefined };
+    return readGeminiReply((await response.json()) as GeminiReply);
   } catch (error) {
     return { error: (error as Error).message };
   }
@@ -711,9 +745,7 @@ async function geminiFiles(
         redirect: "error",
       });
       if (!generated.ok) return { error: `Gemini generate returned HTTP ${generated.status}.`, uploaded: true };
-      const json = (await generated.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-      const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim();
-      return { text: text || undefined, uploaded: true };
+      return { ...readGeminiReply((await generated.json()) as GeminiReply), uploaded: true };
     } catch (error) {
       return { error: (error as Error).message, uploaded: Boolean(fileName) };
     }
@@ -1155,6 +1187,12 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
             evidence.notes.push("Video content was analysed by the configured Gemini endpoint.");
           } else if (result.error) {
             evidence.notes.push(`Native video analysis failed: ${result.error}`);
+          } else {
+            // Defensive: an adapter that returns neither must still be disclosed,
+            // rather than degrading silently (V2).
+            evidence.notes.push(
+              "Native video analysis returned no usable content, so no native evidence was produced.",
+            );
           }
           // Retention is a property of the upload, not of a successful generation
           // (P2-6): a failed, empty or cancelled run can still leave a file behind.
@@ -1171,6 +1209,10 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
             evidence.notes.push("Video content was analysed by the configured OpenAI-compatible video endpoint.");
           } else if (result.error) {
             evidence.notes.push(`Native video analysis failed: ${result.error}`);
+          } else {
+            evidence.notes.push(
+              "Native video analysis returned no usable content, so no native evidence was produced.",
+            );
           }
         }
       }
