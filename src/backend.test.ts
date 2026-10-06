@@ -208,17 +208,7 @@ test("createFetchMedia enforces the byte cap while streaming rather than after b
 test("createFetchMedia honours its deadline and the caller's cancellation", async () => {
   const stalled = (async (_url: string, init?: RequestInit) =>
     new Promise<Response>((_resolve, reject) => {
-      // `AbortSignal.timeout` is unref'd, so a fake that waits *only* on abort can have
-      // the event loop empty out from under it before the timer fires — Node 22.19 does
-      // exactly that, while Node 26 happens to keep a handle alive. This ref'd fallback
-      // holds the loop open the way a real socket would, and never wins in a passing run.
-      const fallback = setTimeout(() => reject(new Error("stalled download never aborted")), 10_000);
-      const onAbort = () => {
-        clearTimeout(fallback);
-        reject(new Error("aborted"));
-      };
-      if (init?.signal?.aborted) onAbort();
-      else init?.signal?.addEventListener("abort", onAbort, { once: true });
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
     })) as unknown as typeof fetch;
 
   const timedOut = await createFetchMedia(stalled, undefined, { timeoutMs: 15 })("https://pbs.twimg.com/stall.jpg");
