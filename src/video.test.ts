@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { loadTwitterConfig } from "./config.js";
+import { DEFAULT_WHISPER_THREADS, loadTwitterConfig } from "./config.js";
 import {
   createProcessVideo,
   estimateVariantBytes,
@@ -2567,5 +2567,99 @@ test("a configured VAD model is passed to whisper.cpp (V4)", async () => {
     assert.equal(seen.length, 1, "whisper ran once");
     assert.ok(seen[0].includes("--vad"), "VAD is enabled when a model is supplied");
     assert.equal(seen[0][seen[0].indexOf("--vad-model") + 1], vadPath);
+  });
+});
+
+// ------------------------------------------- local whisper time guard (V5)
+
+/** Runs processVideo with a local whisper.cpp config, recording whisper's args. */
+async function runWhisper(
+  dir: string,
+  options: { durationMs: number; deadline: number; threads?: number; factor?: number },
+) {
+  const modelPath = join(dir, "ggml.bin");
+  await writeFile(modelPath, "model");
+  const seen: string[][] = [];
+  const exec: ExecFn = async (_file, args) => {
+    const output = args[args.length - 1];
+    if (args.includes("-oj")) {
+      seen.push(args);
+      const ofIndex = args.indexOf("-of");
+      await writeFile(`${args[ofIndex + 1]}.json`, JSON.stringify({ text: "words" }));
+      return { stdout: "", stderr: "" };
+    }
+    if (args.includes("-i") && !args.includes("-y")) {
+      const error = new Error("probe") as Error & { stderr?: string };
+      error.stderr = "Duration: 00:00:05.00";
+      throw error;
+    }
+    if (!output.includes("frame-")) await writeFile(output, new Uint8Array([1]));
+    return { stdout: "", stderr: "" };
+  };
+  const { fetcher } = videoFetcher();
+  const config = loadTwitterConfig({
+    twitter: {
+      whisperCppBinary: "/usr/bin/whisper-cli",
+      whisperModelPath: modelPath,
+      ...(options.threads === undefined ? {} : { whisperThreads: options.threads }),
+      ...(options.factor === undefined ? {} : { whisperRealtimeFactor: options.factor }),
+    },
+  });
+  const result = await processVideo({
+    postUrl: "https://x.com/a/status/63",
+    media: videoMedia({ durationMillis: options.durationMs }),
+    config,
+    deps: {
+      fetcher,
+      env: {},
+      exec,
+      checkBinary: async () => true,
+      mktemp: async () => dir,
+      rmTemp: async () => {},
+      now: () => 0,
+    },
+    deadline: options.deadline,
+    modelSupportsImage: false,
+  });
+  return { result, seen, config };
+}
+
+test("local transcription is skipped when the video budget cannot cover it (V5)", async () => {
+  await withTempDir(async (dir) => {
+    // 30 s of audio at 2x realtime needs ~60 s; only 10 s of budget is left.
+    const { result, seen } = await runWhisper(dir, { durationMs: 30_000, deadline: 10_000 });
+    assert.equal(seen.length, 0, "whisper must not be started at all");
+    assert.equal(result.transcript, undefined);
+    assert.ok(
+      result.notes.some((note) => /would exceed the video budget/.test(note)),
+      `expected a budget note, got ${JSON.stringify(result.notes)}`,
+    );
+  });
+});
+
+test("local transcription runs when the budget covers it, on the configured threads (V5)", async () => {
+  await withTempDir(async (dir) => {
+    const { result, seen } = await runWhisper(dir, { durationMs: 30_000, deadline: 300_000, threads: 3 });
+    assert.equal(seen.length, 1, "whisper ran");
+    assert.equal(seen[0][seen[0].indexOf("-t") + 1], "3");
+    assert.equal(result.transcript, "words");
+  });
+});
+
+test("whisperThreads defaults to min(8, availableParallelism()) (V5)", async () => {
+  await withTempDir(async (dir) => {
+    const { seen, config } = await runWhisper(dir, { durationMs: 30_000, deadline: 300_000 });
+    assert.equal(config.whisperThreads, DEFAULT_WHISPER_THREADS);
+    assert.equal(seen[0][seen[0].indexOf("-t") + 1], String(DEFAULT_WHISPER_THREADS));
+  });
+});
+
+test("a raised whisperRealtimeFactor makes the guard stricter (V5)", async () => {
+  await withTempDir(async (dir) => {
+    // 10 s of audio needs 20 s at the 2x default (fits in 30 s), but 100 s at 10x.
+    const fits = await runWhisper(dir, { durationMs: 10_000, deadline: 30_000 });
+    assert.equal(fits.seen.length, 1, "the default factor fits");
+    const skipped = await runWhisper(dir, { durationMs: 10_000, deadline: 30_000, factor: 10 });
+    assert.equal(skipped.seen.length, 0, "a 10x factor does not fit");
   });
 });

@@ -1078,6 +1078,7 @@ async function remoteStt(
 
 async function whisperCpp(
   audioFile: string,
+  audioSeconds: number,
   config: TwitterConfig,
   deps: VideoDeps,
   ctx: FfmpegContext,
@@ -1089,6 +1090,18 @@ async function whisperCpp(
   const exec = deps.exec ?? ctx.exec;
   const outBase = `${audioFile}.out`;
   const lang = config.sttLanguage || "auto";
+  // Local transcription on a CPU-only host is slower than realtime, so starting it
+  // with less budget than it needs just burns the phase and gets killed late (V5).
+  const neededMs = audioSeconds * config.whisperRealtimeFactor * 1_000;
+  if (Math.max(1, timeoutMs) < neededMs) {
+    return {
+      note:
+        `Local transcription was skipped: ${Math.round(audioSeconds)}s of audio needs roughly ` +
+        `${Math.round(neededMs / 1_000)}s (at ${config.whisperRealtimeFactor}x realtime) and only ` +
+        `${Math.round(Math.max(1, timeoutMs) / 1_000)}s of the video budget was left, so local transcription ` +
+        "would exceed the video budget. A smaller model, fewer seconds, or the remote STT endpoint would fit.",
+    };
+  }
   try {
     const exists = await stat(model).then(() => true, () => false);
     if (!exists) return { note: `whisper model not found at ${model}.` };
@@ -1096,7 +1109,14 @@ async function whisperCpp(
     // `-nth` is its no-speech threshold (already the 0.6 default, passed explicitly
     // so the value this filter assumes cannot drift). `--vad` trims silence before
     // decoding and is the stronger guard, but it needs a model the user supplies.
-    const args = ["-m", model, "-f", audioFile, "-l", lang, "-oj", "-of", outBase, "-sns", "-nth", "0.6"];
+    const args = [
+      "-m", model,
+      "-f", audioFile,
+      "-l", lang,
+      "-t", String(config.whisperThreads),
+      "-oj", "-of", outBase,
+      "-sns", "-nth", "0.6",
+    ];
     if (config.whisperVadModelPath) args.push("--vad", "--vad-model", config.whisperVadModelPath);
     await exec(bin, args, {
       timeout: Math.max(1, timeoutMs),
@@ -1387,7 +1407,14 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
       const haveAudio = await extractAudio(ctx, mediaFile, audioFile, localStt, maxSeconds, remaining(deadline, now));
       if (haveAudio) {
         const result = localStt
-          ? await whisperCpp(audioFile, config, deps, ctx, remaining(deadline, now))
+          ? await whisperCpp(
+              audioFile,
+              durationKnown ? Math.min((durationMs as number) / 1_000, maxSeconds) : maxSeconds,
+              config,
+              deps,
+              ctx,
+              remaining(deadline, now),
+            )
           : await remoteStt(audioFile, config, deps, deadline);
         transcript = result.transcript ?? transcript;
         if (result.note) evidence.notes.push(result.note);

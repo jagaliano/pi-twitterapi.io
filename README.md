@@ -68,6 +68,9 @@ override — and set only the keys you need:
 | `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
 | `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary) — download it from [ffmpeg.org](https://ffmpeg.org/) or your package manager. |
 | `whisperCppBinary` / `whisperModelPath` | no | Local whisper.cpp binary and GGML model (both user-installed) — see [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp) for builds and model downloads. |
+| `whisperThreads` | no | Threads for whisper.cpp (`-t`); default `min(8, availableParallelism())`. |
+| `whisperRealtimeFactor` | no | Seconds of wall clock assumed per second of audio when deciding whether local transcription fits the budget; default `2`. |
+| `whisperVadModelPath` | no | Optional whisper.cpp VAD model; when set, whisper.cpp runs with `--vad`, which trims silence before decoding. |
 | `maxVideoSeconds` / `maxVideoBytes` / `maxFrames` / `maxVideosPerSearch` / `videoBudgetMs` | no | Video bounds: duration guard (120), download cap (32 MiB), frames per video (8), videos per search (1), time budget (180 s, max 300 s). |
 
 > **Video processing is opt-in and local-tooling first.** It needs
@@ -128,7 +131,19 @@ override — and set only the keys you need:
 > Ryzen AI and Ascend — with a per-backend list of verified devices in the
 > [whisper.cpp README](https://github.com/ggml-org/whisper.cpp). Pick a build for your
 > hardware and a model size that keeps up on your machine before enabling the local
-> tier.
+> tier. `whisperThreads` (default `min(8, availableParallelism())`) is passed to
+> whisper.cpp as `-t`, and it matters: on one CPU-only host the same 30 s clip took
+> **61 s on 4 threads and 42 s on 12**. A smaller model (`base`, `small`) is usually
+> the bigger win on a CPU-only machine.
+>
+> **Local transcription is skipped when it cannot fit.** Before starting whisper.cpp
+> the extension compares the remaining video budget with
+> `clipSeconds × whisperRealtimeFactor` (default `2`, i.e. two seconds of wall clock
+> per second of audio) and skips with a note rather than burning the whole budget and
+> being killed late. On a CPU-only host, either use a smaller model, set
+> `whisperRealtimeFactor` to match your machine, or use the remote `sttEndpoint`
+> instead — a remote endpoint costs a request, local transcription costs your
+> hardware's time.
 >
 > Neither tool is bundled: install `ffmpeg` from [ffmpeg.org](https://ffmpeg.org/)
 > (or your package manager) and `whisper.cpp` from

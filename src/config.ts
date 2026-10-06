@@ -1,3 +1,5 @@
+import { availableParallelism } from "node:os";
+
 import type { PiSettings } from "./settings.js";
 import { mergePiSettings } from "./settings.js";
 
@@ -37,6 +39,20 @@ export const DEFAULT_VIDEO_BUDGET_MS = 180_000;
 export const MAX_VIDEO_BUDGET_MS = 300_000;
 
 /**
+ * Default whisper.cpp thread count. Measured on an i9-9880H (CPU + BLAS, no GPU):
+ * a 30 s clip took 61 s on 4 threads and 42 s on 12, so the thread count matters
+ * more than the model size for whether local transcription finishes at all (V5).
+ */
+export const DEFAULT_WHISPER_THREADS = Math.min(8, availableParallelism());
+/**
+ * How many seconds of wall clock one second of audio is assumed to need on this
+ * host. Measured ≈2x realtime on the machine above with `large-v3-turbo-q5_0`;
+ * a smaller model is faster, so this is a conservative pre-flight estimate, not a
+ * measurement of the configured model (V5).
+ */
+export const DEFAULT_WHISPER_REALTIME_FACTOR = 2;
+
+/**
  * Config keys that can execute code, choose an endpoint, or name a credential.
  * These are read from **user (global) settings only** — a project-level value is
  * ignored and disclosed, so a cloned repo cannot run a binary or exfiltrate a
@@ -55,6 +71,8 @@ export const USER_ONLY_CONFIG_KEYS = [
   "whisperCppBinary",
   "whisperModelPath",
   "whisperVadModelPath",
+  "whisperThreads",
+  "whisperRealtimeFactor",
 ] as const;
 
 export interface TwitterConfig {
@@ -119,6 +137,15 @@ export interface TwitterConfig {
    * is the most effective guard against transcribing it (V4).
    */
   whisperVadModelPath?: string;
+  /** whisper.cpp threads (`-t`). Defaults to min(8, availableParallelism()). */
+  whisperThreads: number;
+  /**
+   * Pre-flight estimate of seconds of wall clock per second of audio for local
+   * transcription (default 2). When the remaining video budget is below
+   * `clipSeconds * whisperRealtimeFactor`, local STT is skipped with a disclosure
+   * instead of being killed mid-run after spending the budget (V5).
+   */
+  whisperRealtimeFactor: number;
   /** Duration guard in seconds (default 120, max 600). */
   maxVideoSeconds: number;
   /** Byte cap for a single video download (default 32 MiB, max 64 MiB). */
@@ -169,6 +196,27 @@ function isObject(value: unknown): value is Record<string, unknown> {
 /** Non-negative finite milliseconds, clamped, or the fallback when absent/invalid. */
 function intervalMs(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(value, MAX_INTERVAL_MS) : fallback;
+}
+
+/** Positive finite number, clamped, or the fallback when absent/invalid. */
+function numberInRange(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+  key: string,
+  notes: string[],
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    notes.push(`twitter.${key} ${JSON.stringify(value)} is not a number; using ${fallback}.`);
+    return fallback;
+  }
+  const clamped = Math.min(Math.max(value, min), max);
+  if (clamped !== value) {
+    notes.push(`twitter.${key} ${value} is outside the supported range ${min}..${max}; using ${clamped}.`);
+  }
+  return clamped;
 }
 
 /** Positive integer page count, clamped, or the fallback when absent/invalid. */
@@ -301,6 +349,22 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     whisperCppBinary: text(user.whisperCppBinary),
     whisperModelPath: text(user.whisperModelPath),
     whisperVadModelPath: text(user.whisperVadModelPath),
+    whisperThreads: intInRange(
+      user.whisperThreads,
+      DEFAULT_WHISPER_THREADS,
+      1,
+      64,
+      "whisperThreads",
+      configNotes,
+    ),
+    whisperRealtimeFactor: numberInRange(
+      user.whisperRealtimeFactor,
+      DEFAULT_WHISPER_REALTIME_FACTOR,
+      0.1,
+      60,
+      "whisperRealtimeFactor",
+      configNotes,
+    ),
     maxVideoSeconds: intInRange(
       config.maxVideoSeconds,
       DEFAULT_MAX_VIDEO_SECONDS,
