@@ -4,20 +4,46 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type PiSettings = Record<string, unknown>;
 
-function readJsonFile(filePath: string): PiSettings {
+/**
+ * A settings file plus, when it could not be used, why not.
+ *
+ * A malformed file must never take the tool down: `twitter` is registered from
+ * this, and a stray trailing comma in a cloned repo's `.pi/settings.json` used to
+ * throw at registration time, silently removing the tool (G2).
+ */
+export interface PiSettingsRead {
+	settings: PiSettings;
+	/** Human-readable reason the file was ignored; unset when it was read fine. */
+	error?: string;
+}
+
+function readJsonFile(filePath: string): PiSettingsRead {
+	let raw: string;
 	try {
-		return JSON.parse(readFileSync(filePath, "utf8")) as PiSettings;
+		raw = readFileSync(filePath, "utf8");
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException;
-		if (err.code === "ENOENT") {
-			return {};
-		}
-		throw error;
+		if (err.code === "ENOENT") return { settings: {} };
+		return { settings: {}, error: `${filePath} could not be read: ${err.message}` };
 	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		return { settings: {}, error: `${filePath} is not valid JSON: ${(error as Error).message}` };
+	}
+	if (!isPlainObject(parsed)) {
+		return { settings: {}, error: `${filePath} is not a JSON object` };
+	}
+	return { settings: parsed };
+}
+
+export function readPiProjectSettingsResult(cwd = process.cwd()): PiSettingsRead {
+	return readJsonFile(join(cwd, ".pi", "settings.json"));
 }
 
 export function readPiProjectSettings(cwd = process.cwd()): PiSettings {
-	return readJsonFile(join(cwd, ".pi", "settings.json"));
+	return readPiProjectSettingsResult(cwd).settings;
 }
 
 /**
@@ -25,8 +51,12 @@ export function readPiProjectSettings(cwd = process.cwd()): PiSettings {
  * so `PI_CODING_AGENT_DIR` (and any other supported override) is respected
  * instead of assuming `~/.pi/agent`.
  */
-export function readPiUserSettings(agentDir = getAgentDir()): PiSettings {
+export function readPiUserSettingsResult(agentDir = getAgentDir()): PiSettingsRead {
 	return readJsonFile(join(agentDir, "settings.json"));
+}
+
+export function readPiUserSettings(agentDir = getAgentDir()): PiSettings {
+	return readPiUserSettingsResult(agentDir).settings;
 }
 
 export interface ReadMergedPiSettingsOptions {

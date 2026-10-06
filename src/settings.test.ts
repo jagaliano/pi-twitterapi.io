@@ -5,7 +5,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { mergePiSettings, readMergedPiSettings, readPiProjectSettings, readPiUserSettings } from "./settings.js";
+import {
+	mergePiSettings,
+	readMergedPiSettings,
+	readPiProjectSettings,
+	readPiProjectSettingsResult,
+	readPiUserSettings,
+	readPiUserSettingsResult,
+} from "./settings.js";
 
 function scratch(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "pi-twitterapi-settings-"));
@@ -81,4 +88,44 @@ test("deep merge keeps unrelated top-level keys from both scopes", () => {
     a: { x: 1, y: 2 },
     keep: true,
   });
+});
+
+test("a malformed settings file is reported instead of throwing (G2)", () => {
+  const { dir, cleanup } = scratch();
+  try {
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    // A trailing comma: the exact typo that used to throw at registration.
+    writeFileSync(join(dir, ".pi", "settings.json"), '{ "twitter": { "maxPages": 2, }, }');
+    const read = readPiProjectSettingsResult(dir);
+    assert.deepEqual(read.settings, {});
+    assert.match(read.error ?? "", /\.pi\/settings\.json is not valid JSON/);
+    // The plain accessor still returns usable settings rather than throwing.
+    assert.deepEqual(readPiProjectSettings(dir), {});
+  } finally {
+    cleanup();
+  }
+});
+
+test("a settings file that is not a JSON object is reported too (G2)", () => {
+  const { dir, cleanup } = scratch();
+  try {
+    writeFileSync(join(dir, "settings.json"), "[1, 2, 3]");
+    const read = readPiUserSettingsResult(dir);
+    assert.deepEqual(read.settings, {});
+    assert.match(read.error ?? "", /is not a JSON object/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a readable settings file reports no error", () => {
+  const { dir, cleanup } = scratch();
+  try {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ twitter: { maxPages: 1 } }));
+    const read = readPiUserSettingsResult(dir);
+    assert.deepEqual(read.settings, { twitter: { maxPages: 1 } });
+    assert.equal(read.error, undefined);
+  } finally {
+    cleanup();
+  }
 });

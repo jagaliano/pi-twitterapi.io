@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { Value } from "typebox/value";
 
 import { registerTwitterTool } from "./tool.js";
@@ -1145,4 +1149,56 @@ test("about and retweeters validate their required parameters", async () => {
     () => tool().execute("id", { query: "q", mode: "about", user: "alice", tweet: "9" }, undefined, undefined, undefined),
     /tweet can only be used in modes/,
   );
+});
+
+test("a malformed project settings file is disclosed, not fatal (G2)", async () => {
+  const { pi, tool } = captureTool();
+  const dir = mkdtempSync(join(tmpdir(), "pi-twitterapi-badsettings-"));
+  const agentDir = join(dir, "agent");
+  mkdirSync(join(dir, ".pi"), { recursive: true });
+  mkdirSync(agentDir, { recursive: true });
+  try {
+    // A trailing comma in the project file used to throw here, so the tool was
+    // never registered at all.
+    writeFileSync(join(dir, ".pi", "settings.json"), '{ "twitter": { "maxPages": 2, }, }');
+    // The user settings must still apply.
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ twitter: { synthesisModel: "anthropic/haiku" } }));
+
+    let seenModel = "";
+    const registry = {
+      find: () => undefined,
+      getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+      complete: async (model: { provider: string; id: string }) => {
+        seenModel = `${model.provider}/${model.id}`;
+        return { content: [{ type: "text", text: "ok (https://x.com/a/status/7)." }] };
+      },
+    };
+    const fetcher = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          tweets: [{ id: "7", url: "https://x.com/a/status/7", text: "hello", author: { userName: "a" } }],
+          has_next_page: false,
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+
+    registerTwitterTool(pi as any, {
+      env: { TWITTERAPI_IO_API_KEY: "key" },
+      fetcher,
+      cwd: dir,
+      agentDir,
+    });
+
+    assert.ok(tool(), "the tool is registered despite the malformed project settings");
+    const result = await tool().execute("id", { query: "q" }, undefined, undefined, { modelRegistry: registry });
+    assert.equal(seenModel, "anthropic/haiku", "user settings still applied");
+    assert.match(
+      result.content[0].text,
+      /is not valid JSON.*its twitter settings were ignored/,
+      "the malformed file is disclosed in Notes",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

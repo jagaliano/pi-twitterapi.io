@@ -147,6 +147,12 @@ export interface LoadTwitterConfigOptions {
    * form keeps working for callers that have a single settings blob.
    */
   projectSettings?: PiSettings;
+  /**
+   * Settings files that existed but could not be used (malformed JSON).
+   * Disclosed rather than thrown: a typo in a cloned repo's settings must not
+   * silently remove the tool (G2).
+   */
+  settingsErrors?: string[];
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -182,6 +188,12 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
   // Non-sensitive keys keep their historic behaviour: project overrides user.
   const config = mergePiSettings(user, project);
   const configNotes: string[] = [];
+
+  // A settings file we could not parse contributes nothing, so say so instead of
+  // letting the user wonder why their configuration had no effect (G2).
+  for (const error of options.settingsErrors ?? []) {
+    configNotes.push(`${error}; its twitter settings were ignored.`);
+  }
 
   // Sensitive keys are read from user settings only; a project-level value is
   // ignored and disclosed (B1/F1/F3).
