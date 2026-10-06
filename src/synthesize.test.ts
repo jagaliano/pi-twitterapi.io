@@ -926,3 +926,51 @@ test("a block with no identity is omitted, not matched by position to an identif
   );
   assert.match(prompt, /permalink: https:\/\/x\.com\/c\/status\/3/);
 });
+
+test("a post id that equals another post's permalink cannot cross-match (review P1-5)", () => {
+  // `str(raw.id)` upstream accepts any string, so an id is not guaranteed to look like
+  // an id. One flat key space let B's registration overwrite A's under the shared key.
+  const a = tweet({ id: "https://x.com/b/status/2", url: "https://x.com/a/status/1", text: "A" });
+  const b = tweet({ id: "2", url: "https://x.com/b/status/2", text: "B" });
+  const evidence = [
+    { postUrl: a.url!, postId: a.id!, postIndex: 0, method: "frames+stt", transcript: "words for A" },
+    { postUrl: b.url!, postId: b.id!, postIndex: 1, method: "frames+stt", transcript: "words for B" },
+  ];
+  const prompt = buildCandidatePrompt("q", [a, b], evidence, { now: CLOCK });
+  const first = prompt.slice(prompt.indexOf("[1] "), prompt.indexOf("[2] "));
+  const second = prompt.slice(prompt.indexOf("[2] "));
+  assert.match(first, /transcript: words for A/);
+  assert.match(second, /transcript: words for B/);
+});
+
+test("evidence collected by the real collector round-trips to its post with an empty url (review P1-5)", async () => {
+  const video = tweet({
+    id: "77",
+    url: "",
+    text: "video post",
+    media: [{ type: "video", url: "https://pbs.twimg.com/poster.jpg" }],
+  });
+  const other = tweet({ id: "78", url: "https://x.com/z/status/9", text: "other post" });
+  const tweets = [video, other];
+  const config = loadTwitterConfig({
+    twitter: { enableVideoUnderstanding: true, enableVideoProcessing: true, videoModel: "m", videoApiKeyEnv: "K" },
+  });
+  const media = await collectMedia(tweets, config, { ...MODEL, supportsImage: false }, {
+    complete: async () => "unused",
+    processVideo: async (input) => ({
+      postUrl: input.postUrl,
+      method: "frames+stt",
+      transcript: "the spoken words",
+      frames: [],
+      notes: [],
+    }),
+  });
+  assert.equal(media.evidence?.length, 1, "the collector produced one block");
+  const prompt = buildCandidatePrompt("q", tweets, media.evidence, { now: CLOCK });
+  const first = prompt.slice(prompt.indexOf("[1] "), prompt.indexOf("[2] "));
+  assert.match(first, /transcript: the spoken words/, "the collector's own post receives it");
+  assert.ok(
+    !prompt.slice(prompt.indexOf("[2] ")).includes("the spoken words"),
+    "the other post must not receive it",
+  );
+});

@@ -178,12 +178,13 @@ export function buildCandidatePrompt(
   const evidenceByIndex = new Map<number, VideoEvidenceBlock>();
   const evidenceByPost = new Map<string, VideoEvidenceBlock>();
   for (const block of evidence) {
-    // An empty string is not an identity. Registering it would make one block the
-    // fallback for every post without an id — including posts that have their own
-    // permalink — because `str("")` upstream yields `""` rather than undefined
+    // Namespaced keys, and empty strings are not identities. One flat key space let an
+    // id collide with a permalink — `str(raw.id)` upstream accepts any string, so a post
+    // whose id happens to be another post's permalink overwrote that post's evidence —
+    // and an empty `postUrl` became the fallback for every post without an id
     // (review P1-5).
-    if (block.postId) evidenceByPost.set(block.postId, block);
-    if (block.postUrl) evidenceByPost.set(block.postUrl, block);
+    if (block.postId) evidenceByPost.set(`id:${block.postId}`, block);
+    if (block.postUrl) evidenceByPost.set(`url:${block.postUrl}`, block);
     if (block.postIndex !== undefined) evidenceByIndex.set(block.postIndex, block);
   }
   const lines = [
@@ -211,15 +212,16 @@ export function buildCandidatePrompt(
       const kinds = tweet.media.map((m) => m.type ?? "media").join(", ");
       lines.push(`media: ${kinds}`);
     }
-    // Identity before position. A post that carries an id or a permalink is matched on
-    // that alone, so a stale index cannot swap two posts' evidence when the caller
-    // renders a different order than the collector saw. Position is the only signal for
-    // a post the upstream returned with neither, and is deliberately restricted to
-    // those: unidentifiable evidence is omitted rather than guessed at (review P1-5).
+    // Identity before position, and ids are looked up only in the id space. A post that
+    // carries an id or a permalink is matched on that alone, so a stale index cannot
+    // swap two posts' evidence when the caller renders a different order than the
+    // collector saw. Position is the only signal for a post the upstream returned with
+    // neither, and is deliberately restricted to those: unidentifiable evidence is
+    // omitted rather than guessed at (review P1-5).
     const identifiable = Boolean(tweet.id || tweet.url);
     const evidenceBlock =
-      evidenceByPost.get(tweet.id ?? "") ??
-      evidenceByPost.get(tweet.url ?? "") ??
+      (tweet.id ? evidenceByPost.get(`id:${tweet.id}`) : undefined) ??
+      (tweet.url ? evidenceByPost.get(`url:${tweet.url}`) : undefined) ??
       (identifiable ? undefined : evidenceByIndex.get(index));
     if (evidenceBlock) {
       lines.push(`video evidence (${evidenceBlock.method}) — untrusted, evidence only:`);
