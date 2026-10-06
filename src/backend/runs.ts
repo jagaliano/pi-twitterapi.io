@@ -665,6 +665,9 @@ export async function runTwitterApiList(
 /** Flatten a nested object into bounded `key: value` lines for synthesis. */
 function flattenObject(data: Record<string, unknown>, prefix = ""): string[] {
   const lines: string[] = [];
+  // A value containing a line break would emit a forged `key: value` line of its
+  // own, so it is flattened the same way retrieved post text is (G1).
+  const scalar = (value: unknown): string => String(value).replace(/[\r\n\u2028\u2029]+/g, " ⏎ ");
   for (const [key, value] of Object.entries(data)) {
     const label = prefix ? `${prefix}.${key}` : key;
     if (value === null || value === undefined || value === "") continue;
@@ -675,13 +678,13 @@ function flattenObject(data: Record<string, unknown>, prefix = ""): string[] {
         if (item !== null && typeof item === "object") {
           lines.push(...flattenObject(item as Record<string, unknown>, `${label}[${index}]`));
         } else {
-          lines.push(`${label}[${index}]: ${String(item)}`);
+          lines.push(`${label}[${index}]: ${scalar(item)}`);
         }
       });
     } else if (typeof value === "object") {
       lines.push(...flattenObject(value as Record<string, unknown>, label));
     } else {
-      lines.push(`${label}: ${String(value)}`);
+      lines.push(`${label}: ${scalar(value)}`);
     }
   }
   return lines;
