@@ -75,12 +75,16 @@ export interface TwitterConfig {
   enableVideoProcessing: boolean;
   videoEndpointType: VideoEndpointType;
   /**
-   * True when `twitter.videoEndpointType` held a value this loader does not
-   * recognise. Native video is skipped in that case rather than falling back to a
-   * default provider: a typo would otherwise send one provider's wire format to a
-   * host the user configured for another. Frames and STT still run.
+   * True when `twitter.videoEndpointType` held a non-empty string this loader does
+   * not recognise. Native video is skipped in that case rather than falling back to a
+   * default provider: a typo would otherwise send one provider's wire format to a host
+   * the user configured for another. Frames and STT still run.
+   *
+   * Optional so that a caller-built `TwitterConfig` written before this field existed
+   * still typechecks; the loader always supplies it, and the guard reads it as falsy
+   * when absent.
    */
-  videoEndpointTypeInvalid: boolean;
+  videoEndpointTypeInvalid?: boolean;
   /** Base URL override. `gemini-files` defaults to Google; other hosts need an explicit endpoint + key env. */
   videoEndpoint?: string;
   /**

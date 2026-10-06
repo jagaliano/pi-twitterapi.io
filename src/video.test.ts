@@ -758,6 +758,43 @@ test("an unrecognised videoEndpointType skips native video instead of guessing a
   });
 });
 
+test("a real typo config with an authorised custom endpoint contacts no provider", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    // Loaded the way production does it, so the flag comes from the loader rather than
+    // the test — this covers the config-to-pipeline wiring, not just the guard.
+    const config = loadTwitterConfig({
+      twitter: {
+        videoEndpointType: "openai-compat", // typo
+        videoEndpoint: "https://openrouter.ai/api/v1",
+        videoApiKeyEnv: "OPENROUTER_API_KEY",
+        videoModel: "google/gemini-2.5-flash-lite",
+      },
+    });
+    assert.equal(config.videoEndpointTypeInvalid, true, "the loader flags the typo");
+    assert.equal(config.videoEndpointExplicit, true, "the endpoint is otherwise authorised");
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/62",
+      media: videoMedia(),
+      config,
+      deps: { ...nativeDeps(fetcher, dir, 1), env: { OPENROUTER_API_KEY: "k" } },
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(
+      calls.some(
+        (c) =>
+          c.url.includes(":generateContent") ||
+          c.url.includes("/chat/completions") ||
+          c.url.includes("/upload/"),
+      ),
+      false,
+      "neither adapter is reached, even though the endpoint and its key are valid",
+    );
+    assert.ok(result.notes.some((n) => /not recognised/.test(n)));
+  });
+});
+
 test("an unrecognised videoEndpointType still lets the STT fallback answer", async () => {
   await withTempDir(async (dir) => {
     const calls: string[] = [];

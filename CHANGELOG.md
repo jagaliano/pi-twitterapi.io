@@ -13,8 +13,9 @@ disclosure claims evidence that was not produced.
 
 ### Changed
 
-- Native video is now **skipped** when `twitter.videoEndpointType` holds a value the
-  extension does not recognise, instead of silently falling back to `gemini-files`.
+- Native video is now **skipped** when `twitter.videoEndpointType` holds a non-empty
+  string the extension does not recognise, instead of silently falling back to
+  `gemini-files`.
   The value is still reported, but no provider is guessed: with a custom
   `videoEndpoint` also configured, guessing would have sent one provider's wire
   format to a host that was set up for another. Frames and STT still run, so a typo
