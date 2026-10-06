@@ -656,6 +656,259 @@ test("processVideo discloses a failed Gemini delete", async () => {
   });
 });
 
+// ------------------------------------------- native video / OpenAI-compatible
+
+const OPENAI_CONFIG = loadTwitterConfig({
+  twitter: {
+    videoEndpointType: "openai-compatible",
+    videoEndpoint: "https://openrouter.ai/api/v1",
+    videoApiKeyEnv: "OPENROUTER_API_KEY",
+    videoModel: "google/gemini-2.5-flash-lite",
+  },
+});
+
+test("processVideo analyses native video through an OpenAI-compatible endpoint", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls, bodies } = openAiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/50",
+      media: videoMedia(),
+      config: OPENAI_CONFIG,
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.method, "openai-compatible");
+    assert.equal(result.visualNotes, "a person speaks");
+    assert.equal(result.transcript, "hello world");
+    const call = calls.find((c) => c.url.endsWith("/chat/completions"));
+    assert.ok(call, "the chat-completions endpoint was called");
+    assert.equal(call.url, "https://openrouter.ai/api/v1/chat/completions");
+    assert.equal(call.auth, "Bearer sk-openrouter-test");
+    // The part spelling is load-bearing. `input_video`, and `video_url` as a bare
+    // string, both answer HTTP 200 while silently ignoring the video, so the video
+    // would be "analysed" from the prompt text alone. Only this object form ships
+    // the clip (verified against OpenRouter; docs/video-spike.md).
+    const content = (bodies[0] as { messages: { content: Record<string, unknown>[] }[] }).messages[0].content;
+    const part = content.find((p) => p.type === "video_url") as { video_url: { url: string } } | undefined;
+    assert.ok(part, "a video_url part was sent");
+    assert.match(part.video_url.url, /^data:video\/mp4;base64,/);
+  });
+});
+
+test("an OpenAI-compatible reply outside the JSON contract is kept whole as visual evidence", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = openAiFetcher({ content: "A person waves at the camera." });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/51",
+      media: videoMedia(),
+      config: OPENAI_CONFIG,
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(result.method, "openai-compatible");
+    assert.equal(result.visualNotes, "A person waves at the camera.");
+    assert.equal(result.transcript, undefined, "no transcript is invented from a prose reply");
+  });
+});
+
+test("an endpoint whose model cannot view video is disclosed with the upstream reason", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = openAiFetcher({
+      status: 404,
+      errorBody: { error: { message: "No endpoints found that support input video" } },
+    });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/52",
+      media: videoMedia(),
+      config: OPENAI_CONFIG,
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.notEqual(result.method, "openai-compatible");
+    const note = result.notes.find((n) => /Native video analysis failed/.test(n)) ?? "";
+    assert.match(note, /HTTP 404/);
+    assert.match(note, /No endpoints found that support input video/);
+  });
+});
+
+test("a caller-built OpenAI-compatible config is rejected without an explicit key env (P2-9)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = openAiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/53",
+      media: videoMedia(),
+      // The config loader would never produce this: endpoint without a named key env.
+      config: { ...OPENAI_CONFIG, videoEndpointExplicit: false },
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.ok(result.notes.some((note) => /explicit twitter.videoApiKeyEnv over https/.test(note)));
+    assert.ok(
+      !calls.some((c) => c.url.endsWith("/chat/completions")),
+      "no API key was sent to a host the user never authorised",
+    );
+  });
+});
+
+test("a completion cut off at the token limit is not published as native evidence", async () => {
+  await withTempDir(async (dir) => {
+    // Half-written JSON. Parsing it would keep the fragment as the visual
+    // description, mark the run native and suppress the frame fallback.
+    const { fetcher } = openAiFetcher({ content: '{"visual":"a person at a podium', finishReason: "length" });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/54",
+      media: videoMedia(),
+      config: OPENAI_CONFIG,
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.notEqual(result.method, "openai-compatible");
+    assert.equal(result.visualNotes, undefined, "the truncated fragment is not used as evidence");
+    assert.ok(result.notes.some((n) => /truncated its answer at the token limit/.test(n)));
+  });
+});
+
+test("non-string and empty completions are refused instead of published", async () => {
+  const cases: { label: string; content: unknown }[] = [
+    { label: "whitespace", content: "   " },
+    { label: "null", content: null },
+    { label: "number", content: 42 },
+    { label: "array", content: [{ text: "hi" }] },
+    { label: "object", content: { visual: "x" } },
+  ];
+  for (const testCase of cases) {
+    await withTempDir(async (dir) => {
+      const { fetcher } = openAiFetcher({ content: testCase.content });
+      const result = await processVideo({
+        postUrl: "https://x.com/a/status/55",
+        media: videoMedia(),
+        config: OPENAI_CONFIG,
+        deps: openAiDeps(fetcher, dir),
+        deadline: 60_000,
+        modelSupportsImage: false,
+      });
+      assert.notEqual(result.method, "openai-compatible", `${testCase.label} must not be published`);
+      assert.ok(
+        result.notes.some((n) => /returned no text content/.test(n)),
+        `${testCase.label} is reported rather than swallowed`,
+      );
+    });
+  }
+});
+
+test("the adapter posts the clip bytes, model and prompt as a non-redirecting POST", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls, bodies } = openAiFetcher();
+    await processVideo({
+      postUrl: "https://x.com/a/status/56",
+      media: videoMedia(),
+      config: OPENAI_CONFIG,
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    const call = calls.find((c) => c.url.endsWith("/chat/completions"));
+    assert.ok(call);
+    assert.equal(call.method, "POST");
+    assert.equal(call.redirect, "error", "redirects are refused so the clip cannot be re-sent elsewhere");
+    const body = bodies[0] as { model: string; messages: { content: Record<string, unknown>[] }[] };
+    assert.equal(body.model, "google/gemini-2.5-flash-lite");
+    const part = body.messages[0].content.find((p) => p.type === "video_url") as {
+      video_url: { url: string };
+    };
+    // Decode and compare: the bytes sent must be the downloaded clip, not a placeholder.
+    const decoded = Buffer.from(part.video_url.url.split(",")[1], "base64");
+    assert.equal(decoded.byteLength, 1_024);
+    assert.ok(decoded.every((b) => b === 1), "the exact downloaded bytes were transmitted");
+  });
+});
+
+test("a caller-built http endpoint is refused as native video even when marked explicit (P2-9)", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = openAiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/57",
+      media: videoMedia(),
+      config: { ...OPENAI_CONFIG, videoEndpoint: "http://openrouter.ai/api/v1", videoEndpointExplicit: true },
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.ok(result.notes.some((n) => /endpoint is not https/.test(n)));
+    assert.ok(!calls.some((c) => c.url.endsWith("/chat/completions")), "the clip was never sent in the clear");
+  });
+});
+
+test("a failed native call still leaves the frame fallback available", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher } = openAiFetcher({ status: 404, errorBody: { error: { message: "no video support" } } });
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/58",
+      media: videoMedia(),
+      config: OPENAI_CONFIG,
+      deps: openAiDeps(fetcher, dir),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.notEqual(result.method, "openai-compatible");
+    assert.ok(result.frames.length > 0, "the image-capable synthesis model still receives frames");
+  });
+});
+
+/**
+ * Serves the MP4, then an OpenAI-compatible chat-completions reply.
+ *
+ * `content` is deliberately `unknown`: the adapter has to refuse non-string and
+ * whitespace-only answers rather than publishing them as evidence, and `rawBody`
+ * lets a test model a reply that is not even JSON.
+ */
+function openAiFetcher(
+  options: { content?: unknown; finishReason?: string; status?: number; errorBody?: unknown; rawBody?: string } = {},
+) {
+  const calls: { url: string; method: string; auth?: string; redirect?: string }[] = [];
+  const bodies: unknown[] = [];
+  const fetcher = (async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    calls.push({ url, method, auth: headers.authorization, redirect: init?.redirect as string | undefined });
+    if (url.endsWith("/chat/completions")) {
+      if (typeof init?.body === "string") bodies.push(JSON.parse(init.body));
+      if (options.status && options.status >= 400) {
+        return new Response(options.rawBody ?? JSON.stringify(options.errorBody ?? {}), { status: options.status });
+      }
+      if (options.rawBody !== undefined) return new Response(options.rawBody, { status: 200 });
+      const content =
+        options.content === undefined
+          ? JSON.stringify({ visual: "a person speaks", transcript: "hello world" })
+          : options.content;
+      return new Response(
+        JSON.stringify({ choices: [{ finish_reason: options.finishReason ?? "stop", message: { content } }] }),
+        { status: 200 },
+      );
+    }
+    return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+  }) as unknown as typeof fetch;
+  return { fetcher, calls, bodies };
+}
+
+function openAiDeps(fetcher: typeof fetch, dir: string): VideoDeps {
+  return {
+    fetcher,
+    env: { OPENROUTER_API_KEY: "sk-openrouter-test" },
+    exec: fakeExec().exec,
+    checkBinary: async () => true,
+    mktemp: async () => dir,
+    rmTemp: async () => {},
+    now: () => 0,
+  };
+}
+
 test("processVideo polls a Files upload until it reports ACTIVE", async () => {
   await withTempDir(async (dir) => {
     const { fetcher, calls } = geminiFetcher({ fileStates: ["PROCESSING", "PROCESSING", "ACTIVE"] });

@@ -62,7 +62,7 @@ override — and set only the keys you need:
 | `minRequestIntervalMs` | no | Minimum spacing between upstream requests (default 5000). twitterapi.io allows 0.2 QPS on unpaid accounts; raise it if you are being throttled, lower it for a higher-QPS tier, or set it to 0 to disable pacing. |
 | `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). |
 | `enableVideoProcessing` | no | Run **real** video processing (native video and/or frames + transcript). Requires `enableVideoUnderstanding`. Off by default. |
-| `videoEndpointType` | no | Native-video wire format: `gemini-files` (default) or `openai-compatible` (unverified). |
+| `videoEndpointType` | no | Native-video wire format: `gemini-files` (default, Google) or `openai-compatible` (video-capable chat-completions endpoints that accept this `video_url` shape; verified with OpenRouter). |
 | `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
 | `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var (default `STT_API_KEY`). No hidden default provider. |
 | `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
@@ -73,15 +73,22 @@ override — and set only the keys you need:
 > **Video processing is opt-in and local-tooling first.** It needs
 > `enableVideoUnderstanding: true` **and** `enableVideoProcessing: true`, plus a
 > locally installed `ffmpeg` (for frames/audio) and optionally whisper.cpp, or a
-> configured native-video / STT endpoint. In v1 native video goes to **Gemini
-> only** (`gemini-files`); frames are sent to your pi model; `openai-compatible`
-> video is **not** enabled pending verification (Grok cannot take video input at
-> all). Sending video/audio to a third-party endpoint is disclosed in the answer.
-> The native request asks for structured JSON (`responseMimeType:
-> application/json`), so the model names the visual/transcript sections itself. A
-> reply that ignores that is kept whole as visual evidence: the transcript is
-> never inferred from prose (an invented transcript would be published as
-> evidence), and STT still recovers the real speech when it is configured.
+> configured native-video / STT endpoint. Native video works two ways:
+> `gemini-files` (Google, direct) and `openai-compatible` (OpenRouter and other
+> chat-completions endpoints, verified with `google/gemini-2.5-flash-lite`);
+> frames are sent to your pi model. **Grok cannot accept video input at all** —
+> `x-ai/grok-4.3` declares no video modality and rejects a video request with
+> HTTP 404 "No endpoints found that support input video", so it is frames-only.
+> Sending video/audio to a third-party endpoint is disclosed in the answer.
+> Both native adapters ask for the same JSON contract, by different means:
+> `gemini-files` constrains it with a response schema (`responseMimeType:
+> application/json`), while `openai-compatible` can only request it in the prompt
+> text, so the model names the visual/transcript sections itself in either case. A
+> reply that ignores the contract is kept whole as visual evidence: the transcript
+> is never inferred from prose (an invented transcript would be published as
+> evidence), and STT still recovers the real speech when it is configured. A reply
+> cut off at the token limit is *not* used as evidence, because half-written JSON
+> would otherwise be published as a description.
 > Variants are chosen from a real `HEAD` request rather than the advertised
 > bitrate, which overstates the file by roughly 3x (a nominal 2176 kbps clip
 > measured 6.16 MB where the bitrate suggests 19.6 MB).
@@ -106,6 +113,21 @@ override — and set only the keys you need:
 > 180 s and caps at 300 s. Provider video analysis is the slow part and its
 > latency varies: measured live, one call over a 65 s clip took 33 s once and
 > ~71 s another time, so expect a long tool call on a media-heavy query.
+
+For native video through OpenRouter instead of Google:
+
+```json
+{
+  "twitter": {
+    "enableVideoUnderstanding": true,
+    "enableVideoProcessing": true,
+    "videoEndpointType": "openai-compatible",
+    "videoEndpoint": "https://openrouter.ai/api/v1",
+    "videoApiKeyEnv": "OPENROUTER_API_KEY",
+    "videoModel": "google/gemini-2.5-flash-lite"
+  }
+}
+```
 
 > **Important:** the extension needs a pi version whose `ModelRegistry.complete`
 > exists — it is absent on pi 0.80.6, present from pi 0.99.2, and verified on

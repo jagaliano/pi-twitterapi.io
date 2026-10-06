@@ -14,7 +14,7 @@ export const DEFAULT_MIN_REQUEST_INTERVAL_MS = 5_000;
 export const DEFAULT_RETRY_BASE_DELAY_MS = 5_000;
 const MAX_INTERVAL_MS = 600_000;
 
-/** Native-video wire formats. v1 ships `gemini-files`; `openai-compatible` is spike-gated. */
+/** Native-video wire formats. Both `gemini-files` and `openai-compatible` are implemented. */
 export const VIDEO_ENDPOINT_TYPES = ["gemini-files", "openai-compatible", "anthropic"] as const;
 export type VideoEndpointType = (typeof VIDEO_ENDPOINT_TYPES)[number];
 
