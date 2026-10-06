@@ -5,7 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2026-10-05
+
+Hardening and disclosure fixes for the video tiers, found by reviewing and
+live-testing the 0.3.0 work. Nothing is published for a typo any more, and no
+disclosure claims evidence that was not produced.
 
 ### Changed
 
@@ -26,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A run that produced no video evidence no longer announces a poster-frame fallback
   to a model that cannot accept images: such a model can never receive the poster, so
   the answer now says the poster could not be attached.
+- An unrecognised `twitter.videoEndpointType` is reported, naming the bad value and
+  the accepted set, instead of quietly changing provider.
+
+### Documentation
+
+- The README states every phase of the video budget (request spacing, media phase,
+  video budget, the poster-fallback reservation and the Gemini file deletion) and
+  notes they are budgets rather than a strict additive timeline. It adds a measured
+  cost note for native video, scoped to the models it was measured on — 258 video
+  tokens per second, about $0.0031 per 120 s clip on `google/gemini-2.5-flash-lite` —
+  and warns that local `whisper.cpp` is bound by your hardware: about three minutes
+  for a 30 s clip with `large-v3-turbo` on CPU.
+- `docs/x-search-comparison.md` and `docs/pricing-comparison.md` account for opt-in
+  video and STT billing, and no longer describe video as poster-only.
 
 ## [0.3.0] - 2026-10-05
 
@@ -198,7 +216,8 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.1...v0.1.2
