@@ -55,7 +55,7 @@ override — and set only the keys you need:
 |---|---|---|
 | `synthesisModel` | no | A pi model id (`provider/model`) used to turn retrieved posts into an answer. When unset, the session model is used; if it is set but fails at runtime, the session model answers instead with a note. |
 | `enableImageUnderstanding` | no | Attach post images to the synthesis request when the model accepts image input. |
-| `enableVideoUnderstanding` | no | Attach video poster frames (chat models cannot ingest video). |
+| `enableVideoUnderstanding` | no | Attach video poster frames (pi's synthesis interface takes images, not video). |
 | `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4). |
 | `maxPages` | no | Base page budget per search (default 5). |
 | `maxPagesCeiling` | no | Hard cap that `maxPages` is clamped to (default 20). |
@@ -108,11 +108,37 @@ override — and set only the keys you need:
 > are analysed: the video is trimmed locally when possible, and a clip that
 > **cannot** be trimmed is not uploaded whole — the native path is skipped and
 > disclosed, while frames and audio stay limited to that window. Worst case a
-> single video call can take several minutes (retrieval pacing + 60 s media phase
-> + up to `videoBudgetMs` video phase + synthesis), and the budget defaults to
-> 180 s and caps at 300 s. Provider video analysis is the slow part and its
-> latency varies: measured live, one call over a 65 s clip took 33 s once and
+> single video call can take several minutes. The defaults are a minimum request
+> spacing of 5 s, a 60 s media phase, up to `videoBudgetMs` of video work (180 s,
+> capped at 300 s), a 15 s window reserved for the poster-frame fallback, and then
+> synthesis with its own retries; a Gemini Files upload is deleted before that
+> fallback is used. These are budgets rather than a strict additive timeline — each
+> phase spends only what it needs, and the poster window is a shared deadline, not
+> a guaranteed extra wait. Provider video analysis is the slow part and its latency
+> varies: measured live on 2026-10-05, one call over a 65 s clip took 33 s once and
 > ~71 s another time, so expect a long tool call on a media-heavy query.
+>
+> **Cost.** Native video is billed by whichever endpoint you configure, and video is
+> tokenised by **duration** rather than file size. In one measurement on
+> 2026-10-05, `google/gemini-2.5-flash-lite` counted 258 video tokens per second of
+> clip (about 31k tokens for the default 120 s window) and a single 120 s analysis
+> cost **$0.0031** at OpenRouter list prices; the same clip cost **$0.0045** on
+> `qwen/qwen3.7-flash`, whose completion spent most of its tokens on reasoning. Treat
+> those as one model's rates, not a rule for every provider, and re-check the
+> current prices — they change.
+>
+> They are single-call examples, not per-search totals and not a cap. Retrieval,
+> the synthesis model's text/image/output tokens, optional STT, and any retries or
+> fallbacks all add up on top, and work that is thrown away may still be billed: a
+> native reply cut off at its token limit is refused, and a timed-out attempt is
+> abandoned, but only after the provider has processed the clip. Only the trimmed
+> `maxVideoSeconds` window is ever sent, and `maxVideosPerSearch` (default 1) bounds
+> how many videos one search will analyse. The other tiers bill separately: frames
+> ride your pi model as images at normal token cost, a configured STT endpoint
+> charges in **its own provider's units, rates and minimums** (per second of audio
+> for most hosted Whisper APIs, with the audio re-sent — up to three attempts — when
+> an endpoint rejects the requested response format), and local `ffmpeg` plus
+> whisper.cpp cost nothing beyond the model files you download.
 
 For native video through OpenRouter instead of Google:
 
@@ -194,8 +220,8 @@ than silently ignored.
   outside the citation contract: they are neither published as sources nor
   counted as invented citations.
 - **Media is best-effort.** By default a video post is represented by its poster
-  frame and the limitation is disclosed, because a chat model cannot ingest
-  video. With `enableVideoProcessing` (see above) the video itself is analysed —
+  frame and the limitation is disclosed, because pi's synthesis interface cannot
+  ingest video. With `enableVideoProcessing` (see above) the video itself is analysed —
   locally trimmed frames/audio, and/or the configured native-video or STT
   endpoint — and the poster is kept only as the fallback when that yields nothing.
 - **Partial retrieval is disclosed.** If paging stops early (page cap, cursor
@@ -274,10 +300,10 @@ version, including parameter mapping, lives in
 | Result order | chosen by the model | `queryType` (`Latest`/`Top`), `replySort` |
 | Item-count control | ❌ | ✅ `count`, `limit` |
 | Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached when the model accepts images) |
-| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame by default; opt-in `enableVideoProcessing` adds native video (Gemini) and/or frames + STT |
+| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame by default; opt-in `enableVideoProcessing` adds native video (`gemini-files` or an `openai-compatible` endpoint) and/or frames + STT |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
-| Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens — [cost comparison](docs/pricing-comparison.md) |
+| Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens; opt-in video and STT add endpoint charges — [cost comparison](docs/pricing-comparison.md) |
 | Shape | one `x_search` request | one `twitter` tool with 17 modes |
 
 Per-item costs differ by more than an order of magnitude, and the two routes

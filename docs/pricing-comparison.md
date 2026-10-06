@@ -19,7 +19,7 @@ like-for-like:
 |---|---|---|
 | Retrieval | twitterapi.io REST API, billed per item | xAI's server-side X index, billed per item |
 | The answer | **your** pi model (`twitter.synthesisModel`, else the session model) | Grok, in the same request |
-| Billing boundary | retrieval + your model's tokens, separately | retrieval + Grok's tokens, together |
+| Billing boundary | retrieval + your model's tokens, separately (plus any opt-in video/STT endpoints you configure) | retrieval + Grok's tokens, together |
 | Who decides how much is fetched | you (`count`, `limit`, `maxPages`, `pageSize`) | the model, autonomously |
 
 Both sides bill the answer as tokens. The difference is *whose* tokens: here you
@@ -40,7 +40,7 @@ twitterapi.io prices in credits, where **100,000 credits = $1.00**
 | Follower IDs (bulk) | from $0.0045 / 1K, tiered | not offered | — |
 | Minimum per call | $0.00015 (15 credits); 60 credits for the follower endpoints | none listed — per item | — |
 | List calls | $0.0015 (150 credits) per call | — | — |
-| Images / video in posts | tokens on your model | tokens (`view_image` / `view_x_video`) | — |
+| Images / video in posts | tokens on your model; opt-in native video is billed by the endpoint you configure | tokens (`view_image` / `view_x_video`) | — |
 
 ## Counting rules that change the bill
 
@@ -134,7 +134,11 @@ leads with per-item rates and refuses to quote a single "total per search".
 
 Media behaves the same way on both sides: attached images are token costs, not
 per-item charges. This extension attaches post images, and video posts as their
-poster frame, only when the configured model accepts image input.
+poster frame, only when the configured model accepts image input. With
+`enableVideoProcessing` a video can instead be analysed properly — native video
+through `gemini-files` or an `openai-compatible` endpoint, and/or local frames plus
+STT — and those endpoint charges appear on their own providers' bills, outside the
+retrieval and synthesis figures compared here.
 
 ## What this comparison excludes
 

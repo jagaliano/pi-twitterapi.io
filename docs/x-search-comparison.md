@@ -52,10 +52,10 @@ which is why the two are priced differently.
 | Result order | chosen by the model | ✅ `queryType` (`Latest`/`Top`), `replySort` (`Relevance`/`Latest`/`Likes`) |
 | Item-count control | ❌ | ✅ `count` (posts/users/trends), `limit` (many modes) |
 | Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached only when the model accepts images) |
-| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame only — chat models cannot ingest video, and this is disclosed |
+| Video understanding | ✅ `enable_video_understanding` | ✅ `enableVideoUnderstanding` (poster frames); ⚠️ opt-in `enableVideoProcessing` adds real analysis — native video via `gemini-files` or an `openai-compatible` endpoint, and/or local frames + STT |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model, with runtime fallback |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
-| Billing | xAI model tokens + per post/profile fetched | twitterapi.io credits + your synthesis model's tokens |
+| Billing | xAI model tokens + per post/profile fetched | twitterapi.io credits + your synthesis model's tokens; opt-in video analysis and STT are billed by their own endpoints |
 | Tool shape | one `x_search` call | one `twitter` tool, 17 modes |
 | Availability | xAI models only | any pi session with a twitterapi.io key |
 
@@ -68,7 +68,7 @@ which is why the two are priced differently.
 | `from_date` | `from_date` (`mode=posts`) |
 | `to_date` | `to_date` (`mode=posts`) |
 | `enable_image_understanding` | `twitter.enableImageUnderstanding` setting |
-| `enable_video_understanding` | `twitter.enableVideoUnderstanding` setting (poster frames) |
+| `enable_video_understanding` | `twitter.enableVideoUnderstanding` setting (poster frames), plus `enableVideoProcessing` for real analysis |
 | — | `mode`, `tweet`, `user`, `userId`, `woeid`, `ids`, `communityId`, `listId`, `spaceId`, `queryType`, `replySort`, `count`, `limit`, `pageSize`, `includeReplies`, `sinceTime`, `untilTime` |
 
 ## Where `x_search` is stronger
@@ -90,7 +90,10 @@ profile, about, fetch-by-id, retweeters, communities, lists and Spaces.
 
 - **Two steps, not one.** `x_search` bills xAI tokens plus per-item retrieval;
   this extension bills twitterapi.io credits plus tokens on the pi model you
-  choose. Choosing a cheap synthesis model for summaries keeps cost down.
+  choose. Choosing a cheap synthesis model for summaries keeps cost down. Enabling
+  real video processing adds a third bill: the native-video and STT endpoints you
+  configure charge on their own price lists, and local ffmpeg/whisper.cpp are free
+  apart from the model files.
 - **Citations are reconstructed.** This extension never trusts model output for
   sources: citations are derived from the permalinks actually fetched, and an X
   link the model invents is dropped from `Sources` and disclosed in `## Notes`.
