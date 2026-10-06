@@ -1018,13 +1018,23 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     // implemented (the latter spike-verified, `docs/video-spike.md`); `anthropic`
     // is not, and is reported as such rather than silently degrading.
     const endpointType = config.videoEndpointType;
+    // An unrecognised type means we cannot know which wire format was wanted, so
+    // native video is skipped rather than guessed: the fallback would post one
+    // provider's format to a host configured for another (config.ts discloses the
+    // bad value). Frames and STT below are unaffected. The check comes first so the
+    // invalid case never reaches the provider decision at all.
     const nativeConfigured =
       endpointType === "gemini-files"
         ? geminiConfigured(config, env)
         : endpointType === "openai-compatible"
           ? openAiCompatibleConfigured(config, env)
           : false;
-    if (nativeAllowed && nativeConfigured) {
+    if (nativeAllowed && config.videoEndpointTypeInvalid) {
+      evidence.notes.push(
+        "Native video was skipped: twitter.videoEndpointType is not recognised, so no video provider was " +
+          "guessed. Any frame or audio fallback that applies will be attempted below.",
+      );
+    } else if (nativeAllowed && nativeConfigured) {
       const base = endpointType === "gemini-files" ? geminiBase(config) : (config.videoEndpoint ?? "");
       // P2-9: authorisation is re-checked at the adapter boundary, not only where
       // the config is loaded, so a caller-built config cannot send the default

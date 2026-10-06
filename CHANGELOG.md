@@ -7,14 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- `twitter.videoEndpointType` is now disclosed when it holds an unrecognised
-  value, naming the bad value, the accepted set and the default actually used.
-  Previously such a value fell back to `gemini-files` in silence, so a typo could
-  run a different provider than the one configured — and, when a custom
-  `videoEndpoint` was also set, send Gemini's request format to a host that was
-  intended for `openai-compatible`, carrying the key named for that host.
+- Native video is now **skipped** when `twitter.videoEndpointType` holds a value the
+  extension does not recognise, instead of silently falling back to `gemini-files`.
+  The value is still reported, but no provider is guessed: with a custom
+  `videoEndpoint` also configured, guessing would have sent one provider's wire
+  format to a host that was set up for another. Frames and STT still run, so a typo
+  costs native analysis rather than producing a malformed request.
 
 ## [0.3.0] - 2026-10-05
 

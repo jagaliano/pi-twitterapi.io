@@ -74,6 +74,13 @@ export interface TwitterConfig {
    */
   enableVideoProcessing: boolean;
   videoEndpointType: VideoEndpointType;
+  /**
+   * True when `twitter.videoEndpointType` held a value this loader does not
+   * recognise. Native video is skipped in that case rather than falling back to a
+   * default provider: a typo would otherwise send one provider's wire format to a
+   * host the user configured for another. Frames and STT still run.
+   */
+  videoEndpointTypeInvalid: boolean;
   /** Base URL override. `gemini-files` defaults to Google; other hosts need an explicit endpoint + key env. */
   videoEndpoint?: string;
   /**
@@ -194,10 +201,11 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     );
   }
 
-  // Disclose an unrecognised provider string while keeping the existing fallback.
-  // Other unusable values in this loader are still silently defaulted (numeric bounds
-  // clamp, non-strings are dropped); this one is called out because it decides which
-  // provider runs, so a typo would otherwise pick one the user never asked for.
+  // Disclose an unrecognised provider string. The value still resolves to the default so
+  // the rest of the config stays coherent, but native video is disabled for it (see
+  // processVideo): guessing a provider would post one provider's wire format to a host
+  // configured for another. Other unusable values in this loader are still silently
+  // defaulted (numeric bounds clamp, non-strings are dropped).
   const endpointTypeRaw = text(user.videoEndpointType);
   const knownEndpointType = Boolean(
     endpointTypeRaw && (VIDEO_ENDPOINT_TYPES as readonly string[]).includes(endpointTypeRaw),
@@ -205,12 +213,13 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
   if (endpointTypeRaw && !knownEndpointType) {
     configNotes.push(
       `twitter.videoEndpointType "${endpointTypeRaw}" is not one of ${VIDEO_ENDPOINT_TYPES.join(", ")}; ` +
-        `using ${DEFAULT_VIDEO_ENDPOINT_TYPE}.`,
+        "native video is disabled for this value, and no provider will be guessed for it.",
     );
   }
   const videoEndpointType: VideoEndpointType = knownEndpointType
     ? (endpointTypeRaw as VideoEndpointType)
     : DEFAULT_VIDEO_ENDPOINT_TYPE;
+  const videoEndpointTypeInvalid = Boolean(endpointTypeRaw && !knownEndpointType);
 
   // F3/P0-1: a custom endpoint may only be used when the user ALSO names the
   // credential env var explicitly, and only over HTTPS. Otherwise the default
@@ -235,6 +244,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     enableVideoUnderstanding,
     enableVideoProcessing: videoRequested && enableVideoUnderstanding,
     videoEndpointType,
+    videoEndpointTypeInvalid,
     videoEndpoint,
     videoEndpointExplicit: Boolean(videoEndpoint && explicitKeyEnv),
     videoModel: text(user.videoModel),

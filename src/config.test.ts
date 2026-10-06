@@ -59,7 +59,7 @@ test("an unrecognised videoEndpointType falls back to the default and discloses 
   // the accepted values, which is the part that makes the typo fixable.
   assert.deepEqual(config.configNotes, [
     `twitter.videoEndpointType "openai-compat" is not one of ${VIDEO_ENDPOINT_TYPES.join(", ")}; ` +
-      "using gemini-files.",
+      "native video is disabled for this value, and no provider will be guessed for it.",
   ]);
 });
 
@@ -82,6 +82,7 @@ test("every accepted videoEndpointType is taken as-is, padding included", () => 
     assert.equal(loadTwitterConfig({ twitter: { videoEndpointType: value } }).videoEndpointType, value);
     const padded = loadTwitterConfig({ twitter: { videoEndpointType: `  ${value}  ` } });
     assert.equal(padded.videoEndpointType, value);
+    assert.equal(padded.videoEndpointTypeInvalid, false);
     assert.deepEqual(padded.configNotes, []);
   }
   // Padding does not rescue an unrecognised value.
@@ -94,9 +95,23 @@ test("a project-level videoEndpointType cannot select the adapter", () => {
     { projectSettings: { twitter: { videoEndpointType: "openai-compatible" } } },
   );
   assert.equal(config.videoEndpointType, "gemini-files");
+  assert.equal(config.videoEndpointTypeInvalid, false, "an ignored project value is not an invalid user value");
   assert.ok(
     config.configNotes.some((note) => /twitter\.videoEndpointType from project settings was ignored/.test(note)),
   );
+});
+
+test("an unrecognised videoEndpointType is flagged so native video is skipped", () => {
+  assert.equal(
+    loadTwitterConfig({ twitter: { videoEndpointType: "openai-compat" } }).videoEndpointTypeInvalid,
+    true,
+  );
+  assert.equal(
+    loadTwitterConfig({ twitter: { videoEndpointType: "openai-compatible" } }).videoEndpointTypeInvalid,
+    false,
+  );
+  assert.equal(loadTwitterConfig({}).videoEndpointTypeInvalid, false);
+  assert.equal(loadTwitterConfig({ twitter: { videoEndpointType: "   " } }).videoEndpointTypeInvalid, false);
 });
 
 test("only the twitter settings block is read", () => {

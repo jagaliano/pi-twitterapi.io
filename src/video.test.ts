@@ -734,6 +734,74 @@ test("an endpoint whose model cannot view video is disclosed with the upstream r
   });
 });
 
+test("an unrecognised videoEndpointType skips native video instead of guessing a provider", async () => {
+  await withTempDir(async (dir) => {
+    const { fetcher, calls } = geminiFetcher();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/60",
+      media: videoMedia(),
+      // Fully configured for Gemini, but the type the user wrote was a typo. A 1-byte
+      // inline threshold would force the Files path if native video ran at all.
+      config: { ...GEMINI_CONFIG, videoEndpointTypeInvalid: true },
+      deps: nativeDeps(fetcher, dir, 1),
+      deadline: 60_000,
+      modelSupportsImage: true,
+    });
+    assert.equal(
+      calls.some((c) => c.url.includes(":generateContent") || c.url.includes("/upload/")),
+      false,
+      "no request reaches a video provider when the type is unrecognised",
+    );
+    assert.ok(result.notes.some((n) => /videoEndpointType is not recognised/.test(n)), "the skip is disclosed");
+    assert.notEqual(result.method, "gemini-native");
+    assert.ok(result.frames.length > 0, "the local frame fallback still runs");
+  });
+});
+
+test("an unrecognised videoEndpointType still lets the STT fallback answer", async () => {
+  await withTempDir(async (dir) => {
+    const calls: string[] = [];
+    const fetcher = (async (input: string | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/audio/transcriptions")) {
+        return new Response(JSON.stringify({ text: "hello from the transcript" }), { status: 200 });
+      }
+      return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
+    }) as unknown as typeof fetch;
+    const config = {
+      ...loadTwitterConfig({
+        twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      }),
+      videoEndpointTypeInvalid: true,
+    };
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/61",
+      media: videoMedia(),
+      config,
+      deps: {
+        fetcher,
+        env: { STT_API_KEY: "k" },
+        exec: fakeExec().exec,
+        checkBinary: async () => true,
+        mktemp: async () => dir,
+        rmTemp: async () => {},
+        now: () => 0,
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.equal(
+      calls.some((u) => u.includes(":generateContent") || u.includes("/upload/")),
+      false,
+      "no video provider was contacted",
+    );
+    assert.equal(result.transcript, "hello from the transcript", "the STT tier still supplies the speech");
+    assert.equal(result.method, "transcript-only");
+    assert.ok(result.notes.some((n) => /videoEndpointType is not recognised/.test(n)));
+  });
+});
+
 test("a caller-built OpenAI-compatible config is rejected without an explicit key env (P2-9)", async () => {
   await withTempDir(async (dir) => {
     const { fetcher, calls } = openAiFetcher();
