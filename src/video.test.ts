@@ -963,6 +963,121 @@ test("a Files upload that never becomes ACTIVE is disclosed and deleted", async 
   });
 });
 
+test("an abort during the Files lifecycle still deletes the upload and cleans up (M7/F6)", async () => {
+  await withTempDir(async (dir) => {
+    const removed: string[] = [];
+    const deleteSignals: (AbortSignal | undefined)[] = [];
+    const controller = new AbortController();
+    const base = geminiFetcher({ fileStates: Array.from({ length: 5 }, () => "PROCESSING") });
+    let cancelled = false;
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      // Mirror real fetch, which rejects an already-aborted request. Without this the
+      // poll loop would keep issuing requests because `sleepAbortable` only unblocks.
+      // Record delete attempts before the abort guard: a DELETE issued with an
+      // aborted signal would otherwise go uncounted.
+      if (method === "DELETE") deleteSignals.push(init?.signal ?? undefined);
+      // Mirror real fetch, which rejects an already-aborted request. Without this the
+      // poll loop would keep issuing requests because `sleepAbortable` only unblocks.
+      if (init?.signal?.aborted) {
+        const aborted = new Error("The operation was aborted.");
+        aborted.name = "AbortError";
+        throw aborted;
+      }
+      if (url.includes("/v1beta/files/abc") && method === "GET" && !cancelled) {
+        // The caller cancels after the clip has already been uploaded.
+        cancelled = true;
+        controller.abort();
+        return new Response(JSON.stringify({ state: "PROCESSING" }), { status: 200 });
+      }
+      return base.fetcher(input, init);
+    }) as typeof fetch;
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/42",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: {
+        ...nativeDeps(fetcher, dir, 1),
+        signal: controller.signal,
+        rmTemp: async (d) => {
+          removed.push(d);
+        },
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.ok(cancelled, "the fake actually cancelled the caller");
+    assert.equal(controller.signal.aborted, true, "the caller signal is really aborted");
+    assert.ok(base.calls.some((c) => c.method === "DELETE"), "the upload is deleted despite the abort");
+    assert.equal(deleteSignals.length, 1, "exactly one delete attempt");
+    assert.equal(
+      deleteSignals[0]?.aborted,
+      false,
+      "deletion runs on a fresh signal, never the caller's aborted one",
+    );
+    assert.deepEqual(removed, [dir], "the temp directory is removed on abort too");
+    assert.notEqual(result.method, "gemini-native", "a cancelled run is not native evidence");
+    assert.equal(result.visualNotes, undefined, "a cancelled run publishes no evidence");
+    assert.equal(result.transcript, undefined, "no transcript is invented");
+    assert.equal(result.frames.length, 0, "no frames for a cancelled native run");
+    assert.match(
+      result.notes.join(" "),
+      /Native video analysis failed: .*aborted/i,
+      "the cancellation itself is disclosed, not just any failure",
+    );
+  });
+});
+
+test("an abort during generateContent still deletes the upload (M7/F6)", async () => {
+  await withTempDir(async (dir) => {
+    const removed: string[] = [];
+    const deleteSignals: (AbortSignal | undefined)[] = [];
+    const controller = new AbortController();
+    const base = geminiFetcher(); // the poll reports ACTIVE immediately
+    let cancelled = false;
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "DELETE") deleteSignals.push(init?.signal ?? undefined);
+      if (init?.signal?.aborted) {
+        const aborted = new Error("The operation was aborted.");
+        aborted.name = "AbortError";
+        throw aborted;
+      }
+      if (url.includes(":generateContent") && !cancelled) {
+        // Cancelled after the upload was accepted and generation had begun.
+        cancelled = true;
+        controller.abort();
+        const aborted = new Error("The operation was aborted.");
+        aborted.name = "AbortError";
+        throw aborted;
+      }
+      return base.fetcher(input, init);
+    }) as typeof fetch;
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/45",
+      media: videoMedia(),
+      config: GEMINI_CONFIG,
+      deps: {
+        ...nativeDeps(fetcher, dir, 1),
+        signal: controller.signal,
+        rmTemp: async (d) => {
+          removed.push(d);
+        },
+      },
+      deadline: 60_000,
+      modelSupportsImage: false,
+    });
+    assert.ok(cancelled, "the fake actually cancelled during generation");
+    assert.ok(base.calls.some((c) => c.method === "DELETE"), "the upload is deleted after a generation abort");
+    assert.equal(deleteSignals.length, 1, "exactly one delete attempt");
+    assert.equal(deleteSignals[0]?.aborted, false, "deletion still uses a fresh signal");
+    assert.deepEqual(removed, [dir], "the temp directory is removed");
+    assert.equal(result.visualNotes, undefined, "no evidence from a cancelled generation");
+  });
+});
+
 test("processVideo discloses a FAILED Files upload and deletes it", async () => {
   await withTempDir(async (dir) => {
     const { fetcher, calls } = geminiFetcher({ fileStates: ["PROCESSING", "FAILED"] });
