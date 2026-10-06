@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-10-06
+
+Test and CI only. **No runtime behaviour changes** — the published `src/` is
+identical to 0.3.2; the only files that differ in this tarball are `package.json`
+(version) and this changelog. It exists because 0.3.2 shipped with a red CI on the
+`engines` floor.
+
+### Fixed
+
+- **The test suite failed on Node 22.19, the declared `engines` floor.** Two tests
+  in `src/video.test.ts` were cancelled with *"Promise resolution is still pending
+  but the event loop has already resolved"*, and the first cancellation took the rest
+  of the file with it (75 of 312). This was **pre-existing** — v0.3.1 fails the same
+  way (50 of 264) — and had never been seen because CI only ran `lts/*`. The Node
+  22.19 matrix added in 0.3.2 is what exposed it.
+
+  Cause: a fake fetcher settled *only* when the abort signal fired, and
+  `AbortSignal.timeout()` (used by `opSignal`) is **unref'd**. With no other pending
+  handle, Node 22.19 empties the event loop before the timer fires; Node 24/26 happens
+  to keep a handle alive. The fakes now carry a ref'd fallback timer that holds the
+  loop open the way a real socket would. It cannot make a test pass for the wrong
+  reason: the affected test asserts the sweep finished in under 5 s, so a fallback
+  that won would fail it.
+
+  This was never a production defect. A real request holds a socket open, and every
+  phase is bounded by the caller's deadline independently of the abort signal.
+
+### Verified
+
+- 312/312 tests pass on **Node 22.19.0** (the floor) and on Node 26.10.0. The
+  `engines: ">=22.19.0"` claim is now tested rather than assumed.
+
 ## [0.3.2] - 2026-10-06
 
 Correctness pass from a review of the whole extension, not only the video tiers. This
