@@ -45,6 +45,11 @@ disclosure claims evidence that was not produced.
   for a 30 s clip with `large-v3-turbo` on CPU.
 - `docs/x-search-comparison.md` and `docs/pricing-comparison.md` account for opt-in
   video and STT billing, and no longer describe video as poster-only.
+- The README links directly to [ffmpeg.org](https://ffmpeg.org/) and
+  [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp) for downloads, states
+  that CPU-only whisper.cpp works but is slow, and recommends an accelerated backend
+  for local processing — Apple Silicon (Metal / Core ML / Accelerate), NVIDIA (CUDA),
+  AMD (ROCm), Vulkan, OpenVINO, or an NPU such as Ryzen AI or Ascend.
 
 ## [0.3.0] - 2026-10-05
 

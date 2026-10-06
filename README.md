@@ -66,8 +66,8 @@ override — and set only the keys you need:
 | `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
 | `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var (default `STT_API_KEY`). No hidden default provider. |
 | `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
-| `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary). |
-| `whisperCppBinary` / `whisperModelPath` | no | Local whisper.cpp binary and GGML model (both user-installed). |
+| `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary) — download it from [ffmpeg.org](https://ffmpeg.org/) or your package manager. |
+| `whisperCppBinary` / `whisperModelPath` | no | Local whisper.cpp binary and GGML model (both user-installed) — see [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp) for builds and model downloads. |
 | `maxVideoSeconds` / `maxVideoBytes` / `maxFrames` / `maxVideosPerSearch` / `videoBudgetMs` | no | Video bounds: duration guard (120), download cap (32 MiB), frames per video (8), videos per search (1), time budget (180 s, max 300 s). |
 
 > **Video processing is opt-in and local-tooling first.** It needs
@@ -118,10 +118,22 @@ override — and set only the keys you need:
 > varies: measured live on 2026-10-05, one call over a 65 s clip took 33 s once and
 > ~71 s another time, so expect a long tool call on a media-heavy query. Local
 > transcription is bound by your hardware instead: the same day, `whisper.cpp` with
-> `large-v3-turbo` on CPU took about **3 minutes** to transcribe a 30 s clip, so a
-> large GGML model can cost far more wall-clock time than the clip is long — a
-> smaller model is considerably faster. Enable the local tier only when you have
-> tested that model on your machine.
+> `large-v3-turbo` **on CPU** took about **3 minutes** to transcribe a 30 s clip.
+> CPU inference does work and needs nothing special, but it is **slow**, and a large
+> model can cost far more wall-clock time than the clip is long.
+>
+> **Accelerated builds are strongly recommended for local processing.** whisper.cpp
+> ships backends for Apple Silicon (Metal, Core ML and the Accelerate framework),
+> NVIDIA GPUs (CUDA), AMD GPUs (ROCm), Vulkan GPUs, OpenVINO, and NPUs including AMD
+> Ryzen AI and Ascend — with a per-backend list of verified devices in the
+> [whisper.cpp README](https://github.com/ggml-org/whisper.cpp). Pick a build for your
+> hardware and a model size that keeps up on your machine before enabling the local
+> tier.
+>
+> Neither tool is bundled: install `ffmpeg` from [ffmpeg.org](https://ffmpeg.org/)
+> (or your package manager) and `whisper.cpp` from
+> [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp), then point
+> `ffmpegPath` and `whisperCppBinary` at the binaries you installed.
 >
 > **Cost.** Native video is billed by whichever endpoint you configure, and video is
 > tokenised by **duration** rather than file size. In one measurement on
