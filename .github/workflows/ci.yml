@@ -11,6 +11,12 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # `lts/*` is what most users run; the engines floor is 22.19 and the
+        # extension must keep working on it.
+        node-version: ["lts/*", "22.19"]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
@@ -22,11 +28,18 @@ jobs:
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
-          node-version: lts/*
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      # The frame-timing test (V1) drives the real ffmpeg and skips itself when the
+      # binary is missing, so without this the one test that catches wrong frame
+      # labels would never run in CI. whisper.cpp tests stay local-only: the model
+      # is ~500 MB.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Typecheck
         run: pnpm typecheck
