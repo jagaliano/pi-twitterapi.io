@@ -31,8 +31,22 @@ function asMediaList(raw: unknown): TweetMedia[] | undefined {
   return list.length > 0 ? list : undefined;
 }
 
+const MAX_TWEET_DEPTH = 1;
+
 export function asTweet(raw: unknown): Tweet | undefined {
-  if (!isObject(raw) || typeof raw.text !== "string") return undefined;
+  return mapTweet(raw, 0);
+}
+
+function asNestedTweet(raw: unknown, depth: number): Tweet | undefined {
+  const tweet = mapTweet(raw, depth);
+  // Upstream id-only stubs are not fetched context. Keep media-only sources,
+  // including those without a text field, without inventing their identity.
+  if (!tweet || (!tweet.text?.trim() && !tweet.url?.trim() && !tweet.media?.length)) return undefined;
+  return tweet;
+}
+
+function mapTweet(raw: unknown, depth: number): Tweet | undefined {
+  if (!isObject(raw) || (typeof raw.text !== "string" && !(depth > 0 && raw.text == null))) return undefined;
   const author = isObject(raw.author) ? raw.author : undefined;
   const num = (v: unknown) => (typeof v === "number" ? v : undefined);
   const str = (v: unknown) => (typeof v === "string" ? v : undefined);
@@ -45,12 +59,18 @@ export function asTweet(raw: unknown): Tweet | undefined {
   return {
     id: str(raw.id),
     url: str(raw.url),
-    text: raw.text,
+    text: typeof raw.text === "string" ? raw.text : "",
     createdAt: str(raw.createdAt),
     likeCount: num(raw.likeCount),
     retweetCount: num(raw.retweetCount),
     replyCount: num(raw.replyCount),
     viewCount: num(raw.viewCount),
+    quoteCount: typeof raw.quoteCount === "number" && Number.isFinite(raw.quoteCount) ? raw.quoteCount : undefined,
+    lang: str(raw.lang),
+    isReply: typeof raw.isReply === "boolean" ? raw.isReply : undefined,
+    inReplyToUsername: str(raw.inReplyToUsername),
+    quoted: depth < MAX_TWEET_DEPTH ? asNestedTweet(raw.quoted_tweet, depth + 1) : undefined,
+    retweetOf: depth < MAX_TWEET_DEPTH ? asNestedTweet(raw.retweeted_tweet, depth + 1) : undefined,
     author: author ? {
       userName: str(author.userName),
       name: str(author.name),

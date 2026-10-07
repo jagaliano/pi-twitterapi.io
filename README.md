@@ -256,6 +256,12 @@ than silently ignored.
   dropped from `Sources` and counted in the `## Notes` section. Non-X links are
   outside the citation contract: they are neither published as sources nor
   counted as invented citations.
+- **Quoted/reposted context keeps its original attribution.** One nested level
+  is retained, with reply target, language and quote-count metadata. Id-only stubs
+  are ignored; media-only sources survive. Longer original text replaces a
+  truncated RT copy under the existing text caps, without changing the enclosing
+  post's identity. Valid fetched nested permalinks can be cited. Nested media
+  kinds are metadata here; their media processing is not yet enabled.
 - **Media is best-effort.** By default a video post is represented by its poster
   frame and the limitation is disclosed, because pi's synthesis interface cannot
   ingest video. With `enableVideoProcessing` (see above) the video itself is analysed —

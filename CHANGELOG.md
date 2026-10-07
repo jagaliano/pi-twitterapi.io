@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- One-level quoted/reposted source context, including media-only sources and
+  typed reply/language/quote metadata. Id-only stubs and deeper nesting are omitted.
+- Original repost text and source identity remain distinct from the enclosing
+  post; truncated RT copies are replaced by longer originals within existing caps.
+- Valid fetched nested permalinks join inline and deduplicated fallback Sources.
+  New context fields use the existing prompt-boundary and source-URL guards.
+  Nested media processing and larger text/input budgets remain subsequent work.
+
 ## [0.3.5] - 2026-10-07
 
 Phase 1 follow-up: close the remaining retrieved-metadata prompt boundaries.

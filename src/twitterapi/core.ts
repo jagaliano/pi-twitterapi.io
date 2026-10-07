@@ -44,6 +44,14 @@ export interface Tweet {
   retweetCount?: number;
   replyCount?: number;
   viewCount?: number;
+  quoteCount?: number;
+  lang?: string;
+  isReply?: boolean;
+  inReplyToUsername?: string;
+  /** One fetched nested level; empty id-only stubs are omitted. */
+  quoted?: Tweet;
+  /** Original source of a repost, separate from the enclosing post's identity. */
+  retweetOf?: Tweet;
   author?: TweetAuthor;
   /** Populated from extendedEntities.media when the post carries media. */
   media?: TweetMedia[];
