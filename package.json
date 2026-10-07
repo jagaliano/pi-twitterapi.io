@@ -26,10 +26,12 @@
   "files": [
     "src",
     "!src/**/*.test.ts",
+    "!src/fixtures",
     "README.md",
     "CHANGELOG.md",
     "docs",
-    "!docs/video-spike.md"
+    "!docs/video-spike.md",
+    "!docs/upstream-shapes.md"
   ],
   "pi": {
     "extensions": [

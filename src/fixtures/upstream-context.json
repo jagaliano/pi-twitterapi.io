@@ -1,0 +1,742 @@
+{
+  "capturedAt": "2026-10-07T20:02:34.808Z",
+  "scope": "Consumed-field projections only; omitted keys/array members intentionally not preserved. Content/identities synthetic; source paths refer to temporary raw captures.",
+  "live": {
+    "quoteVideo": {
+      "source": {
+        "case": "quote",
+        "index": 3,
+        "path": "tweets[3]"
+      },
+      "tweet": {
+        "id": "1100",
+        "url": "https://x.com/example1/status/1100",
+        "text": "Synthetic fixture evidence. Synthetic fixture evidence https://t.co/example2",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 0,
+        "retweetCount": 0,
+        "replyCount": 0,
+        "quoteCount": 0,
+        "viewCount": 12,
+        "lang": "en",
+        "isReply": false,
+        "inReplyToUsername": null,
+        "author": {
+          "id": "1101",
+          "userName": "example1",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": [
+            {
+              "type": "video",
+              "media_url_https": "https://pbs.twimg.com/media/example3.jpg",
+              "video_info": {
+                "duration_millis": 61970,
+                "variants": [
+                  {
+                    "content_type": "video/mp4",
+                    "bitrate": 632000,
+                    "url": "https://video-s.twimg.com/ext_tw_video/example4.mp4"
+                  },
+                  {
+                    "content_type": "video/mp4",
+                    "bitrate": 950000,
+                    "url": "https://video-s.twimg.com/ext_tw_video/example5.mp4"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "entities": {
+          "urls": []
+        },
+        "card": null,
+        "article": null,
+        "quoted_tweet": {
+          "id": "1102",
+          "url": "https://x.com/example2/status/1102",
+          "text": "Synthetic fixture evidence. Synthetic fixture evidence https://t.co/example7",
+          "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+          "likeCount": 12,
+          "retweetCount": 12,
+          "replyCount": 12,
+          "quoteCount": 12,
+          "viewCount": 12,
+          "lang": "en",
+          "isReply": false,
+          "inReplyToUsername": null,
+          "author": {
+            "id": "1103",
+            "userName": "example2",
+            "name": "Synthetic author",
+            "followers": 1200
+          },
+          "extendedEntities": {
+            "media": [
+              {
+                "type": "video",
+                "media_url_https": "https://pbs.twimg.com/media/example8.jpg",
+                "video_info": {
+                  "duration_millis": 61300,
+                  "variants": [
+                    {
+                      "content_type": "video/mp4",
+                      "bitrate": 632000,
+                      "url": "https://video-s.twimg.com/ext_tw_video/example9.mp4"
+                    },
+                    {
+                      "content_type": "video/mp4",
+                      "bitrate": 950000,
+                      "url": "https://video-s.twimg.com/ext_tw_video/example10.mp4"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "entities": {
+            "urls": []
+          },
+          "card": null,
+          "article": null,
+          "quoted_tweet": null,
+          "retweeted_tweet": null
+        },
+        "retweeted_tweet": null
+      }
+    },
+    "retweet": {
+      "source": {
+        "case": "retweet",
+        "index": 2,
+        "path": "tweets[2]"
+      },
+      "tweet": {
+        "id": "1104",
+        "url": "https://x.com/example3/status/1104",
+        "text": "RT @example4: Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixt",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 12,
+        "retweetCount": 12,
+        "replyCount": 0,
+        "quoteCount": 0,
+        "viewCount": 12,
+        "lang": "en",
+        "isReply": false,
+        "inReplyToUsername": null,
+        "author": {
+          "id": "1105",
+          "userName": "example3",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": []
+        },
+        "entities": {
+          "urls": []
+        },
+        "card": null,
+        "article": null,
+        "quoted_tweet": null,
+        "retweeted_tweet": {
+          "id": "1106",
+          "url": "https://x.com/example4/status/1106",
+          "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidenc https://t.co/example13",
+          "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+          "likeCount": 12,
+          "retweetCount": 12,
+          "replyCount": 0,
+          "quoteCount": 0,
+          "viewCount": 12,
+          "lang": "en",
+          "isReply": false,
+          "inReplyToUsername": null,
+          "author": {
+            "id": "1107",
+            "userName": "example4",
+            "name": "Synthetic author",
+            "followers": 1200
+          },
+          "extendedEntities": {
+            "media": [
+              {
+                "type": "video",
+                "media_url_https": "https://pbs.twimg.com/media/example14.jpg",
+                "video_info": {
+                  "duration_millis": 63863,
+                  "variants": [
+                    {
+                      "content_type": "video/mp4",
+                      "bitrate": 288000,
+                      "url": "https://video.twimg.com/ext_tw_video/example15.mp4"
+                    },
+                    {
+                      "content_type": "video/mp4",
+                      "bitrate": 832000,
+                      "url": "https://video.twimg.com/ext_tw_video/example16.mp4"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "entities": {
+            "urls": []
+          },
+          "card": null,
+          "article": null,
+          "quoted_tweet": null,
+          "retweeted_tweet": null
+        }
+      }
+    },
+    "reply": {
+      "source": {
+        "case": "reply",
+        "index": 0,
+        "path": "tweets[0]"
+      },
+      "tweet": {
+        "id": "1108",
+        "url": "https://x.com/example5/status/1108",
+        "text": "Synthetic fixture ev",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 0,
+        "retweetCount": 0,
+        "replyCount": 0,
+        "quoteCount": 0,
+        "viewCount": 0,
+        "lang": "en",
+        "isReply": true,
+        "inReplyToUsername": "example6",
+        "author": {
+          "id": "1109",
+          "userName": "example5",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": []
+        },
+        "entities": {
+          "urls": []
+        },
+        "card": null,
+        "article": null,
+        "quoted_tweet": null,
+        "retweeted_tweet": null
+      }
+    },
+    "linkCard": {
+      "source": {
+        "case": "links",
+        "index": 0,
+        "path": "tweets[0]"
+      },
+      "tweet": {
+        "id": "1110",
+        "url": "https://x.com/example7/status/1110",
+        "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evid https://t.co/example19",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 0,
+        "retweetCount": 0,
+        "replyCount": 0,
+        "quoteCount": 0,
+        "viewCount": 0,
+        "lang": "en",
+        "isReply": true,
+        "inReplyToUsername": "example8",
+        "author": {
+          "id": "1111",
+          "userName": "example7",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": []
+        },
+        "entities": {
+          "urls": [
+            {
+              "url": "https://t.co/example19",
+              "expanded_url": "https://example.org/page/20"
+            }
+          ]
+        },
+        "card": {
+          "name": "summary_large_image",
+          "url": "https://t.co/example19",
+          "binding_values": [
+            {
+              "key": "description",
+              "value": {
+                "string_value": "Synthetic card description."
+              }
+            },
+            {
+              "key": "domain",
+              "value": {
+                "string_value": "example.org"
+              }
+            },
+            {
+              "key": "title",
+              "value": {
+                "string_value": "Synthetic card title."
+              }
+            },
+            {
+              "key": "card_url",
+              "value": {
+                "string_value": "https://t.co/example19"
+              }
+            }
+          ]
+        },
+        "article": null,
+        "quoted_tweet": null,
+        "retweeted_tweet": null
+      }
+    },
+    "longPost": {
+      "source": {
+        "case": "long",
+        "index": 15,
+        "path": "tweets[15]"
+      },
+      "tweet": {
+        "id": "1112",
+        "url": "https://x.com/example9/status/1112",
+        "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evid https://t.co/example22",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 12,
+        "retweetCount": 12,
+        "replyCount": 12,
+        "quoteCount": 12,
+        "viewCount": 12,
+        "lang": "en",
+        "isReply": false,
+        "inReplyToUsername": null,
+        "author": {
+          "id": "1113",
+          "userName": "example9",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": []
+        },
+        "entities": {
+          "urls": [
+            {
+              "url": "https://t.co/example22",
+              "expanded_url": "https://example.org/page/23"
+            }
+          ]
+        },
+        "card": {
+          "name": "summary_large_image",
+          "url": "https://t.co/example22",
+          "binding_values": [
+            {
+              "key": "description",
+              "value": {
+                "string_value": "Synthetic card description."
+              }
+            },
+            {
+              "key": "domain",
+              "value": {
+                "string_value": "example.org"
+              }
+            },
+            {
+              "key": "title",
+              "value": {
+                "string_value": "Synthetic card title."
+              }
+            },
+            {
+              "key": "card_url",
+              "value": {
+                "string_value": "https://t.co/example22"
+              }
+            }
+          ]
+        },
+        "article": null,
+        "quoted_tweet": null,
+        "retweeted_tweet": null
+      }
+    },
+    "article": {
+      "source": {
+        "case": "quote",
+        "index": 15,
+        "path": "tweets[15].quoted_tweet"
+      },
+      "tweet": {
+        "id": "1114",
+        "url": "https://x.com/example10/status/1114",
+        "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic  https://t.co/example25",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 12,
+        "retweetCount": 12,
+        "replyCount": 12,
+        "quoteCount": 12,
+        "viewCount": 12,
+        "lang": "en",
+        "isReply": false,
+        "inReplyToUsername": null,
+        "author": {
+          "id": "1115",
+          "userName": "example10",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": []
+        },
+        "entities": {
+          "urls": [
+            {
+              "url": "https://t.co/example25",
+              "expanded_url": "https://example.org/page/26"
+            }
+          ]
+        },
+        "card": null,
+        "article": {
+          "title": "Synthetic article title",
+          "preview_text": "Synthetic article preview, not the full body.",
+          "cover_media_img_url": "https://pbs.twimg.com/media/example27.jpg"
+        },
+        "quoted_tweet": null,
+        "retweeted_tweet": null
+      }
+    },
+    "photoAlt": {
+      "source": {
+        "case": "timeline",
+        "index": 5,
+        "path": "data.tweets[5]"
+      },
+      "tweet": {
+        "id": "1116",
+        "url": "https://x.com/example11/status/1116",
+        "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evi https://t.co/example29 https://t.co/example30",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 12,
+        "retweetCount": 12,
+        "replyCount": 12,
+        "quoteCount": 12,
+        "viewCount": 12,
+        "lang": "en",
+        "isReply": false,
+        "inReplyToUsername": null,
+        "author": {
+          "id": "1117",
+          "userName": "example11",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": [
+            {
+              "type": "photo",
+              "media_url_https": "https://pbs.twimg.com/media/example31.jpg",
+              "ext_alt_text": "Synthetic photo description for the accessibility fixture."
+            }
+          ]
+        },
+        "entities": {
+          "urls": [
+            {
+              "url": "https://t.co/example29",
+              "expanded_url": "https://example.org/page/32"
+            }
+          ]
+        },
+        "card": null,
+        "article": null,
+        "quoted_tweet": null,
+        "retweeted_tweet": null
+      }
+    },
+    "linkCardByIds": {
+      "source": {
+        "case": "by-ids",
+        "index": 3,
+        "path": "tweets[3]",
+        "capturedAt": "2026-10-07T20:22:32.523Z"
+      },
+      "tweet": {
+        "id": "1110",
+        "url": "https://x.com/example7/status/1110",
+        "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evid https://t.co/example19",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "likeCount": 0,
+        "retweetCount": 0,
+        "replyCount": 0,
+        "quoteCount": 0,
+        "viewCount": 12,
+        "lang": "en",
+        "isReply": true,
+        "inReplyToUsername": "example8",
+        "author": {
+          "id": "1111",
+          "userName": "example7",
+          "name": "Synthetic author",
+          "followers": 1200
+        },
+        "extendedEntities": {
+          "media": []
+        },
+        "entities": {
+          "urls": [
+            {
+              "url": "https://t.co/example19",
+              "expanded_url": "https://example.org/page/20"
+            }
+          ]
+        },
+        "card": {
+          "legacy": {
+            "name": "summary_large_image",
+            "url": "https://t.co/example19",
+            "binding_values": [
+              {
+                "key": "description",
+                "value": {
+                  "string_value": "Synthetic card description."
+                }
+              },
+              {
+                "key": "domain",
+                "value": {
+                  "string_value": "example.org"
+                }
+              },
+              {
+                "key": "title",
+                "value": {
+                  "string_value": "Synthetic card title."
+                }
+              },
+              {
+                "key": "card_url",
+                "value": {
+                  "string_value": "https://t.co/example19"
+                }
+              }
+            ]
+          }
+        },
+        "quoted_tweet": null,
+        "retweeted_tweet": null
+      }
+    },
+    "profile": {
+      "source": {
+        "case": "profile",
+        "path": "data"
+      },
+      "payload": {
+        "data": {
+          "id": "1117",
+          "userName": "example11",
+          "name": "Synthetic account",
+          "description": "Synthetic profile description",
+          "location": "Synthetic location",
+          "url": "https://t.co/example33",
+          "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+          "followers": 1200,
+          "following": 100,
+          "statusesCount": 300,
+          "mediaCount": 30,
+          "isBlueVerified": true,
+          "entities": {
+            "url": {
+              "urls": [
+                {
+                  "url": "https://t.co/example33",
+                  "expanded_url": "https://example.org/page/34"
+                }
+              ]
+            }
+          },
+          "pinnedTweetIds": []
+        }
+      }
+    },
+    "timeline": {
+      "source": {
+        "case": "timeline",
+        "path": "data"
+      },
+      "payload": {
+        "data": {
+          "tweets": [
+            {
+              "id": "1118",
+              "url": "https://x.com/example11/status/1118",
+              "text": "RT @example12: Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fix",
+              "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+              "likeCount": 12,
+              "retweetCount": 12,
+              "replyCount": 12,
+              "quoteCount": 12,
+              "viewCount": 12,
+              "lang": "en",
+              "isReply": false,
+              "inReplyToUsername": null,
+              "author": {
+                "id": "1117",
+                "userName": "example11",
+                "name": "Synthetic author",
+                "followers": 1200
+              },
+              "extendedEntities": {
+                "media": []
+              },
+              "entities": {
+                "urls": []
+              },
+              "card": null,
+              "article": null,
+              "quoted_tweet": null,
+              "retweeted_tweet": {
+                "id": "1119",
+                "url": "https://x.com/example12/status/1119",
+                "text": "Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic fixture evidence. Synthetic https://t.co/example37",
+                "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+                "likeCount": 12,
+                "retweetCount": 12,
+                "replyCount": 12,
+                "quoteCount": 12,
+                "viewCount": 12,
+                "lang": "en",
+                "isReply": false,
+                "inReplyToUsername": null,
+                "author": {
+                  "id": "1120",
+                  "userName": "example12",
+                  "name": "Synthetic author",
+                  "followers": 1200
+                },
+                "extendedEntities": {
+                  "media": [
+                    {
+                      "type": "photo",
+                      "media_url_https": "https://pbs.twimg.com/media/example38.jpg"
+                    },
+                    {
+                      "type": "photo",
+                      "media_url_https": "https://pbs.twimg.com/media/example39.jpg"
+                    },
+                    {
+                      "type": "photo",
+                      "media_url_https": "https://pbs.twimg.com/media/example40.jpg"
+                    },
+                    {
+                      "type": "photo",
+                      "media_url_https": "https://pbs.twimg.com/media/example41.jpg"
+                    }
+                  ]
+                },
+                "entities": {
+                  "urls": []
+                },
+                "card": null,
+                "article": null,
+                "quoted_tweet": null,
+                "retweeted_tweet": null
+              }
+            }
+          ],
+          "pin_tweet": null
+        },
+        "has_next_page": true,
+        "next_cursor": "synthetic-cursor"
+      }
+    }
+  },
+  "synthetic": {
+    "mediaOnlyQuote": {
+      "reason": "No media-only quote selected from live reads; parser edge case, not measured evidence.",
+      "tweet": {
+        "id": "9902",
+        "url": "https://x.com/example1/status/9902",
+        "text": "Synthetic quote comment",
+        "quoted_tweet": {
+          "id": "9903",
+          "url": "https://x.com/example2/status/9903",
+          "text": "",
+          "extendedEntities": {
+            "media": [
+              {
+                "type": "photo",
+                "media_url_https": "https://pbs.twimg.com/media/edge.jpg"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "nestedStub": {
+      "reason": "Explicit nesting/stub parser edge case; not a claim of measured deeper nesting.",
+      "tweet": {
+        "id": "9904",
+        "url": "https://x.com/example1/status/9904",
+        "text": "Synthetic outer context",
+        "quoted_tweet": {
+          "id": "9905",
+          "url": "https://x.com/example2/status/9905",
+          "text": "Synthetic quoted context",
+          "quoted_tweet": {
+            "id": "9901",
+            "url": "",
+            "text": "",
+            "extendedEntities": {
+              "media": []
+            }
+          }
+        }
+      }
+    },
+    "profilePinIds": {
+      "reason": "Profile field exists but sampled array was empty; element is a synthetic id-only parser case. Non-null timeline pin_tweet schema remains unverified.",
+      "profile": {
+        "id": "1117",
+        "userName": "example11",
+        "name": "Synthetic account",
+        "description": "Synthetic profile description",
+        "location": "Synthetic location",
+        "url": "https://t.co/example33",
+        "createdAt": "Sat Jan 01 00:00:00 +0000 2000",
+        "followers": 1200,
+        "following": 100,
+        "statusesCount": 300,
+        "mediaCount": 30,
+        "isBlueVerified": true,
+        "entities": {
+          "url": {
+            "urls": [
+              {
+                "url": "https://t.co/example33",
+                "expanded_url": "https://example.org/page/34"
+              }
+            ]
+          }
+        },
+        "pinnedTweetIds": [
+          "9906"
+        ]
+      }
+    }
+  }
+}
