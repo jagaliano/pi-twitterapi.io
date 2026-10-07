@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-10-07
+
+Phase 1 follow-up: close the remaining retrieved-metadata prompt boundaries.
+
+### Fixed
+
+- Retrieved handles, invalid dates, URLs, media kinds, video-evidence methods,
+  document headings/body and photo/poster/frame labels can no longer emit extra
+  prompt headers or source lines through embedded line separators.
+- Malformed source URLs are omitted from prompts, inline citation matching and
+  fallback Sources, with disclosure. Accepted fetched URLs remain unchanged;
+  evidence matching keeps its raw identities separate from display rendering.
+- X search routes are not treated as account profiles or cross-matched between
+  different search queries. Valid profile query URLs remain supported.
+- Document boundary rendering preserves trailing fields after newline expansion.
+
+### Verified
+
+- 342/342 tests pass, zero skipped; typecheck passes. The 30 new tests include
+  parser-to-prompt boundaries, source rejection and valid-URL compatibility.
+- Reverting the initial production guards causes 27 regression failures. The
+  document-tail and search-profile corrections each fail their own test when
+  reverted independently.
+- Offline `pi -e ./src/index.ts` smoke reproduces the forged metadata header before
+  the fix and blocks it afterward. Retrieval/completion were mocked; no fresh
+  paid-provider matrix or Node 22.19 run is claimed.
+- Independent review passed after both reported P1 findings were corrected.
+
 ## [0.3.4] - 2026-10-06
 
 Documentation only — no behaviour change, and the published `src/` is otherwise

@@ -1,6 +1,6 @@
 {
   "name": "pi-twitterapi.io",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "twitterapi.io-backed X/Twitter search extension for pi coding agent",
   "author": "José Antonio Galiano Sandoval",
   "keywords": [
