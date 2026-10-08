@@ -1,6 +1,63 @@
 import { isObject, type Tweet, type TweetMedia, type UserProfile } from "./core.js";
 
 
+/** Display metadata only: no destination fetch, redirects or citation eligibility. */
+export function metadataUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 2048 || /[\s\p{C}]/u.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+      ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asLinks(raw: unknown): Tweet["links"] {
+  if (!isObject(raw) || !Array.isArray(raw.urls)) return undefined;
+  const seen = new Set<string>();
+  const links: NonNullable<Tweet["links"]> = [];
+  for (const entry of raw.urls) {
+    if (!isObject(entry)) continue;
+    const shortUrl = metadataUrl(entry.url);
+    const expandedUrl = metadataUrl(entry.expanded_url);
+    if (!shortUrl || !/^https?:\/\/t\.co\/[A-Za-z0-9]+$/.test(shortUrl) || !expandedUrl || seen.has(shortUrl)) continue;
+    seen.add(shortUrl);
+    links.push({ shortUrl, expandedUrl });
+    if (links.length === 20) break;
+  }
+  return links.length ? links : undefined;
+}
+
+function asCard(raw: unknown): Tweet["card"] {
+  if (!isObject(raw)) return undefined;
+  const card = isObject(raw.legacy) ? raw.legacy : raw;
+  const bindings = card.binding_values;
+  const value = (key: string): unknown => {
+    // Array is measured; object-map is an explicitly synthetic compatibility case.
+    if (Array.isArray(bindings)) {
+      const entry = bindings.find((item) => isObject(item) && item.key === key);
+      return isObject(entry) && isObject(entry.value) ? entry.value.string_value : undefined;
+    }
+    return isObject(bindings) && isObject(bindings[key]) ? bindings[key].string_value : undefined;
+  };
+  const result = {
+    name: textValue(card.name), url: metadataUrl(card.url) ?? metadataUrl(value("card_url")),
+    title: textValue(value("title")), description: textValue(value("description")), domain: textValue(value("domain")),
+  };
+  return Object.values(result).some(Boolean) ? result : undefined;
+}
+
+function asArticle(raw: unknown): Tweet["article"] {
+  if (!isObject(raw)) return undefined;
+  const result = { title: textValue(raw.title), previewText: textValue(raw.preview_text), coverUrl: metadataUrl(raw.cover_media_img_url) };
+  return Object.values(result).some(Boolean) ? result : undefined;
+}
+
 function asMedia(raw: unknown): TweetMedia | undefined {
   if (!isObject(raw)) return undefined;
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -23,6 +80,7 @@ function asMedia(raw: unknown): TweetMedia | undefined {
     videoVariants: playable.length > 0 ? playable : undefined,
     videoVariantsDetailed: playableVariants.length > 0 ? playableVariants : undefined,
     durationMillis: duration,
+    altText: textValue(raw.ext_alt_text),
   };
   return media.url || media.videoVariants ? media : undefined;
 }
@@ -50,7 +108,7 @@ function asNestedTweet(raw: unknown, depth: number): Tweet | undefined {
 function mapTweet(raw: unknown, depth: number): Tweet | undefined {
   if (!isObject(raw) || (typeof raw.text !== "string" && !(depth > 0 && raw.text == null))) return undefined;
   const author = isObject(raw.author) ? raw.author : undefined;
-  const num = (v: unknown) => (typeof v === "number" ? v : undefined);
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const str = (v: unknown) => (typeof v === "string" ? v : undefined);
   const extended = isObject(raw.extendedEntities)
     ? asMediaList(raw.extendedEntities)
@@ -71,12 +129,19 @@ function mapTweet(raw: unknown, depth: number): Tweet | undefined {
     lang: str(raw.lang),
     isReply: typeof raw.isReply === "boolean" ? raw.isReply : undefined,
     inReplyToUsername: str(raw.inReplyToUsername),
+    isPinned: typeof raw.isPinned === "boolean" ? raw.isPinned : undefined,
+    links: asLinks(raw.entities),
+    card: asCard(raw.card),
+    article: asArticle(raw.article),
     quoted: depth < MAX_TWEET_DEPTH ? asNestedTweet(raw.quoted_tweet, depth + 1) : undefined,
     retweetOf: depth < MAX_TWEET_DEPTH ? asNestedTweet(raw.retweeted_tweet, depth + 1) : undefined,
     author: author ? {
       userName: str(author.userName),
       name: str(author.name),
       followers: num(author.followers),
+      following: num(author.following),
+      statusesCount: num(author.statusesCount),
+      mediaCount: num(author.mediaCount),
     } : undefined,
     media,
   };
@@ -124,6 +189,9 @@ export function asUser(raw: unknown): UserProfile | undefined {
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const handle = str(raw.screen_name) ?? str(raw.userName) ?? str(raw.username);
   if (!handle) return undefined;
+  const urls = isObject(raw.entities) && isObject(raw.entities.url) && Array.isArray(raw.entities.url.urls)
+    ? raw.entities.url.urls : [];
+  const website = urls.map((entry) => isObject(entry) ? metadataUrl(entry.expanded_url) : undefined).find(Boolean);
   return {
     id: str(raw.id),
     handle,
@@ -135,6 +203,12 @@ export function asUser(raw: unknown): UserProfile | undefined {
     profileUrl: `https://x.com/${handle}`,
     location: str(raw.location),
     createdAt: str(raw.created_at) ?? str(raw.createdAt),
+    statusesCount: num(raw.statuses_count) ?? num(raw.statusesCount),
+    mediaCount: num(raw.media_count) ?? num(raw.mediaCount),
+    website: website ?? metadataUrl(raw.url),
+    pinnedTweetIds: Array.isArray(raw.pinnedTweetIds)
+      ? [...new Set(raw.pinnedTweetIds.filter((id): id is string => typeof id === "string" && /^\d{1,25}$/.test(id)))].slice(0, 20)
+      : undefined,
   };
 }
 

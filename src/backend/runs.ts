@@ -334,7 +334,7 @@ export async function runTwitterApiUserTimeline(
   );
   const incomplete = incompleteReason(timeline.stoppedBy, timeline.pagesFetched);
   const who = options.userName ? `@${options.userName.replace(/^@+/, "")}` : (options.userId ?? "the account");
-  const notes = [`Answered from the recent timeline of ${who} (${timeline.tweets.length} post(s)).`];
+  const notes = [`Answered from the recent timeline of ${who} (${timeline.tweets.length} post(s)).`, ...(timeline.pinNotes ?? [])];
   if (incomplete) {
     notes.push(`Retrieval stopped early (${incomplete}) while the timeline continued, so these results may be incomplete.`);
   }

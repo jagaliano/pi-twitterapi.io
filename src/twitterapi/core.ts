@@ -18,6 +18,9 @@ export interface TweetAuthor {
   userName?: string;
   name?: string;
   followers?: number;
+  following?: number;
+  statusesCount?: number;
+  mediaCount?: number;
 }
 
 export interface TweetMedia {
@@ -35,6 +38,8 @@ export interface TweetMedia {
    */
   videoVariantsDetailed?: { url: string; bitrate?: number }[];
   durationMillis?: number;
+  /** Upstream accessibility text, not an independent visual observation. */
+  altText?: string;
 }
 
 export interface Tweet {
@@ -50,6 +55,12 @@ export interface Tweet {
   lang?: string;
   isReply?: boolean;
   inReplyToUsername?: string;
+  /** Pin supplied by timeline metadata; never inferred from post order. */
+  isPinned?: boolean;
+  links?: { shortUrl: string; expandedUrl: string }[];
+  card?: { name?: string; url?: string; title?: string; description?: string; domain?: string };
+  /** Measured article preview only; the destination/full body is not fetched. */
+  article?: { title?: string; previewText?: string; coverUrl?: string };
   /** One fetched nested level; empty id-only stubs are omitted. */
   quoted?: Tweet;
   /** Original source of a repost, separate from the enclosing post's identity. */
@@ -136,4 +147,9 @@ export interface UserProfile {
   profileUrl: string;
   location?: string;
   createdAt?: string;
+  statusesCount?: number;
+  mediaCount?: number;
+  website?: string;
+  /** Upstream metadata only; these ids do not imply the content was fetched. */
+  pinnedTweetIds?: string[];
 }

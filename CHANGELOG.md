@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heading; display fields retain the existing prompt guards.
 - Multiple videos from one source retain separate evidence within the video cap;
   video-cap/deadline fallbacks are disclosed. Larger input budgets remain next.
+- Valid entity destinations expand matching t.co tokens without fetching pages.
+  Direct/legacy cards, accessibility alt text and article previews are guarded,
+  source-scoped untrusted metadata, not destination/full-article/visual evidence.
+  Link expansion checks whole tokens; mirrored alt text follows final asset
+  ownership even when media understanding is disabled.
+- Available author/profile counts, website and pin IDs are included. Pin IDs do
+  not imply fetched content; supplied full timeline pins deduplicate, while
+  missing/unknown pin content is disclosed without an extra paid lookup.
+  Non-null timeline-pin shapes have synthetic coverage only. Existing 700-character
+  post/bio caps remain pending complete-input budgeting.
 
 ## [0.3.5] - 2026-10-07
 

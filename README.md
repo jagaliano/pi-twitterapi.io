@@ -271,6 +271,21 @@ than silently ignored.
   and quoted/reposted speech remain tied to their fetched original and enclosing
   post. Missing/invalid permalinks are not guessed; anonymous media bindings use
   object identity, so they cannot be transferred to unrelated candidates.
+- **Links and previews are metadata, not fetched pages.** Matching t.co tokens
+  expand from validated entity destinations without visiting them. Cards (including
+  by-id `card.legacy`), accessibility alt text and article title/preview/cover URLs
+  retain their own or quoted/reposted source attribution and prompt guards.
+  Mirrored wrapper alt text is suppressed under the fetched original's ownership,
+  even with media understanding disabled; captions are not transplanted.
+  An article preview is not its full body; alt text is not visual analysis. These
+  destinations never join `Sources`. The existing 700-character post/bio caps
+  remain until complete-input budgeting is implemented.
+- **Profile/pin metadata is explicit.** Available author/profile counts and
+  website destinations are included. Profile pin IDs do not imply their content
+  was fetched. A full pin supplied by the timeline is marked and deduplicated;
+  IDs/stubs/unknown pin shapes do not trigger another paid lookup, and missing
+  content is disclosed. Non-null timeline-pin handling currently has synthetic
+  coverage only; the live inventory returned null pins.
 - **Media is best-effort.** By default a video post is represented by its poster
   frame and the limitation is disclosed, because pi's synthesis interface cannot
   ingest video. With `enableVideoProcessing` (see above) the video itself is analysed —

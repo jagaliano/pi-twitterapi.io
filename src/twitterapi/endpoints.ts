@@ -7,7 +7,7 @@ import {
   type TwitterApiSearchParams,
   type UserProfile,
 } from "./core.js";
-import { asTweet, asUser, tweetIdFromInput } from "./tweet.js";
+import { asTweet, asUser, metadataUrl, statusIdFromUrl, tweetIdFromInput } from "./tweet.js";
 import {
   CancelledError,
   DEFAULT_MAX_PAGES_CEILING,
@@ -321,6 +321,8 @@ export const TRENDS_PATH = "/twitter/trends";
 export interface UserTweetsDetails extends TweetCollection {
   userName?: string;
   userId?: string;
+  /** Honest pin availability, without an implicit extra paid lookup. */
+  pinNotes?: string[];
 }
 
 export interface FetchUserTweetsOptions extends TweetPagingOptions {
@@ -339,6 +341,21 @@ export async function fetchUserTweets(
   const userId = ref.userId?.trim();
   if (!userName && !userId) throw new Error('twitter mode "user" needs a userName or userId');
   const { includeReplies, ...paging } = options;
+  const pins = new Map<string, { id?: string; url?: string; tweet?: Tweet }>();
+  const identity = (post: { id?: unknown; url?: unknown }) => {
+    const url = metadataUrl(post.url);
+    const urlId = url ? statusIdFromUrl(url) : undefined;
+    const id = typeof post.id === "string" && /^\d{1,25}$/.test(post.id) ? post.id
+      : urlId && /^\d{1,25}$/.test(urlId) ? urlId : undefined;
+    return { id, url: urlId ? url : undefined };
+  };
+  const samePin = (pin: { id?: string; url?: string }, post: Tweet) => {
+    const known = identity(post);
+    if (pin.id && known.id && pin.id !== known.id) return false;
+    return Boolean((pin.id && pin.id === known.id) || (pin.url && pin.url === known.url));
+  };
+  const usable = (post: Tweet) => Boolean(post.text?.trim() || post.media?.length);
+  let unreadablePin = false;
   const result = await walkTweets(USER_LAST_TWEETS_PATH, apiKey, fetcher, {
     ...paging,
     params: { userName, userId, includeReplies: includeReplies === true ? "true" : undefined },
@@ -346,13 +363,49 @@ export async function fetchUserTweets(
     // unlike the other reads that put `tweets` at the top level.
     extract: (payload) => {
       const data = payload.data;
-      if (typeof data === "object" && data !== null && Array.isArray((data as Record<string, unknown>).tweets)) {
-        return (data as Record<string, unknown>).tweets as unknown[];
+      if (isObject(data) && Array.isArray(data.tweets)) {
+        const rawPin = data.pin_tweet;
+        const known = identity(isObject(rawPin) ? rawPin : { id: rawPin });
+        // Non-null pin shape was not measured in the spike. Consume only an
+        // actual full tweet in the existing schema; ids/stubs are metadata only.
+        const pin = asTweet(rawPin);
+        const key = known.id ? `id:${known.id}` : known.url ? `url:${known.url}` : undefined;
+        if (key) pins.set(key, { ...known, url: known.url ?? pins.get(key)?.url, tweet: pin && usable(pin) ? pin : pins.get(key)?.tweet });
+        if (pin && usable(pin) && isObject(rawPin)) {
+          return [{ ...rawPin, isPinned: true }, ...data.tweets];
+        }
+        if (rawPin != null && !key) unreadablePin = true;
+        return data.tweets;
       }
       return Array.isArray(payload.tweets) ? payload.tweets : undefined;
     },
   });
-  return { ...result, userName, userId };
+  const reported = [...pins.values()];
+  const reconciled = result.tweets.map((tweet) => {
+    const pin = reported.find((candidate) => samePin(candidate, tweet));
+    // Paging can discard a full pin by an earlier URL-only copy. Upgrade from
+    // that actually fetched pin, not from an id/stub or another post's content.
+    const retained = pin?.tweet ? { ...pin.tweet, id: pin.tweet.id ?? tweet.id, url: pin.tweet.url ?? tweet.url } : tweet;
+    return pin && usable(retained) ? { ...retained, isPinned: true } : retained;
+  });
+  // Upgrades can turn separately paged permalink aliases into identical pins.
+  // Coalesce after reconciliation, retaining first-source order and fetched data.
+  const seenPinIds = new Set<string>();
+  const seenPinUrls = new Set<string>();
+  const tweets = reconciled.filter((tweet) => {
+    if (!tweet.isPinned) return true;
+    const known = identity(tweet);
+    const duplicate = Boolean((known.id && seenPinIds.has(known.id)) || (known.url && seenPinUrls.has(known.url)));
+    if (known.id) seenPinIds.add(known.id);
+    if (known.url) seenPinUrls.add(known.url);
+    return !duplicate;
+  });
+  const missing = reported.filter((pin) => !tweets.some((tweet) => samePin(pin, tweet) && usable(tweet)));
+  const pinNotes: string[] = [];
+  if (reconciled.length > tweets.length) pinNotes.push(`Coalesced ${reconciled.length - tweets.length} duplicate pinned occurrence(s) after identity reconciliation.`);
+  if (missing.length) pinNotes.push(`Pin metadata indicates ${missing.length} post(s) whose usable content was not returned in the retained timeline; no extra pin lookup was attempted.`);
+  if (unreadablePin) pinNotes.push("Upstream pin metadata was not a recognised tweet or post id; no pin content was inferred.");
+  return { ...result, tweets, userName, userId, pinNotes: pinNotes.length ? pinNotes : undefined };
 }
 
 // ------------------------------------------------------- replies (P1)
