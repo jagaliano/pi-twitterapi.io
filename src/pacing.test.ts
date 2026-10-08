@@ -69,13 +69,22 @@ test("Retry-After is not shortened and backoff does not monopolize the dispatch 
   await c.advance(1); await retry; assert.deepEqual(at, [0, 20, 1000]);
 });
 
-test("late timer wakeups re-check actual dispatch spacing rather than reserved slots", async () => {
+test("early and late timer wakeups re-check actual dispatch spacing", async () => {
   const c = clock(), credential = key(), at: number[] = [];
   const fetcher: FetchLike = async () => { at.push(c.now()); return response(); };
   const all = Promise.all(Array.from({ length: 3 }, () => fetchUserProfile("example", credential, fetcher, options(c))));
   await tick(); await c.advance(100); assert.deepEqual(at, [0, 100]);
   await c.advance(19); assert.deepEqual(at, [0, 100]);
   await c.advance(1); await all; assert.deepEqual(at, [0, 100, 120]);
+
+  // Post-invocation timestamps independently protect late wakes. Force an
+  // EARLY wake too, so removing the loop recheck must still fail this test.
+  const early = clock(), earlyKey = key(), earlyAt: number[] = [];
+  const earlyCalls = Promise.all(Array.from({ length: 2 }, () => fetchUserProfile("example", earlyKey, async () => { earlyAt.push(early.now()); return response(); }, options(early))));
+  await tick(); assert.equal(early.pending.length, 1);
+  early.advanceSync(10); early.pending[0].finish();
+  await tick(); assert.deepEqual(earlyAt, [0], "an early wake must wait for the remaining gap");
+  await early.advance(10); await earlyCalls; assert.deepEqual(earlyAt, [0, 20]);
 });
 
 test("dispatch setup overhead cannot shorten the physical fetch-to-fetch gap", async () => {
