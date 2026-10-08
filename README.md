@@ -59,8 +59,8 @@ override — and set only the keys you need:
 | `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4). |
 | `maxPages` | no | Base page budget per search (default 5). |
 | `maxPagesCeiling` | no | Hard cap that `maxPages` is clamped to (default 20). |
-| `minRequestIntervalMs` | no | Minimum spacing between upstream requests (default 5000). twitterapi.io allows 0.2 QPS on unpaid accounts; raise it if you are being throttled, lower it for a higher-QPS tier, or set it to 0 to disable pacing. |
-| `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). |
+| `minRequestIntervalMs` | no | Minimum spacing between actual twitterapi.io dispatches (default 5000), shared per credential across concurrent endpoints, pagination and retries in this process. Raise it when throttled; lower it for a higher-QPS tier. Zero cannot bypass another active caller's interval or the previous dispatch's cooldown. |
+| `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). Retries honor both backoff/`Retry-After` and shared request spacing; zero backoff does not bypass pacing. |
 | `enableVideoProcessing` | no | Run **real** video processing (native video and/or frames + transcript). Requires `enableVideoUnderstanding`. Off by default. |
 | `videoEndpointType` | no | Native-video wire format: `gemini-files` (default, Google) or `openai-compatible` (video-capable chat-completions endpoints that accept this `video_url` shape; verified with OpenRouter). An unrecognised string disables native video — frames and STT still run — and is reported in the answer rather than silently changing provider. |
 | `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
@@ -198,6 +198,17 @@ For native video through OpenRouter instead of Google:
 > against. `pi-tui` and `typebox` stay at `"*"` because pi supplies them at
 > runtime. Synthesis is a real model call, so it consumes tokens on the configured
 > model.
+
+### Shared request pacing
+
+Dispatches use a per-credential FIFO, not sequential tool execution. The largest
+interval among active HTTP calls (including response reads and retry backoff)
+and the previous dispatch's interval set the next minimum gap. Time is rechecked
+on wake, so late timers cannot release a burst. Response reads and synthesis can
+still overlap; cancellation abandons queued/sleeping calls without dispatching.
+Idle credential digests expire after their cooldown. This process-local limiter
+never paces media/STT/model hosts; other Pi processes using the same key still
+need their own coordination.
 
 ## The `twitter` tool
 

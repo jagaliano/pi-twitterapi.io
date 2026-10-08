@@ -16,7 +16,6 @@ import {
   ensureSuccessfulPayload,
   requestWithRetry,
   resolveRequestSettings,
-  sleepAbortable,
   type TwitterApiRequestOptions,
 } from "./http.js";
 import { advanceOrStop, isTruncated } from "./search.js";
@@ -61,22 +60,16 @@ export async function searchUsers(
   const seenCursors = new Set<string>();
   let cursor = "";
   let pages = 0;
-  let lastRequestAt: number | undefined;
   let stoppedBy: SearchTermination = "page-cap";
 
   while (collected.length < target && pages < maxPages) {
     if (settings.signal?.aborted) throw new CancelledError();
-    if (settings.minRequestIntervalMs > 0 && lastRequestAt !== undefined) {
-      const wait = settings.minRequestIntervalMs - (settings.now() - lastRequestAt);
-      if (wait > 0) await sleepAbortable(wait, settings.signal, settings.sleep);
-    }
     pages += 1;
     const url = new URL(TWITTERAPI_BASE_URL + USER_SEARCH_PATH);
     url.searchParams.set("query", trimmed);
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    lastRequestAt = settings.now();
     const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
     if (!Array.isArray(payload.users)) {
       throw new Error("twitterapi.io returned a malformed response (missing users array)");
@@ -153,22 +146,16 @@ export async function fetchThread(
   const seenCursors = new Set<string>();
   let cursor = "";
   let pages = 0;
-  let lastRequestAt: number | undefined;
   let stoppedBy: SearchTermination = "page-cap";
 
   while (pages < maxPages) {
     if (settings.signal?.aborted) throw new CancelledError();
-    if (settings.minRequestIntervalMs > 0 && lastRequestAt !== undefined) {
-      const wait = settings.minRequestIntervalMs - (settings.now() - lastRequestAt);
-      if (wait > 0) await sleepAbortable(wait, settings.signal, settings.sleep);
-    }
     pages += 1;
     const url = new URL(TWITTERAPI_BASE_URL + THREAD_CONTEXT_PATH);
     url.searchParams.set("tweetId", id);
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    lastRequestAt = settings.now();
     const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
     if (!Array.isArray(payload.tweets)) {
       throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
@@ -261,15 +248,10 @@ async function walkTweets(
   const seenCursors = new Set<string>();
   let cursor = "";
   let pages = 0;
-  let lastRequestAt: number | undefined;
   let stoppedBy: SearchTermination = "page-cap";
 
   while (pages < maxPages && (limit === undefined || collected.length < limit)) {
     if (settings.signal?.aborted) throw new CancelledError();
-    if (settings.minRequestIntervalMs > 0 && lastRequestAt !== undefined) {
-      const wait = settings.minRequestIntervalMs - (settings.now() - lastRequestAt);
-      if (wait > 0) await sleepAbortable(wait, settings.signal, settings.sleep);
-    }
     pages += 1;
     const url = new URL(TWITTERAPI_BASE_URL + path);
     for (const [key, value] of Object.entries(options.params ?? {})) {
@@ -279,7 +261,6 @@ async function walkTweets(
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    lastRequestAt = settings.now();
     const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
     const rawTweets = options.extract ? options.extract(payload) : payload.tweets;
     if (!Array.isArray(rawTweets)) {
@@ -605,15 +586,10 @@ async function walkUsers(
   const seenCursors = new Set<string>();
   let cursor = "";
   let pages = 0;
-  let lastRequestAt: number | undefined;
   let stoppedBy: SearchTermination = "page-cap";
 
   while (pages < maxPages && (limit === undefined || collected.length < limit)) {
     if (settings.signal?.aborted) throw new CancelledError();
-    if (settings.minRequestIntervalMs > 0 && lastRequestAt !== undefined) {
-      const wait = settings.minRequestIntervalMs - (settings.now() - lastRequestAt);
-      if (wait > 0) await sleepAbortable(wait, settings.signal, settings.sleep);
-    }
     pages += 1;
     const url = new URL(TWITTERAPI_BASE_URL + path);
     for (const [key, value] of Object.entries(options.params ?? {})) {
@@ -623,7 +599,6 @@ async function walkUsers(
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    lastRequestAt = settings.now();
     const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
     if (!Array.isArray(payload[options.arrayKey])) {
       throw new Error(`twitterapi.io returned a malformed response (missing ${options.arrayKey} array)`);

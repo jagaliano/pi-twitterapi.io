@@ -1,4 +1,5 @@
-import { isObject, type FetchLike } from "./core.js";
+import { createHash } from "node:crypto";
+import { isObject, TWITTERAPI_BASE_URL, type FetchLike } from "./core.js";
 
 /**
  * Upper bound on any single retry delay. A server-supplied `Retry-After` longer
@@ -170,7 +171,7 @@ export async function sleepAbortable(
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
 ): Promise<void> {
   if (signal?.aborted) throw new CancelledError();
-  await sleep(ms, signal);
+  await abortable(sleep(ms, signal), signal);
 }
 
 /**
@@ -238,9 +239,9 @@ export interface TwitterApiRequestOptions {
   maxRetries?: number;
   /** Base delay for exponential backoff in ms (default 5_000, the unpaid-tier floor). */
   retryBaseDelayMs?: number;
-  /** Minimum spacing between successive upstream requests in ms (default 5_000). */
+  /** Shared minimum spacing between actual API dispatches in ms (default 5_000). */
   minRequestIntervalMs?: number;
-  /** Injected clock, for tests. */
+  /** Injected monotonic clock for tests; use one time base per credential. */
   now?: () => number;
   /** Injected sleep, for tests. Receives the cancellation signal so a custom sleep can honor it. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -267,7 +268,7 @@ export function resolveRequestSettings(options: TwitterApiRequestOptions): Reque
     maxRetries: Math.max(0, options.maxRetries ?? 3),
     retryBaseDelayMs: Math.max(0, options.retryBaseDelayMs ?? 5_000),
     minRequestIntervalMs: Math.max(0, options.minRequestIntervalMs ?? 5_000),
-    now: options.now ?? Date.now,
+    now: options.now ?? (() => performance.now()),
     sleep: options.sleep ?? defaultSleep,
     signal: options.signal,
   };
@@ -286,7 +287,108 @@ export function describeHttpFailure(status: number, detail: string | undefined, 
   return `twitterapi.io ${lead}${detail ? `: ${detail}` : ""} (HTTP ${status}${suffix})`;
 }
 
-/** Fetch with retry/backoff on 429/503 (the free tier rate-limits bursts). */
+interface PacerState {
+  active: Set<{ interval: number }>;
+  tail: Promise<void>;
+  queued: number;
+  lastAt?: number;
+  lastInterval: number;
+  now: () => number;
+  cleanup?: ReturnType<typeof setTimeout>;
+}
+
+// Digest identities instead of retaining API keys in a process-lifetime map.
+const credentialPacers = new Map<string, PacerState>();
+
+/** Race even an injected sleep/queued predecessor that ignores cancellation. */
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => { cleanup(); reject(new CancelledError()); };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+    if (signal.aborted) onAbort();
+  });
+}
+
+function expirePacer(key: string, state: PacerState): void {
+  if (state.active.size || state.queued) return;
+  clearTimeout(state.cleanup);
+  const remaining = state.lastAt === undefined ? 0 : state.lastInterval - (state.now() - state.lastAt);
+  if (remaining <= 0) {
+    if (credentialPacers.get(key) === state) credentialPacers.delete(key);
+  } else {
+    state.cleanup = setTimeout(() => expirePacer(key, state), Math.min(remaining, MAX_RETRY_DELAY_MS));
+    state.cleanup.unref();
+  }
+}
+
+function registerPacer(url: string, apiKey: string, interval: number, now: () => number) {
+  // This limiter never couples media, STT or model providers to Twitter's key.
+  try { if (new URL(url).origin !== TWITTERAPI_BASE_URL) return undefined; } catch { return undefined; }
+  const key = createHash("sha256").update(apiKey).digest("hex");
+  let state = credentialPacers.get(key);
+  if (!state) {
+    state = { active: new Set(), tail: Promise.resolve(), queued: 0, lastInterval: 0, now };
+    credentialPacers.set(key, state);
+  }
+  clearTimeout(state.cleanup);
+  const caller = { interval };
+  state.active.add(caller);
+  return { key, state, caller };
+}
+
+/** Serialize dispatch, NOT response/body completion. Re-check time after every wake. */
+async function pacedAttempt(
+  registration: NonNullable<ReturnType<typeof registerPacer>>,
+  now: () => number,
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
+  signal: AbortSignal | undefined,
+  dispatch: () => Promise<AttemptResult>,
+): Promise<AttemptResult> {
+  const { key, state } = registration;
+  state.queued++;
+  const grant = state.tail.then(async () => {
+    try {
+      for (;;) {
+        if (signal?.aborted) throw new CancelledError();
+        // Largest live caller interval remains in force during I/O and backoff;
+        // the previous dispatch's interval also survives completion/cancellation.
+        let activeInterval = 0;
+        for (const active of state.active) activeInterval = Math.max(activeInterval, active.interval);
+        const interval = Math.max(state.lastInterval, activeInterval);
+        const at = now();
+        const wait = state.lastAt === undefined ? 0 : interval - (at - state.lastAt);
+        if (wait > 0) {
+          await abortable(sleep(Math.min(wait, MAX_RETRY_DELAY_MS), signal), signal);
+          continue;
+        }
+        if (signal?.aborted) throw new CancelledError();
+        state.lastAt = at;
+        state.lastInterval = activeInterval;
+        state.now = now;
+        // No await between reserving the timestamp and invoking fetch. The
+        // wrapper avoids holding the FIFO lock while the billed body is read.
+        const attempt = dispatch();
+        // requestOnce invokes fetch synchronously before returning its promise.
+        // A post-invocation timestamp conservatively covers controller/setup
+        // overhead; a pre-call sample alone could make actual gaps too short.
+        state.lastAt = now();
+        attempt.catch(() => {}); // cancellation may win before the grant is consumed
+        return { attempt };
+      }
+    } finally {
+      state.queued--;
+      expirePacer(key, state);
+    }
+  });
+  state.tail = grant.then(() => {}, () => {}); // failed/cancelled jobs cannot poison the queue
+  const { attempt } = await abortable(grant, signal);
+  return attempt;
+}
+
+/** Fetch with shared per-credential attempt pacing and existing 429/503 backoff. */
 export async function requestWithRetry(
   url: string,
   apiKey: string,
@@ -296,31 +398,49 @@ export async function requestWithRetry(
     retryBaseDelayMs: number;
     timeoutMs: number;
     sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+    minRequestIntervalMs?: number;
+    now?: () => number;
     signal?: AbortSignal;
   },
 ): Promise<AttemptResult> {
-  let lastError: Error | undefined;
-  for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
-    let result: AttemptResult;
-    try {
-      result = await requestOnce(url, apiKey, fetcher, options.timeoutMs, options.signal);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (options.signal?.aborted || attempt === options.maxRetries || !isRetryableError(lastError)) {
-        throw lastError;
+  const interval = Math.max(0, options.minRequestIntervalMs ?? 5_000);
+  if (!Number.isFinite(interval)) throw new Error("minRequestIntervalMs must be finite");
+  if (options.signal?.aborted) throw new CancelledError();
+  const now = options.now ?? (() => performance.now());
+  const registration = registerPacer(url, apiKey, interval, now);
+  try {
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
+      let result: AttemptResult;
+      try {
+        if (options.signal?.aborted) throw new CancelledError();
+        const dispatch = () => requestOnce(url, apiKey, fetcher, options.timeoutMs, options.signal);
+        result = registration
+          ? await pacedAttempt(registration, now, options.sleep, options.signal, dispatch)
+          : await dispatch();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (options.signal?.aborted || attempt === options.maxRetries || !isRetryableError(lastError)) {
+          throw lastError;
+        }
+        await sleepAbortable(retryDelayMs(attempt, options.retryBaseDelayMs, undefined), options.signal, options.sleep);
+        continue;
       }
-      await sleepAbortable(retryDelayMs(attempt, options.retryBaseDelayMs, undefined), options.signal, options.sleep);
-      continue;
-    }
 
-    if (!isRetryableStatus(result.response.status) || attempt === options.maxRetries) {
-      return { ...result, attempts: attempt + 1 };
+      if (!isRetryableStatus(result.response.status) || attempt === options.maxRetries) {
+        return { ...result, attempts: attempt + 1 };
+      }
+      lastError = new Error(`twitterapi.io error: HTTP ${result.response.status}`);
+      const retryAfterMs = parseRetryAfter(result.response.headers?.get?.("retry-after") ?? null);
+      await sleepAbortable(retryDelayMs(attempt, options.retryBaseDelayMs, retryAfterMs), options.signal, options.sleep);
     }
-    lastError = new Error(`twitterapi.io error: HTTP ${result.response.status}`);
-    const retryAfterMs = parseRetryAfter(result.response.headers?.get?.("retry-after") ?? null);
-    await sleepAbortable(retryDelayMs(attempt, options.retryBaseDelayMs, retryAfterMs), options.signal, options.sleep);
+    throw lastError ?? new Error("twitterapi.io request failed");
+  } finally {
+    if (registration) {
+      registration.state.active.delete(registration.caller);
+      expirePacer(registration.key, registration.state);
+    }
   }
-  throw lastError ?? new Error("twitterapi.io request failed");
 }
 
 /** Page bound shared with the configuration range, so a valid config cannot fail here. */

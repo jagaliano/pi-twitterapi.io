@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Process-local, per-credential HTTP-attempt pacing across concurrent endpoints,
+  first requests, pagination and retries. FIFO dispatch rechecks actual spacing;
+  the largest active/previous interval is conservative across differing settings.
+  Cancellation does not consume a queued slot; response reads and model work
+  remain concurrent. Retry-After/backoff and no-retry-after-billed-body rules stay
+  intact; media/provider hosts are excluded and idle credential digests expire.
 - One-level quoted/reposted source context, including media-only sources and
   typed reply/language/quote metadata. Id-only stubs and deeper nesting are omitted.
 - Original repost text and source identity remain distinct from the enclosing

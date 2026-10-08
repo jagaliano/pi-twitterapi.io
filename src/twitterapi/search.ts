@@ -15,7 +15,6 @@ import {
   defaultSleep,
   ensureSuccessfulPayload,
   requestWithRetry,
-  sleepAbortable,
   type TwitterApiRequestOptions,
 } from "./http.js";
 import { asTweet } from "./tweet.js";
@@ -38,11 +37,11 @@ export interface SearchTweetsOptions {
    * Minimum spacing between successive upstream requests in ms (default
    * 5_000). twitterapi.io rate-limits per API key — brand-new unpaid accounts
    * allow 0.2 QPS, i.e. one request every 5 seconds — and pagination would
-   * otherwise fire requests back to back. Raise it for a higher tier, or set it
-   * to 0 to disable pacing.
+   * otherwise fire requests back to back. Lower it for a higher-QPS tier.
+   * Shared active/previous intervals still constrain a caller setting zero.
    */
   minRequestIntervalMs?: number;
-  /** Injected clock, for tests. */
+  /** Injected monotonic clock for tests; use one time base per credential. */
   now?: () => number;
   /** Injected sleep, for tests. Receives the cancellation signal so a custom sleep can honor it. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -116,7 +115,7 @@ export async function searchTweets(
   const maxRetries = Math.max(0, options.maxRetries ?? 3);
   const retryBaseDelayMs = Math.max(0, options.retryBaseDelayMs ?? 5_000);
   const minRequestIntervalMs = Math.max(0, options.minRequestIntervalMs ?? 5_000);
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => performance.now());
   const timeoutMs = options.timeoutMs ?? 30_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive number");
   const sleep = options.sleep ?? defaultSleep;
@@ -129,19 +128,13 @@ export async function searchTweets(
   const seenCursors = new Set<string>();
   let cursor = "";
   let pages = 0;
-  let lastRequestAt: number | undefined;
   // Only an explicit break changes this; falling out of the loop means the page
   // cap was reached, which is exactly the case that must be disclosed.
   let stoppedBy: SearchTermination = "page-cap";
 
   while (collected.length < target && pagesOnBudget < basePageBudget && pages < pageCeiling) {
     if (signal?.aborted) throw new CancelledError();
-    // Pace successive requests: the per-key QPS ceiling is low enough (0.2 QPS
-    // on an unpaid account) that unpaced pagination can rate-limit itself.
-    if (minRequestIntervalMs > 0 && lastRequestAt !== undefined) {
-      const wait = minRequestIntervalMs - (now() - lastRequestAt);
-      if (wait > 0) await sleepAbortable(wait, signal, sleep);
-    }
+    // Shared HTTP-attempt pacing also covers first requests and retries.
     pages += 1;
     let url: URL;
     try {
@@ -158,9 +151,10 @@ export async function searchTweets(
       retryBaseDelayMs,
       timeoutMs,
       sleep,
+      minRequestIntervalMs,
+      now,
       signal,
     });
-    lastRequestAt = now();
 
     // Errors are validated in one place, in the order that preserves the most
     // useful signal: status, then unreadable body, then shape, then semantics.

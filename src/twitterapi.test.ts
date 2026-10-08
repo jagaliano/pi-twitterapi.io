@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
+
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
@@ -33,6 +34,11 @@ import {
   upstreamStartDateString,
   type FetchLike,
 } from "./twitterapi.js";
+
+// Independent mocks must not share a process-scoped credential cooldown.
+let fixture = 0;
+beforeEach(() => { fixture++; });
+const testCredential = () => `twitterapi.test.ts-${fixture}`;
 
 const MX = -360; // UTC-6 (America/Mexico_City)
 
@@ -103,7 +109,7 @@ test("retries 429 then succeeds", async () => {
       ? jsonResponse({ detail: "rate limited" }, { status: 429 })
       : jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+  const details = await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0,
     sleep: async (ms) => { sleeps.push(ms); },
   });
   assert.equal(calls, 2);
@@ -130,7 +136,7 @@ test("honors numeric Retry-After, floors a zero delay, and refuses an over-cap d
       ? jsonResponse({}, { status: 429, retryAfter: "2" })
       : jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+  await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, {
     sleep: async (ms) => { sleeps.push(ms); },
     retryBaseDelayMs: 1_000,
     minRequestIntervalMs: 0,
@@ -147,7 +153,7 @@ test("honors numeric Retry-After, floors a zero delay, and refuses an over-cap d
       ? jsonResponse({}, { status: 429, retryAfter: "0" })
       : jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", zeroFetcher, {
+  await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), zeroFetcher, {
     sleep: async (ms) => { zeroSleeps.push(ms); },
     retryBaseDelayMs: 1_500,
     minRequestIntervalMs: 0,
@@ -161,7 +167,7 @@ test("honors numeric Retry-After, floors a zero delay, and refuses an over-cap d
     return jsonResponse({}, { status: 429, retryAfter: "3600" });
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", overCap, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), overCap, {
       sleep: noSleep,
       retryBaseDelayMs: 1_000,
       minRequestIntervalMs: 0,
@@ -178,7 +184,7 @@ test("does not retry non-retryable 4xx", async () => {
     return jsonResponse({ detail: "bad key" }, { status: 401 });
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, { sleep: noSleep }),
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0, sleep: noSleep }),
     /bad key/,
   );
   assert.equal(calls, 1);
@@ -191,13 +197,13 @@ test("retries transient transport errors, surfaces exhaustion", async () => {
     if (calls < 3) throw new Error("fetch failed");
     return jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", flaky, { sleep: noSleep });
+  await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), flaky, { minRequestIntervalMs: 0, sleep: noSleep });
   assert.equal(calls, 3);
 
   let always = 0;
   const alwaysFails: FetchLike = async () => { always += 1; throw new Error("fetch failed"); };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", alwaysFails, { maxRetries: 2, sleep: noSleep }),
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), alwaysFails, { minRequestIntervalMs: 0, maxRetries: 2, sleep: noSleep }),
     /fetch failed/,
   );
   assert.equal(always, 3); // initial + 2 retries
@@ -210,7 +216,7 @@ test("an unreadable body on a successful status is not retried, and reports why"
     return { ok: true, status: 200, headers: { get: () => null }, json: async () => { throw new Error("socket hang up"); } } as unknown as Response;
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", stallingBody, { sleep: noSleep, minRequestIntervalMs: 0 }),
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), stallingBody, { sleep: noSleep, minRequestIntervalMs: 0 }),
     /may already have been billed/,
   );
   assert.equal(bodyFails, 1, "a page that may already be billed must not be requested again");
@@ -220,7 +226,7 @@ test("an unreadable body on a successful status is not retried, and reports why"
   const badJson: FetchLike = async () =>
     ({ ok: true, status: 200, headers: { get: () => null }, json: async () => { throw new SyntaxError("Unexpected token"); } } as unknown as Response);
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", badJson, { sleep: noSleep, minRequestIntervalMs: 0 }),
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), badJson, { sleep: noSleep, minRequestIntervalMs: 0 }),
     /malformed response \(HTTP 200\)/,
   );
 });
@@ -229,7 +235,7 @@ test("maxRetries 0 means exactly one attempt", async () => {
   let calls = 0;
   const fetcher: FetchLike = async () => { calls += 1; return jsonResponse({}, { status: 429 }); };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, { maxRetries: 0, sleep: noSleep }),
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0, maxRetries: 0, sleep: noSleep }),
     /429/,
   );
   assert.equal(calls, 1);
@@ -238,7 +244,7 @@ test("maxRetries 0 means exactly one attempt", async () => {
 test("rejects an invalid timeout", async () => {
   const fetcher: FetchLike = async () => jsonResponse({ tweets: [], has_next_page: false });
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x" }), "k", fetcher, { timeoutMs: 0 }),
+    searchTweets(normalizeParams({ query: "x" }), testCredential(), fetcher, { minRequestIntervalMs: 0, timeoutMs: 0 }),
     /timeoutMs must be a positive number/,
   );
 });
@@ -254,7 +260,7 @@ test("aborting the tool signal cancels requests and backoff", async () => {
     return jsonResponse({}, { status: 429 });
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0,
       signal: controller.signal,
       sleep: noSleep,
     }),
@@ -266,7 +272,7 @@ test("aborting the tool signal cancels requests and backoff", async () => {
   preAborted.abort();
   let neverCalled = 0;
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", async () => { neverCalled += 1; return jsonResponse({}); }, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), async () => { neverCalled += 1; return jsonResponse({}); }, { minRequestIntervalMs: 0,
       signal: preAborted.signal,
       sleep: noSleep,
     }),
@@ -374,10 +380,10 @@ test("start padding is applied only when the local day starts before the upstrea
     return jsonResponse({ tweets: [tweet({ createdAt: "Mon Sep 21 10:00:00 +0000 2026" })], has_next_page: false });
   };
 
-  await searchTweets(normalizeParams({ query: "x", count: 5, from_date: "2026-09-21", to_date: "2026-09-21" }), "k", capture, { localUtcOffsetMinutes: MX });
+  await searchTweets(normalizeParams({ query: "x", count: 5, from_date: "2026-09-21", to_date: "2026-09-21" }), testCredential(), capture, { minRequestIntervalMs: 0, localUtcOffsetMinutes: MX });
   assert.match(seen[0], /since:2026-09-21/);
 
-  await searchTweets(normalizeParams({ query: "x", count: 5, from_date: "2026-09-21", to_date: "2026-09-21" }), "k", capture, { localUtcOffsetMinutes: 120 });
+  await searchTweets(normalizeParams({ query: "x", count: 5, from_date: "2026-09-21", to_date: "2026-09-21" }), testCredential(), capture, { minRequestIntervalMs: 0, localUtcOffsetMinutes: 120 });
   assert.match(seen[1], /since:2026-09-20/);
 });
 
@@ -392,9 +398,9 @@ test("date filtering is exact at the start and keeps the documented tail gap", a
     });
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 5, from_date: "2026-09-21", to_date: "2026-09-21" }),
-    "k",
+    testCredential(),
     fetcher,
-    { localUtcOffsetMinutes: MX },
+    { minRequestIntervalMs: 0, localUtcOffsetMinutes: MX },
   );
   assert.deepEqual(details.tweets.map((t) => t.text), ["in"]);
   assert.equal(details.window?.shortfallHours, 2);
@@ -412,7 +418,7 @@ test("filtering an entire page does not stop pagination early", async () => {
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 5, from_date: "2026-09-21", to_date: "2026-09-21" }),
-    "k",
+    testCredential(),
     fetcher,
     { localUtcOffsetMinutes: MX, minRequestIntervalMs: 0 },
   );
@@ -427,7 +433,7 @@ test("cursor cycles terminate and duplicates are dropped", async () => {
     calls += 1;
     return jsonResponse({ tweets: [tweet()], has_next_page: true, next_cursor: "same" });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), "k", fetcher, { sleep: noSleep });
+  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), testCredential(), fetcher, { minRequestIntervalMs: 0, sleep: noSleep });
   assert.equal(calls, 2);
   assert.equal(details.tweets.length, 1, "repeated tweet must not be counted twice");
 });
@@ -443,7 +449,7 @@ test("dedupes a post that appears once with an id and once with only a permalink
         : [{ url: "https://x.com/a/status/77", text: "dup" }];
     return jsonResponse({ tweets, has_next_page: calls < 2, next_cursor: calls < 2 ? "c1" : undefined });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), "k", fetcher, { sleep: noSleep });
+  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), testCredential(), fetcher, { minRequestIntervalMs: 0, sleep: noSleep });
   assert.equal(calls, 2);
   assert.equal(details.tweets.length, 1, "id/url representations of one post must not both count");
 });
@@ -455,7 +461,7 @@ test("duplicate-only pages keep paging and fall back to the URL for dedup", asyn
     const tweets = [{ url: "https://x.com/a/status/1", text: "no id", createdAt: "Sun Sep 20 12:00:00 +0000 2026" }];
     return jsonResponse({ tweets, has_next_page: calls < 3, next_cursor: calls < 3 ? `c${calls}` : undefined });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), "k", fetcher, { sleep: noSleep });
+  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), testCredential(), fetcher, { minRequestIntervalMs: 0, sleep: noSleep });
   assert.equal(calls, 3, "duplicate-only pages must not end pagination early");
   assert.equal(details.tweets.length, 1, "URL fallback must dedupe id-less repeats");
 });
@@ -475,9 +481,9 @@ test("window filtering is inclusive at the start and exclusive at the end", asyn
     });
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 10, from_date: "2026-09-21", to_date: "2026-09-21" }),
-    "k",
+    testCredential(),
     fetcher,
-    { localUtcOffsetMinutes: MX },
+    { minRequestIntervalMs: 0, localUtcOffsetMinutes: MX },
   );
   assert.deepEqual(details.tweets.map((t) => t.text), ["at-start", "just-before-end"]);
 });
@@ -491,7 +497,7 @@ test("a stalled fetch times out, is retried, then surfaces the timeout", async (
     return new Promise<Response>(() => {}); // never settles
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", hung, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), hung, { minRequestIntervalMs: 0,
       timeoutMs: 15,
       maxRetries: 1,
       sleep: noSleep,
@@ -505,7 +511,7 @@ test("a stalled fetch times out, while a stalled body reports an already-billed 
   // Nothing arrived at all: an ordinary request timeout.
   const hungFetch: FetchLike = () => new Promise<Response>(() => {});
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", hungFetch, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), hungFetch, {
       timeoutMs: 15,
       maxRetries: 0,
       sleep: noSleep,
@@ -519,7 +525,7 @@ test("a stalled fetch times out, while a stalled body reports an already-billed 
   const hungBody: FetchLike = async () =>
     ({ ok: true, status: 200, headers: { get: () => null }, json: () => new Promise(() => {}) } as unknown as Response);
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", hungBody, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), hungBody, {
       timeoutMs: 15,
       maxRetries: 0,
       sleep: noSleep,
@@ -532,7 +538,7 @@ test("a stalled fetch times out, while a stalled body reports an already-billed 
 test("cancelling while a fetch is pending rejects promptly", async () => {
   const controller = new AbortController();
   const pending: FetchLike = () => new Promise<Response>(() => {});
-  const promise = searchTweets(normalizeParams({ query: "x", count: 1 }), "k", pending, {
+  const promise = searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), pending, { minRequestIntervalMs: 0,
     signal: controller.signal,
     timeoutMs: 5_000,
     sleep: noSleep,
@@ -549,7 +555,7 @@ test("cancelling during backoff stops the wait instead of sitting it out", async
     return jsonResponse({}, { status: 429, retryAfter: "30" });
   };
   const started = Date.now();
-  const promise = searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+  const promise = searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0,
     signal: controller.signal,
     retryBaseDelayMs: 30_000,
   });
@@ -563,7 +569,7 @@ test("an already-aborted signal during backoff cancels immediately", async () =>
   const controller = new AbortController();
   const fetcher: FetchLike = async () => jsonResponse({}, { status: 429 });
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0,
       signal: controller.signal,
       sleep: async (_ms, signal) => {
         controller.abort();
@@ -577,7 +583,7 @@ test("an already-aborted signal during backoff cancels immediately", async () =>
 test("a throwing injected sleep propagates and does not hang", async () => {
   const fetcher: FetchLike = async () => jsonResponse({}, { status: 429 });
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0,
       sleep: async () => { throw new Error("sleep exploded"); },
     }),
     /sleep exploded/,
@@ -594,7 +600,7 @@ test("HTTP-date Retry-After is honored end to end", async () => {
       ? jsonResponse({}, { status: 429, retryAfter: past })
       : jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+  await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), fetcher, { minRequestIntervalMs: 0,
     sleep: async (ms) => { sleeps.push(ms); },
   });
   assert.deepEqual(sleeps, [5_000], "an expired HTTP-date falls back to the backoff floor, not a zero-delay retry");
@@ -604,20 +610,20 @@ test("HTTP-date Retry-After is honored end to end", async () => {
 
 test("surfaces both error envelopes and rejects malformed success payloads", async () => {
   const semantic: FetchLike = async () => jsonResponse({ status: "error", msg: "bad key" });
-  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), "k", semantic), /bad key/);
+  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), testCredential(), semantic, { minRequestIntervalMs: 0 }), /bad key/);
 
   const httpError: FetchLike = async () => jsonResponse({ detail: "nope" }, { status: 400 });
-  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), "k", httpError), /nope/);
+  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), testCredential(), httpError, { minRequestIntervalMs: 0 }), /nope/);
 
   const msgOnly: FetchLike = async () => jsonResponse({ msg: "quota" }, { status: 403 });
-  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), "k", msgOnly), /quota/);
+  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), testCredential(), msgOnly, { minRequestIntervalMs: 0 }), /quota/);
 
   // The account-level envelope is `{error, message}`; a 402 must not degrade to
   // a bare status. This is the exact shape a depleted balance returns.
   const outOfCredits: FetchLike = async () =>
     jsonResponse({ error: "Unauthorized", message: "Credits is not enough.Please recharge" }, { status: 402 });
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x" }), "k", outOfCredits, { sleep: noSleep, minRequestIntervalMs: 0 }),
+    searchTweets(normalizeParams({ query: "x" }), testCredential(), outOfCredits, { sleep: noSleep, minRequestIntervalMs: 0 }),
     /payment required: Credits is not enough\.Please recharge \(HTTP 402\)/,
   );
   // 402 is a billing signal, not a transient one: it must not be retried.
@@ -626,15 +632,15 @@ test("surfaces both error envelopes and rejects malformed success payloads", asy
     billingCalls += 1;
     return jsonResponse({ error: "Unauthorized", message: "Credits is not enough.Please recharge" }, { status: 402 });
   };
-  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), "k", billing, { sleep: noSleep, minRequestIntervalMs: 0 }), /402/);
+  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), testCredential(), billing, { sleep: noSleep, minRequestIntervalMs: 0 }), /402/);
   assert.equal(billingCalls, 1, "a billing failure must not be retried");
 
   const missingArray: FetchLike = async () => jsonResponse({ has_next_page: false });
-  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), "k", missingArray), /missing tweets array/);
+  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), testCredential(), missingArray, { minRequestIntervalMs: 0 }), /missing tweets array/);
 
   const notObject: FetchLike = async () =>
     ({ ok: true, status: 200, headers: { get: () => null }, json: async () => "nope" } as unknown as Response);
-  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), "k", notObject), /malformed response/);
+  await assert.rejects(searchTweets(normalizeParams({ query: "x" }), testCredential(), notObject, { minRequestIntervalMs: 0 }), /malformed response/);
 });
 
 // -------------------------------------------------------------- formatting
@@ -661,7 +667,7 @@ test("alias chains across representations collapse to one post", async () => {
     call += 1;
     return jsonResponse({ tweets, has_next_page: call < pages.length, next_cursor: call < pages.length ? `c${call}` : undefined });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), "k", fetcher, { sleep: noSleep });
+  const details = await searchTweets(normalizeParams({ query: "x", count: 10 }), testCredential(), fetcher, { minRequestIntervalMs: 0, sleep: noSleep });
   assert.equal(call, 3, "pagination must still advance through duplicate-only pages");
   assert.equal(details.tweets.length, 1, "the alias chain must not yield three posts");
   assert.equal(details.tweets[0].text, "first");
@@ -675,7 +681,7 @@ test("retries only the documented statuses (429 and 503)", async () => {
       ? jsonResponse({ detail: "service unavailable" }, { status: 503 })
       : jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", flaky, {
+  const details = await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), flaky, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
   });
@@ -691,7 +697,7 @@ test("retries only the documented statuses (429 and 503)", async () => {
       return { ok: false, status, headers: { get: () => null }, json: async () => { throw new SyntaxError("Unexpected token <"); } } as unknown as Response;
     };
     await assert.rejects(
-      searchTweets(normalizeParams({ query: "x", count: 1 }), "k", failing, { sleep: noSleep, minRequestIntervalMs: 0 }),
+      searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), failing, { sleep: noSleep, minRequestIntervalMs: 0 }),
       new RegExp(`HTTP ${status}`),
     );
     assert.equal(calls, 1, `HTTP ${status} must not be retried`);
@@ -711,7 +717,7 @@ test("a non-JSON error body still reports its HTTP status and retry context", as
     return { ok: false, status: 429, headers: { get: () => null }, json: async () => { throw new SyntaxError("Unexpected token <"); } } as unknown as Response;
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", html429, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), html429, {
       sleep: noSleep,
       minRequestIntervalMs: 0,
       maxRetries: 1,
@@ -733,8 +739,8 @@ test("paces successive requests to stay inside the per-key QPS ceiling", async (
       ? jsonResponse({ tweets: [tweet()], has_next_page: true, next_cursor: "c1" })
       : jsonResponse({ tweets: [tweet({ id: "2", url: "https://x.com/a/status/2" })], has_next_page: false });
   };
-  const details = await searchTweets(normalizeParams({ query: "x", count: 5 }), "k", fetcher, {
-    sleep: async (ms) => { sleeps.push(ms); },
+  const details = await searchTweets(normalizeParams({ query: "x", count: 5 }), testCredential(), fetcher, {
+    sleep: async (ms) => { sleeps.push(ms); clock.t += ms; },
     now: () => clock.t,
     minRequestIntervalMs: 5_000,
   });
@@ -743,7 +749,7 @@ test("paces successive requests to stay inside the per-key QPS ceiling", async (
   assert.equal(details.pagesFetched, 2, "pacing must not be counted as a retry or extra page");
 
   // The first request is never delayed.
-  const firstOnly = await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", fetcher, {
+  const firstOnly = await searchTweets(normalizeParams({ query: "x", count: 1 }), `${testCredential()}-unused`, fetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 5_000,
   });
@@ -760,7 +766,7 @@ test("discloses page-cap and cursor-cycle termination instead of implying comple
       next_cursor: `c${calls}`,
     });
   };
-  const capped = await searchTweets(normalizeParams({ query: "x", count: 50 }), "k", neverEnding, {
+  const capped = await searchTweets(normalizeParams({ query: "x", count: 50 }), testCredential(), neverEnding, {
     sleep: noSleep,
     maxPages: 3,
     minRequestIntervalMs: 0,
@@ -778,19 +784,19 @@ test("discloses page-cap and cursor-cycle termination instead of implying comple
       next_cursor: "same",
     });
   };
-  const cycled = await searchTweets(normalizeParams({ query: "x", count: 50 }), "k", cycling, {
+  const cycled = await searchTweets(normalizeParams({ query: "x", count: 50 }), testCredential(), cycling, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
   });
   assert.equal(cycled.stoppedBy, "cursor-cycle");
   assert.equal(cycled.truncated, true, "a repeating cursor means retrieval was incomplete");
 
-  const exact = await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", async () =>
+  const exact = await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), async () =>
     jsonResponse({ tweets: [tweet()], has_next_page: true, next_cursor: "c" }), { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(exact.stoppedBy, "target");
   assert.equal(exact.truncated, false, "reaching the requested count is a complete answer");
 
-  const done = await searchTweets(normalizeParams({ query: "x", count: 10 }), "k", async () =>
+  const done = await searchTweets(normalizeParams({ query: "x", count: 10 }), testCredential(), async () =>
     jsonResponse({ tweets: [tweet()], has_next_page: false }), { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(done.stoppedBy, "exhausted");
   assert.equal(done.truncated, false, "a normal end of results is not truncation");
@@ -815,7 +821,7 @@ test("extends the page budget to page past the trim band east of UTC-4", async (
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 1, from_date: "2026-09-25", to_date: "2026-09-25" }),
-    "k",
+    testCredential(),
     fetcher,
     { localUtcOffsetMinutes: 120, maxPages: 2, maxPagesCeiling: 6, sleep: noSleep, minRequestIntervalMs: 0 },
   );
@@ -843,7 +849,7 @@ test("does not extend the budget where there is no trim band (UTC-6)", async () 
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 1, from_date: "2026-09-25", to_date: "2026-09-25" }),
-    "k",
+    testCredential(),
     fetcher,
     { localUtcOffsetMinutes: -360, maxPages: 2, maxPagesCeiling: 10, sleep: noSleep, minRequestIntervalMs: 0 },
   );
@@ -867,7 +873,7 @@ test("stops at the ceiling rather than paging forever through a dense band", asy
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 5, from_date: "2026-09-25", to_date: "2026-09-25" }),
-    "k",
+    testCredential(),
     fetcher,
     { localUtcOffsetMinutes: 120, maxPages: 2, maxPagesCeiling: 4, sleep: noSleep, minRequestIntervalMs: 0 },
   );
@@ -893,7 +899,7 @@ test("a stalled body on a received response is not retried even with retries ena
     } as unknown as Response;
   };
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x", count: 1 }), "k", stalled, {
+    searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), stalled, {
       sleep: noSleep,
       minRequestIntervalMs: 0,
       maxRetries: 3,
@@ -916,7 +922,7 @@ test("an explicit ceiling caps the base budget instead of being raised by it", a
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 5, from_date: "2026-09-25", to_date: "2026-09-25" }),
-    "k",
+    testCredential(),
     fetcher,
     { localUtcOffsetMinutes: 120, maxPages: 5, maxPagesCeiling: 2, sleep: noSleep, minRequestIntervalMs: 0 },
   );
@@ -937,7 +943,7 @@ test("non-integer page options fall back to defaults rather than unbounded pagin
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 50, from_date: "2026-09-25", to_date: "2026-09-25" }),
-    "k",
+    testCredential(),
     fetcher,
     {
       localUtcOffsetMinutes: 120,
@@ -965,7 +971,7 @@ test("older start-padding discards do not buy free pages", async () => {
   };
   const details = await searchTweets(
     normalizeParams({ query: "x", count: 5, from_date: "2026-09-25", to_date: "2026-09-25" }),
-    "k",
+    testCredential(),
     fetcher,
     { localUtcOffsetMinutes: 120, maxPages: 2, maxPagesCeiling: 10, sleep: noSleep, minRequestIntervalMs: 0 },
   );
@@ -978,7 +984,7 @@ test("older start-padding discards do not buy free pages", async () => {
 test("HTTP status wins over a semantic error envelope in the same body", async () => {
   const both: FetchLike = async () => jsonResponse({ status: "error", msg: "slow down" }, { status: 429 });
   await assert.rejects(
-    searchTweets(normalizeParams({ query: "x" }), "k", both, { sleep: noSleep, minRequestIntervalMs: 0, maxRetries: 1 }),
+    searchTweets(normalizeParams({ query: "x" }), testCredential(), both, { sleep: noSleep, minRequestIntervalMs: 0, maxRetries: 1 }),
     /rate limited: slow down \(HTTP 429 after 2 attempts\)/,
   );
 });
@@ -1011,7 +1017,7 @@ test("searchUsers maps the live field names and builds profile URLs", async () =
       ],
       has_next_page: false,
     });
-  const details = await searchUsers("grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const details = await searchUsers("grok", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
 
   assert.equal(details.users.length, 2, "an account without a handle is dropped");
   const [first] = details.users;
@@ -1035,7 +1041,7 @@ test("searchUsers paginates, dedupes, and reports a page-cap truncation", async 
       next_cursor: `c${calls}`,
     });
   };
-  const details = await searchUsers("grok", "k", fetcher, {
+  const details = await searchUsers("grok", testCredential(), fetcher, {
     maxPages: 2,
     count: 50,
     sleep: noSleep,
@@ -1057,7 +1063,7 @@ test("searchUsers stops at the requested count", async () => {
       next_cursor: `c${calls}`,
     });
   };
-  const details = await searchUsers("x", "k", fetcher, { count: 5, sleep: noSleep, minRequestIntervalMs: 0 });
+  const details = await searchUsers("x", testCredential(), fetcher, { count: 5, sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(details.users.length, 5);
   assert.equal(details.stoppedBy, "target");
   assert.equal(calls, 1);
@@ -1081,7 +1087,7 @@ test("fetchThread accepts an id or a permalink and stops when a page adds nothin
     return jsonResponse({ status: "success", tweets: [], has_next_page: true, next_cursor: "c2" });
   };
 
-  const details = await fetchThread("https://x.com/a/status/7/photo/1", "k", fetcher, {
+  const details = await fetchThread("https://x.com/a/status/7/photo/1", testCredential(), fetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
   });
@@ -1095,7 +1101,7 @@ test("fetchThread rejects a reference that is neither an id nor a permalink", as
   const neverCalled: FetchLike = async () => {
     throw new Error("the fetcher must not be reached for an invalid reference");
   };
-  await assert.rejects(() => fetchThread("not-a-tweet", "k", neverCalled), /numeric post id or an X permalink/);
+  await assert.rejects(() => fetchThread("not-a-tweet", testCredential(), neverCalled, { minRequestIntervalMs: 0 }), /numeric post id or an X permalink/);
 });
 
 test("tweetIdFromInput and statusIdFromUrl agree on the X URL boundary", () => {
@@ -1122,7 +1128,7 @@ test("a duplicate-only thread page does not end the walk", async () => {
     }
     return jsonResponse({ status: "success", tweets: [tweet({ id: "B", url: "https://x.com/a/status/2" })], has_next_page: false });
   };
-  const details = await fetchThread("1", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const details = await fetchThread("1", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(calls, 3, "an overlapping page must not stop retrieval");
   assert.deepEqual(details.tweets.map((t) => t.id), ["A", "B"]);
   assert.equal(details.stoppedBy, "exhausted");
@@ -1134,7 +1140,7 @@ test("running out of pages on repeat-only pages is disclosed as truncation", asy
     cursor += 1; // a fresh cursor each time, so the page cap is what stops it
     return jsonResponse({ status: "success", tweets: [tweet({ id: "A", url: "https://x.com/a/status/1" })], has_next_page: true, next_cursor: `c${cursor}` });
   };
-  const details = await fetchThread("1", "k", fetcher, { maxPages: 3, sleep: noSleep, minRequestIntervalMs: 0 });
+  const details = await fetchThread("1", testCredential(), fetcher, { maxPages: 3, sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(details.pagesFetched, 3);
   assert.equal(details.stoppedBy, "page-cap");
   assert.equal(details.truncated, true, "stopping early must not claim the thread was fully read");
@@ -1150,40 +1156,40 @@ test("account dedupe catches mixed id and handle representations", async () => {
       ],
       has_next_page: false,
     });
-  const details = await searchUsers("grok", "k", fetcher, { count: 10, sleep: noSleep, minRequestIntervalMs: 0 });
+  const details = await searchUsers("grok", testCredential(), fetcher, { count: 10, sleep: noSleep, minRequestIntervalMs: 0 });
   assert.deepEqual(details.users.map((u) => u.handle), ["grok", "other"]);
   assert.equal(details.stoppedBy, "exhausted");
 });
 
 test("an invalid account count or page bound is rejected, not defaulted", async () => {
   const fetcher: FetchLike = async () => jsonResponse({ users: [], has_next_page: false });
-  await assert.rejects(() => searchUsers("x", "k", fetcher, { count: 0 }), /count must be an integer between 1 and 50/);
-  await assert.rejects(() => searchUsers("x", "k", fetcher, { count: 1.5 }), /count must be an integer between 1 and 50/);
-  await assert.rejects(() => searchUsers("x", "k", fetcher, { maxPages: 0 }), /maxPages must be an integer between 1 and 100/);
+  await assert.rejects(() => searchUsers("x", testCredential(), fetcher, { minRequestIntervalMs: 0, count: 0 }), /count must be an integer between 1 and 50/);
+  await assert.rejects(() => searchUsers("x", testCredential(), fetcher, { minRequestIntervalMs: 0, count: 1.5 }), /count must be an integer between 1 and 50/);
+  await assert.rejects(() => searchUsers("x", testCredential(), fetcher, { minRequestIntervalMs: 0, maxPages: 0 }), /maxPages must be an integer between 1 and 100/);
 });
 
 test("more-results-without-a-cursor is truncation, not completion", async () => {
   // Upstream says there are more pages but hands us nothing to fetch them with.
   // Reporting "exhausted" would present a partial result as complete.
   const users: FetchLike = async () => jsonResponse({ users: [apiUser({ id: "1", screen_name: "a" })], has_next_page: true });
-  const userSearch = await searchUsers("x", "k", users, { count: 50, sleep: noSleep, minRequestIntervalMs: 0 });
+  const userSearch = await searchUsers("x", testCredential(), users, { count: 50, sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(userSearch.stoppedBy, "cursor-missing");
   assert.equal(userSearch.truncated, true);
 
   const thread: FetchLike = async () =>
     jsonResponse({ status: "success", tweets: [tweet({ id: "1", url: "https://x.com/a/status/1" })], has_next_page: true });
-  const threadFetch = await fetchThread("1", "k", thread, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const threadFetch = await fetchThread("1", testCredential(), thread, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(threadFetch.stoppedBy, "cursor-missing");
   assert.equal(threadFetch.truncated, true);
 
   const posts: FetchLike = async () => jsonResponse({ tweets: [tweet()], has_next_page: true });
-  const postSearch = await searchTweets(normalizeParams({ query: "x", count: 50 }), "k", posts, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const postSearch = await searchTweets(normalizeParams({ query: "x", count: 50 }), testCredential(), posts, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(postSearch.stoppedBy, "cursor-missing");
   assert.equal(postSearch.truncated, true);
 
   // A genuine end of results still reads as exhausted.
   const done: FetchLike = async () => jsonResponse({ users: [apiUser({ id: "1", screen_name: "a" })], has_next_page: false });
-  const finished = await searchUsers("x", "k", done, { count: 50, sleep: noSleep, minRequestIntervalMs: 0 });
+  const finished = await searchUsers("x", testCredential(), done, { count: 50, sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(finished.stoppedBy, "exhausted");
   assert.equal(finished.truncated, false);
 });
@@ -1199,7 +1205,7 @@ test("an empty page does not end post or account paging, but does end a thread w
       ? jsonResponse({ tweets: [], has_next_page: true, next_cursor: "c1" })
       : jsonResponse({ tweets: [tweet({ id: "later" })], has_next_page: false });
   };
-  const postSearch = await searchTweets(normalizeParams({ query: "x", count: 50 }), "k", posts, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const postSearch = await searchTweets(normalizeParams({ query: "x", count: 50 }), testCredential(), posts, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(postSearch.tweets.length, 1, "the walk continued past the empty page");
   assert.equal(postSearch.pagesFetched, 2);
   assert.equal(postSearch.stoppedBy, "exhausted");
@@ -1211,20 +1217,19 @@ test("an empty page does not end post or account paging, but does end a thread w
       ? jsonResponse({ users: [], has_next_page: true, next_cursor: "c1" })
       : jsonResponse({ users: [apiUser({ id: "9", screen_name: "later" })], has_next_page: false });
   };
-  const userSearch = await searchUsers("x", "k", users, { count: 50, sleep: noSleep, minRequestIntervalMs: 0 });
+  const userSearch = await searchUsers("x", testCredential(), users, { count: 50, sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(userSearch.users.length, 1);
   assert.equal(userSearch.pagesFetched, 2);
 
   const thread: FetchLike = async () => jsonResponse({ status: "success", tweets: [], has_next_page: true, next_cursor: "c1" });
-  const threadFetch = await fetchThread("1", "k", thread, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const threadFetch = await fetchThread("1", testCredential(), thread, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(threadFetch.stoppedBy, "exhausted", "an empty thread page ends the walk");
   assert.equal(threadFetch.pagesFetched, 1);
 });
 
-test("retry attempts are spaced by retryBaseDelayMs, not by the paging interval", async () => {
-  // Documented in the README: minRequestIntervalMs spaces pages, while retry
-  // attempts use retryBaseDelayMs. A zeroed retry delay therefore retries
-  // immediately even with a five-second paging interval in force.
+test("retry attempts respect shared spacing even when retry backoff is zero", async () => {
+  // Every physical attempt now honors both constraints: backoff and the
+  // per-credential dispatch interval. Zero backoff cannot bypass pacing.
   const times: number[] = [];
   let clock = 0;
   let calls = 0;
@@ -1235,7 +1240,7 @@ test("retry attempts are spaced by retryBaseDelayMs, not by the paging interval"
       ? jsonResponse({ detail: "rate limited" }, { status: 429, retryAfter: "0" })
       : jsonResponse({ users: [apiUser({ id: "1", screen_name: "a" })], has_next_page: false });
   };
-  const result = await searchUsers("x", "k", fetcher, {
+  const result = await searchUsers("x", testCredential(), fetcher, {
     count: 20,
     minRequestIntervalMs: 5000,
     retryBaseDelayMs: 0,
@@ -1245,7 +1250,7 @@ test("retry attempts are spaced by retryBaseDelayMs, not by the paging interval"
     },
   });
   assert.equal(result.users.length, 1, "the retry succeeded");
-  assert.deepEqual(times, [0, 0], "the retry is not paced by minRequestIntervalMs");
+  assert.deepEqual(times, [0, 5000], "the retry must respect minRequestIntervalMs");
 });
 
 test("a filled count is a complete result even when the cursor is missing", async () => {
@@ -1253,11 +1258,11 @@ test("a filled count is a complete result even when the cursor is missing", asyn
   // still unfilled. Once count is satisfied the walk stopped because it was
   // asked to, so reporting truncation would be wrong.
   const posts: FetchLike = async () => jsonResponse({ tweets: [tweet({ id: "1" })], has_next_page: true });
-  const filled = await searchTweets(normalizeParams({ query: "x", count: 1 }), "k", posts, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const filled = await searchTweets(normalizeParams({ query: "x", count: 1 }), testCredential(), posts, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(filled.stoppedBy, "target");
   assert.equal(filled.truncated, false, "a satisfied count is not truncation");
 
-  const unfilled = await searchTweets(normalizeParams({ query: "x", count: 2 }), "k", posts, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const unfilled = await searchTweets(normalizeParams({ query: "x", count: 2 }), testCredential(), posts, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(unfilled.stoppedBy, "cursor-missing", "the same page while count is unfilled is truncation");
   assert.equal(unfilled.truncated, true);
 });
@@ -1266,7 +1271,7 @@ test("a filled count is a complete result even when the cursor is missing", asyn
 
 test("fetchUserTweets requires a handle or id and pages the account timeline", async () => {
   await assert.rejects(
-    () => fetchUserTweets({}, "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    () => fetchUserTweets({}, testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a userName or userId/,
   );
 
@@ -1284,7 +1289,7 @@ test("fetchUserTweets requires a handle or id and pages the account timeline", a
   };
   const result = await fetchUserTweets(
     { userName: "@alice" },
-    "k",
+    testCredential(),
     fetcher,
     { sleep: noSleep, minRequestIntervalMs: 0, maxPages: 2 },
   );
@@ -1307,7 +1312,7 @@ test("fetchUserTweets stops at the requested limit", async () => {
     });
   const result = await fetchUserTweets(
     { userId: "42" },
-    "k",
+    testCredential(),
     fetcher,
     { sleep: noSleep, minRequestIntervalMs: 0, limit: 1 },
   );
@@ -1317,12 +1322,12 @@ test("fetchUserTweets stops at the requested limit", async () => {
 
 test("fetchTweetReplies validates the reference and sort, and returns the tweet id", async () => {
   await assert.rejects(
-    () => fetchTweetReplies("nope", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    () => fetchTweetReplies("nope", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /numeric post id or an X permalink/,
   );
   await assert.rejects(
     () =>
-      fetchTweetReplies("7", "k", async () => jsonResponse({ tweets: [] }), {
+      fetchTweetReplies("7", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0,
         sleep: noSleep,
         queryType: "Bad" as never,
       }),
@@ -1334,7 +1339,7 @@ test("fetchTweetReplies validates the reference and sort, and returns the tweet 
     seen.push(String(input));
     return jsonResponse({ tweets: [tweet({ id: "9", url: "https://x.com/a/status/9" })], has_next_page: false });
   };
-  const result = await fetchTweetReplies("https://x.com/a/status/7", "k", fetcher, {
+  const result = await fetchTweetReplies("https://x.com/a/status/7", testCredential(), fetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
   });
@@ -1345,12 +1350,12 @@ test("fetchTweetReplies validates the reference and sort, and returns the tweet 
 
 test("fetchTweetQuotes validates the time window and forwards it", async () => {
   await assert.rejects(
-    () => fetchTweetQuotes("7", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep, sinceTime: -1 }),
+    () => fetchTweetQuotes("7", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep, sinceTime: -1 }),
     /non-negative unix timestamp/,
   );
   await assert.rejects(
     () =>
-      fetchTweetQuotes("7", "k", async () => jsonResponse({ tweets: [] }), {
+      fetchTweetQuotes("7", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0,
         sleep: noSleep,
         sinceTime: 5,
         untilTime: 1,
@@ -1363,7 +1368,7 @@ test("fetchTweetQuotes validates the time window and forwards it", async () => {
     seen.push(String(input));
     return jsonResponse({ tweets: [tweet({ id: "10", url: "https://x.com/a/status/10" })], has_next_page: false });
   };
-  await fetchTweetQuotes("https://x.com/a/status/7", "k", fetcher, {
+  await fetchTweetQuotes("https://x.com/a/status/7", testCredential(), fetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
     sinceTime: 100,
@@ -1382,7 +1387,7 @@ test("fetchFollowers walks the followers array and maps profiles", async () => {
     seen.push(String(input));
     return jsonResponse({ followers: [apiUser(), apiUser({ id: "2", screen_name: "bob" })], has_next_page: false });
   };
-  const result = await fetchFollowers("@grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const result = await fetchFollowers("@grok", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(result.userName, "grok", "a leading @ is stripped");
   assert.equal(result.users.length, 2);
   assert.match(seen[0], /followers/);
@@ -1391,35 +1396,35 @@ test("fetchFollowers walks the followers array and maps profiles", async () => {
 
 test("fetchFollowings reads the followings array", async () => {
   const fetcher: FetchLike = async () => jsonResponse({ followings: [apiUser()], has_next_page: false });
-  const result = await fetchFollowings("grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const result = await fetchFollowings("grok", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(result.users.length, 1);
 });
 
 test("fetchFollowers requires a handle and validates pageSize", async () => {
   await assert.rejects(
-    () => fetchFollowers("", "k", async () => jsonResponse({ followers: [] }), { sleep: noSleep }),
+    () => fetchFollowers("", testCredential(), async () => jsonResponse({ followers: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a userName/,
   );
   await assert.rejects(
-    () => fetchFollowers("grok", "k", async () => jsonResponse({ followers: [] }), { sleep: noSleep, pageSize: 10 }),
+    () => fetchFollowers("grok", testCredential(), async () => jsonResponse({ followers: [] }), { minRequestIntervalMs: 0, sleep: noSleep, pageSize: 10 }),
     /pageSize must be an integer between 20 and 200/,
   );
 });
 
 test("fetchUserProfile unwraps the data envelope and errors when it is empty", async () => {
   const fetcher: FetchLike = async () => jsonResponse({ data: apiUser() });
-  const user = await fetchUserProfile("@grok", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const user = await fetchUserProfile("@grok", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(user.handle, "grok");
 
   await assert.rejects(
-    () => fetchUserProfile("grok", "k", async () => jsonResponse({ data: null }), { sleep: noSleep }),
+    () => fetchUserProfile("grok", testCredential(), async () => jsonResponse({ data: null }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /no profile/,
   );
 });
 
 test("fetchUserMentions validates and forwards the time window", async () => {
   await assert.rejects(
-    () => fetchUserMentions("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    () => fetchUserMentions("", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a userName/,
   );
   const seen: string[] = [];
@@ -1427,7 +1432,7 @@ test("fetchUserMentions validates and forwards the time window", async () => {
     seen.push(String(input));
     return jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  const result = await fetchUserMentions("grok", "k", fetcher, {
+  const result = await fetchUserMentions("grok", testCredential(), fetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
     sinceTime: 100,
@@ -1440,7 +1445,7 @@ test("fetchUserMentions validates and forwards the time window", async () => {
 
   await assert.rejects(
     () =>
-      fetchUserMentions("grok", "k", async () => jsonResponse({ tweets: [] }), {
+      fetchUserMentions("grok", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0,
         sleep: noSleep,
         sinceTime: 5,
         untilTime: 1,
@@ -1451,16 +1456,16 @@ test("fetchUserMentions validates and forwards the time window", async () => {
 
 test("fetchTweetsByIds validates the id list and returns unique posts", async () => {
   await assert.rejects(
-    () => fetchTweetsByIds([], "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    () => fetchTweetsByIds([], testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /at least one id/,
   );
   await assert.rejects(
     () =>
       fetchTweetsByIds(
         Array.from({ length: 101 }, (_, i) => String(i)),
-        "k",
+        testCredential(),
         async () => jsonResponse({ tweets: [] }),
-        { sleep: noSleep },
+        { minRequestIntervalMs: 0, sleep: noSleep },
       ),
     /at most 100/,
   );
@@ -1477,7 +1482,7 @@ test("fetchTweetsByIds validates the id list and returns unique posts", async ()
       ],
     });
   };
-  const result = await fetchTweetsByIds(["1", "2"], "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const result = await fetchTweetsByIds(["1", "2"], testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(result.tweets.length, 2, "repeated and alias representations are deduped");
   assert.match(seen[0], /tweet_ids=1%2C2/);
 
@@ -1488,13 +1493,13 @@ test("fetchTweetsByIds validates the id list and returns unique posts", async ()
     mixed.push(String(input));
     return jsonResponse({ tweets: [] });
   };
-  await fetchTweetsByIds(["https://x.com/a/status/7", "8"], "k", mixFetcher, {
+  await fetchTweetsByIds(["https://x.com/a/status/7", "8"], testCredential(), mixFetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
   });
   assert.match(mixed[0], /tweet_ids=7%2C8/);
   await assert.rejects(
-    () => fetchTweetsByIds(["not-a-tweet"], "k", mixFetcher, { sleep: noSleep }),
+    () => fetchTweetsByIds(["not-a-tweet"], testCredential(), mixFetcher, { minRequestIntervalMs: 0, sleep: noSleep }),
     /numeric post ids or X permalinks/,
   );
 });
@@ -1512,11 +1517,11 @@ test("parseTweetDate fails open on an unparseable date", () => {
 
 test("fetchCommunityTweets and fetchListTweets use their id params", async () => {
   await assert.rejects(
-    () => fetchCommunityTweets("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    () => fetchCommunityTweets("", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a communityId/,
   );
   await assert.rejects(
-    () => fetchListTweets("", "k", async () => jsonResponse({ tweets: [] }), { sleep: noSleep }),
+    () => fetchListTweets("", testCredential(), async () => jsonResponse({ tweets: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a listId/,
   );
 
@@ -1525,8 +1530,8 @@ test("fetchCommunityTweets and fetchListTweets use their id params", async () =>
     seen.push(String(input));
     return jsonResponse({ tweets: [tweet()], has_next_page: false });
   };
-  await fetchCommunityTweets("123", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
-  await fetchListTweets("456", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  await fetchCommunityTweets("123", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  await fetchListTweets("456", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.match(seen[0], /community\/tweets/);
   assert.match(seen[0], /community_id=123/);
   assert.match(seen[1], /list\/tweets_timeline/);
@@ -1535,21 +1540,21 @@ test("fetchCommunityTweets and fetchListTweets use their id params", async () =>
 
 test("fetchSpaceDetail unwraps the data envelope and errors when empty", async () => {
   await assert.rejects(
-    () => fetchSpaceDetail("", "k", async () => jsonResponse({ data: {} }), { sleep: noSleep }),
+    () => fetchSpaceDetail("", testCredential(), async () => jsonResponse({ data: {} }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a spaceId/,
   );
   // Live responses nest the object under `detail`.
   const fetcher: FetchLike = async () => jsonResponse({ detail: { id: "sp1", title: "Live chat", state: "Live" } });
-  const space = await fetchSpaceDetail("sp1", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const space = await fetchSpaceDetail("sp1", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(space.id, "sp1");
   assert.equal(space.data.title, "Live chat");
   await assert.rejects(
-    () => fetchSpaceDetail("sp1", "k", async () => jsonResponse({ detail: null }), { sleep: noSleep }),
+    () => fetchSpaceDetail("sp1", testCredential(), async () => jsonResponse({ detail: null }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /no space detail/,
   );
   await assert.rejects(
     () =>
-      fetchSpaceDetail("sp1", "k", async () => jsonResponse({ detail: "Space not found or API error" }), {
+      fetchSpaceDetail("sp1", testCredential(), async () => jsonResponse({ detail: "Space not found or API error" }), { minRequestIntervalMs: 0,
         sleep: noSleep,
       }),
     /space lookup failed: Space not found/,
@@ -1558,11 +1563,11 @@ test("fetchSpaceDetail unwraps the data envelope and errors when empty", async (
 
 test("fetchTrends validates woeid and count and maps the upstream trend shape", async () => {
   await assert.rejects(
-    () => fetchTrends(1.5, "k", async () => jsonResponse({ trends: [] }), { sleep: noSleep }),
+    () => fetchTrends(1.5, testCredential(), async () => jsonResponse({ trends: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /woeid must be an integer/,
   );
   await assert.rejects(
-    () => fetchTrends(1, "k", async () => jsonResponse({ trends: [] }), { sleep: noSleep, count: 10 }),
+    () => fetchTrends(1, testCredential(), async () => jsonResponse({ trends: [] }), { minRequestIntervalMs: 0, sleep: noSleep, count: 10 }),
     /count must be an integer >= 30/,
   );
 
@@ -1578,7 +1583,7 @@ test("fetchTrends validates woeid and count and maps the upstream trend shape", 
       ],
     });
   };
-  const result = await fetchTrends(1, "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0, count: 30 });
+  const result = await fetchTrends(1, testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0, count: 30 });
   assert.equal(result.woeid, 1);
   assert.equal(result.trends.length, 1, "duplicate and unnamed trends are dropped");
   assert.deepEqual(result.trends[0], { name: "#pi", rank: 1, query: "#pi", metaDescription: "10K posts" });
@@ -1588,7 +1593,7 @@ test("fetchTrends validates woeid and count and maps the upstream trend shape", 
 
 test("fetchUserAbout unwraps about_profile and verification_info", async () => {
   await assert.rejects(
-    () => fetchUserAbout("", "k", async () => jsonResponse({ data: {} }), { sleep: noSleep }),
+    () => fetchUserAbout("", testCredential(), async () => jsonResponse({ data: {} }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /needs a userName/,
   );
   const seen: string[] = [];
@@ -1614,7 +1619,7 @@ test("fetchUserAbout unwraps about_profile and verification_info", async () => {
       },
     });
   };
-  const about = await fetchUserAbout("@PiGCodingAgent", "k", fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
+  const about = await fetchUserAbout("@PiGCodingAgent", testCredential(), fetcher, { sleep: noSleep, minRequestIntervalMs: 0 });
   assert.equal(about.handle, "PiGCodingAgent", "a leading @ is stripped");
   assert.equal(about.profileUrl, "https://x.com/PiGCodingAgent");
   assert.equal(about.accountBasedIn, "United States");
@@ -1630,14 +1635,14 @@ test("fetchUserAbout unwraps about_profile and verification_info", async () => {
   assert.match(seen[0], /userName=PiGCodingAgent/);
 
   await assert.rejects(
-    () => fetchUserAbout("ghost", "k", async () => jsonResponse({ data: { name: "x" } }), { sleep: noSleep }),
+    () => fetchUserAbout("ghost", testCredential(), async () => jsonResponse({ data: { name: "x" } }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /no about data/,
   );
 });
 
 test("fetchTweetRetweeters paginates the users array and validates the tweet", async () => {
   await assert.rejects(
-    () => fetchTweetRetweeters("not-a-tweet", "k", async () => jsonResponse({ users: [] }), { sleep: noSleep }),
+    () => fetchTweetRetweeters("not-a-tweet", testCredential(), async () => jsonResponse({ users: [] }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /numeric post id or an X permalink/,
   );
   const seen: string[] = [];
@@ -1652,7 +1657,7 @@ test("fetchTweetRetweeters paginates the users array and validates the tweet", a
       next_cursor: first ? "c1" : undefined,
     });
   };
-  const result = await fetchTweetRetweeters("https://x.com/a/status/9", "k", fetcher, {
+  const result = await fetchTweetRetweeters("https://x.com/a/status/9", testCredential(), fetcher, {
     sleep: noSleep,
     minRequestIntervalMs: 0,
   });

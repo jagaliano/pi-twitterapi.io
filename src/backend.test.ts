@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
+
 
 import {
   assistantText,
@@ -16,6 +17,11 @@ import {
   type RegistryLike,
 } from "./backend.js";
 import { loadTwitterConfig } from "./config.js";
+
+// Independent mocks must not share a process-scoped credential cooldown.
+let fixture = 0;
+beforeEach(() => { fixture++; });
+const testCredential = () => `backend.test.ts-${fixture}`;
 
 function registry(models: Array<{ provider: string; id: string; input?: string[] }>): RegistryLike {
   return {
@@ -86,7 +92,7 @@ test("a missing synthesis model reports what is actually available", async () =>
       runTwitterApiUserSearch({
         query: "x",
         config,
-        env: { TWITTERAPI_IO_API_KEY: "k" },
+        env: { TWITTERAPI_IO_API_KEY: testCredential() },
         fetcher: neverCalled,
         registry: registry([{ provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" }]),
       }),
@@ -267,7 +273,7 @@ test("notes the pages spent trimming out-of-window posts", async () => {
   const { details, markdown } = await runTwitterApiSearch({
     params: { query: "x", count: 1, from_date: "2026-09-25", to_date: "2026-09-25" },
     config,
-    env: { TWITTERAPI_IO_API_KEY: "k" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     registry: reg,
     localUtcOffsetMinutes: 120,
@@ -290,7 +296,7 @@ test("an explicit invalid page budget is rejected rather than clamped into valid
         runTwitterApiUserSearch({
           query: "x",
           config,
-          env: { TWITTERAPI_IO_API_KEY: "k" },
+          env: { TWITTERAPI_IO_API_KEY: testCredential() },
           fetcher: neverCalled,
           registry: registry([{ provider: "anthropic", id: "haiku", input: ["text"] }]),
           maxPages: bad,
@@ -408,7 +414,7 @@ test("a text-only fallback does not receive images", async () => {
   const result = await runTwitterApiSearch({
     params: { query: "q" },
     config,
-    env: { TWITTERAPI_IO_API_KEY: "k" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     registry,
     fetcher,
     fallbackModelIds: ["anthropic/sonnet"],
@@ -479,7 +485,7 @@ test("a reasoning-only model is retried with a supported effort instead of faili
   const result = await runTwitterApiSearch({
     params: { query: "q" },
     config,
-    env: { TWITTERAPI_IO_API_KEY: "k" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     registry,
     fetcher: tweetsOnce(),
   });
@@ -505,7 +511,7 @@ test("a cancelled attempt is not repaired with a reasoning-effort retry", async 
     runTwitterApiSearch({
       params: { query: "q" },
       config,
-      env: { TWITTERAPI_IO_API_KEY: "k" },
+      env: { TWITTERAPI_IO_API_KEY: testCredential() },
       registry,
       fetcher: tweetsOnce(),
       signal: controller.signal,
@@ -525,7 +531,7 @@ test("an auth failure on the configured model moves to the next model", async ()
   const result = await runTwitterApiSearch({
     params: { query: "q" },
     config,
-    env: { TWITTERAPI_IO_API_KEY: "k" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     registry,
     fetcher: tweetsOnce(),
     fallbackModelIds: ["anthropic/sonnet"],
@@ -547,7 +553,7 @@ test("a retryable failure on the last model is retried once", async () => {
   const result = await runTwitterApiSearch({
     params: { query: "q" },
     config,
-    env: { TWITTERAPI_IO_API_KEY: "k" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     registry,
     fetcher: tweetsOnce(),
     synthesisSleep: async (ms) => {
@@ -571,7 +577,7 @@ test("a deterministic failure on the last model is not retried", async () => {
       runTwitterApiSearch({
         params: { query: "q" },
         config,
-        env: { TWITTERAPI_IO_API_KEY: "k" },
+        env: { TWITTERAPI_IO_API_KEY: testCredential() },
         registry,
         fetcher: tweetsOnce(),
         synthesisSleep: async () => {},
@@ -593,7 +599,7 @@ test("a cancellation stops the chain without trying the fallback", async () => {
       runTwitterApiSearch({
         params: { query: "q" },
         config,
-        env: { TWITTERAPI_IO_API_KEY: "k" },
+        env: { TWITTERAPI_IO_API_KEY: testCredential() },
         registry,
         fetcher: tweetsOnce(),
         fallbackModelIds: ["anthropic/sonnet"],

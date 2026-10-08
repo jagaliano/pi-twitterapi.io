@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
+
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +9,11 @@ import { join } from "node:path";
 import { Value } from "typebox/value";
 
 import { registerTwitterTool } from "./tool.js";
+
+// Independent mocks must not share a process-scoped credential cooldown.
+let fixture = 0;
+beforeEach(() => { fixture++; });
+const testCredential = () => `tool.test.ts-${fixture}`;
 
 function captureTool() {
   let registered: any;
@@ -21,7 +27,7 @@ function captureTool() {
 
 test("registerTwitterTool registers intent-only parameters", () => {
   const { pi, tool } = captureTool();
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
 
   const registered = tool();
   assert.equal(registered.name, "twitter");
@@ -40,7 +46,7 @@ test("registerTwitterTool registers intent-only parameters", () => {
 
 test("the mode, queryType and replySort parameters are closed sets", () => {
   const { pi, tool } = captureTool();
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
 
   const parameters = tool().parameters;
   const literals = (name: string) =>
@@ -137,7 +143,7 @@ test("execute retrieves through twitterapi.io and synthesizes", async () => {
   };
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -155,7 +161,7 @@ test("execute explains a missing synthesis model instead of failing obscurely", 
   const registry = { find: () => undefined, getAll: () => [], complete: async () => ({}) };
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/missing" } },
   });
@@ -170,7 +176,7 @@ test("execute reports when pi's model registry is unavailable", async () => {
   const { pi, tool } = captureTool();
   const fetcher = (async () => new Response(JSON.stringify({ tweets: [], has_next_page: false }), { status: 200 })) as unknown as typeof fetch;
 
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, fetcher, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, fetcher, settings: {} });
 
   await assert.rejects(
     () => tool().execute("id", { query: "q" }, undefined, undefined, undefined),
@@ -192,7 +198,7 @@ test("execute reports that pi's ModelRegistry.complete is required, and does no 
   };
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -228,7 +234,7 @@ test("execute falls back to the session model when synthesisModel is unset", asy
     complete: async () => ({ content: [{ type: "text", text: "Synthesized (https://x.com/alice/status/111)." }] }),
   };
 
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, fetcher, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, fetcher, settings: {} });
   const result = await tool().execute("id", { query: "q" }, undefined, undefined, {
     modelRegistry: registry,
     model: { provider: "anthropic", id: "haiku" },
@@ -248,7 +254,7 @@ test("execute requires synthesisModel", async () => {
   };
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     // No synthesisModel configured: it has no default and must not be guessed.
     settings: { twitter: {} },
@@ -287,7 +293,7 @@ test("execute surfaces a failed synthesis instead of returning an empty answer",
   };
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -323,7 +329,7 @@ test("execute dispatches mode=users to account search and cites profile URLs", a
   }) as unknown as typeof fetch;
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -352,7 +358,7 @@ test("execute dispatches mode=thread and requires a tweet reference", async () =
   }) as unknown as typeof fetch;
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -374,7 +380,7 @@ test("execute rejects an unknown mode before doing any work", async () => {
     throw new Error("no request may be made for an invalid mode");
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -398,7 +404,7 @@ test("mode=thread answers the user's question, not the tweet reference", async (
     )) as unknown as typeof fetch;
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -432,7 +438,7 @@ test("mode=users rejects parameters it cannot apply", async () => {
     throw new Error("no request may be made for an unsupported combination");
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -463,7 +469,7 @@ test("configured page limits bound the new modes", async () => {
   }) as unknown as typeof fetch;
 
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku", maxPages: 1, maxPagesCeiling: 1 } },
   });
@@ -478,7 +484,7 @@ test("a multi-word account query that finds nothing explains why", async () => {
   const { pi, tool } = captureTool();
   const fetcher = (async () => new Response(JSON.stringify({ users: [], has_next_page: false }), { status: 200 })) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -515,7 +521,7 @@ test("mode=thread fetches the referenced thread and answers from it", async () =
 
   const registry = userRegistry("Answer (https://x.com/a/status/7)");
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -557,7 +563,7 @@ test("a blank thread question is rejected before retrieval", async () => {
     throw new Error("no request may be made for a blank question");
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -572,7 +578,7 @@ test("a configured page budget above the endpoint default still works", async ()
   const fetcher = (async () =>
     new Response(JSON.stringify({ users: [{ id: "1", screen_name: "h1" }], has_next_page: false }), { status: 200 })) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku", maxPages: 21, maxPagesCeiling: 21 } },
   });
@@ -606,7 +612,7 @@ test("mode=users rejects post-only parameters loudly instead of ignoring them", 
     throw new Error("no request may be made");
   };
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher: fetcher as unknown as typeof fetch,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -657,7 +663,7 @@ test("mode=user reads an account timeline and answers from it", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -684,7 +690,7 @@ test("mode=trends reads a location's trends and cites X search URLs", async () =
     });
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -723,9 +729,9 @@ test("mode=replies and mode=quotes read a post's conversation", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
-    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+    settings: { twitter: { minRequestIntervalMs: 0, synthesisModel: "anthropic/haiku" } },
   });
 
   await tool().execute(
@@ -752,7 +758,7 @@ test("mode=replies and mode=quotes read a post's conversation", async () => {
 
 test("the new modes validate their required parameters", async () => {
   const { pi, tool } = captureTool();
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
 
   await assert.rejects(
     () => tool().execute("id", { query: "q", mode: "user" }, undefined, undefined, undefined),
@@ -786,7 +792,7 @@ test("mode=profile reads a single account profile", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -815,9 +821,9 @@ test("mode=followers and mode=followings read account graphs", async () => {
     return new Response(JSON.stringify({ ...body, has_next_page: false }), { status: 200 });
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
-    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+    settings: { twitter: { minRequestIntervalMs: 0, synthesisModel: "anthropic/haiku" } },
   });
 
   await tool().execute(
@@ -860,7 +866,7 @@ test("mode=mentions reads posts mentioning an account", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -891,9 +897,9 @@ test("mode=tweets fetches specific posts by id", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
-    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+    settings: { twitter: { minRequestIntervalMs: 0, synthesisModel: "anthropic/haiku" } },
   });
 
   await tool().execute(
@@ -918,7 +924,7 @@ test("mode=tweets fetches specific posts by id", async () => {
 
 test("P2 modes validate their required parameters", async () => {
   const { pi, tool } = captureTool();
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
 
   await assert.rejects(
     () => tool().execute("id", { query: "q", mode: "profile" }, undefined, undefined, undefined),
@@ -962,9 +968,9 @@ test("mode=community, mode=list and mode=space dispatch to their endpoints", asy
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
-    settings: { twitter: { synthesisModel: "anthropic/haiku" } },
+    settings: { twitter: { minRequestIntervalMs: 0, synthesisModel: "anthropic/haiku" } },
   });
 
   await tool().execute(
@@ -1026,7 +1032,7 @@ test("a failing synthesis model falls back to the session model", async () => {
     },
   };
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -1041,7 +1047,7 @@ test("a failing synthesis model falls back to the session model", async () => {
 
 test("P3 modes validate their required id parameters", async () => {
   const { pi, tool } = captureTool();
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
 
   await assert.rejects(
     () => tool().execute("id", { query: "q", mode: "community" }, undefined, undefined, undefined),
@@ -1077,7 +1083,7 @@ test("mode=about reads extended profile metadata", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -1105,7 +1111,7 @@ test("mode=retweeters reads users who reposted a post", async () => {
     );
   }) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -1123,7 +1129,7 @@ test("mode=retweeters reads users who reposted a post", async () => {
 
 test("about and retweeters validate their required parameters", async () => {
   const { pi, tool } = captureTool();
-  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: "key" }, settings: {} });
+  registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
 
   await assert.rejects(
     () => tool().execute("id", { query: "q", mode: "about" }, undefined, undefined, undefined),
@@ -1184,7 +1190,7 @@ test("a malformed project settings file is disclosed, not fatal (G2)", async () 
       )) as unknown as typeof fetch;
 
     registerTwitterTool(pi as any, {
-      env: { TWITTERAPI_IO_API_KEY: "key" },
+      env: { TWITTERAPI_IO_API_KEY: testCredential() },
       fetcher,
       cwd: dir,
       agentDir,
@@ -1217,7 +1223,7 @@ test("mode=tweets discloses ids the upstream did not return (G9)", async () => {
       { status: 200 },
     )) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
@@ -1249,7 +1255,7 @@ test("mode=tweets stays quiet when every requested id came back (G9)", async () 
       { status: 200 },
     )) as unknown as typeof fetch;
   registerTwitterTool(pi as any, {
-    env: { TWITTERAPI_IO_API_KEY: "key" },
+    env: { TWITTERAPI_IO_API_KEY: testCredential() },
     fetcher,
     settings: { twitter: { synthesisModel: "anthropic/haiku" } },
   });
