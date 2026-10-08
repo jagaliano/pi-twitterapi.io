@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Complete rendered-input budgeting across posts, accounts, trends and documents:
+  catalogue context/output preflight before retrieval, UTF-8-byte text estimates,
+  reserved output on every completion/repair/retry/fallback, and a clamped 60,000
+  character backstop. Whole-source/media reservations precede preprocessing;
+  actual final input is rechecked and citations follow delivered evidence.
+- User-only exact-model `imageInputBounds` declarations for image-token/geometry/
+  count/byte limits. Missing bounds now omit attachments with disclosure; bounded
+  PNG/JPEG headers and shared slots are checked. Text-only/unbounded-image
+  fallbacks remove manifests/references without altering the trusted question.
+  Native-video/STT text remains eligible; existing 700-character text caps stay.
+- Local input omissions and no-inline fallback Sources (deduplicated/capped at20)
+  are disclosed separately from upstream retrieval incompleteness.
 - Process-local, per-credential HTTP-attempt pacing across concurrent endpoints,
   first requests, pagination and retries. FIFO dispatch rechecks actual spacing;
   the largest active/previous interval is conservative across differing settings.
@@ -33,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the fetched original. Image references and speech stay under that source's
   heading; display fields retain the existing prompt guards.
 - Multiple videos from one source retain separate evidence within the video cap;
-  video-cap/deadline fallbacks are disclosed. Larger input budgets remain next.
+  video-cap/deadline fallbacks are disclosed. Complete-input budgeting is described above.
 - Valid entity destinations expand matching t.co tokens without fetching pages.
   Direct/legacy cards, accessibility alt text and article previews are guarded,
   source-scoped untrusted metadata, not destination/full-article/visual evidence.

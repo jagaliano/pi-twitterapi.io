@@ -54,9 +54,11 @@ override — and set only the keys you need:
 | Key | Required | Meaning |
 |---|---|---|
 | `synthesisModel` | no | A pi model id (`provider/model`) used to turn retrieved posts into an answer. When unset, the session model is used; if it is set but fails at runtime, the session model answers instead with a note. |
-| `enableImageUnderstanding` | no | Attach post images to the synthesis request when the model accepts image input. |
+| `enableImageUnderstanding` | no | Attach post images when the model accepts images **and** has explicit `imageInputBounds` and reserved input space. |
 | `enableVideoUnderstanding` | no | Attach video poster frames (pi's synthesis interface takes images, not video). |
-| `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4). |
+| `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4); complete-input limits can reduce delivery. |
+| `maxSynthesisChars` | no | Full rendered system/evidence/manifest character backstop (default 60,000, range 1,000–120,000). Separate context/output checks still apply. |
+| `imageInputBounds` | no | User-only exact `provider/model` declarations: positive integer `tokensPerImage`, `maxWidth`, `maxHeight`, `maxImages`; optional raw `maxBytes` (default 10 MiB). Missing bounds omit images with disclosure; no provider accounting is guessed. |
 | `maxPages` | no | Base page budget per search (default 5). |
 | `maxPagesCeiling` | no | Hard cap that `maxPages` is clamped to (default 20). |
 | `minRequestIntervalMs` | no | Minimum spacing between actual twitterapi.io dispatches (default 5000), shared per credential across concurrent endpoints, pagination and retries in this process. Raise it when throttled; lower it for a higher-QPS tier. Zero cannot bypass another active caller's interval or the previous dispatch's cooldown. |
@@ -199,6 +201,60 @@ For native video through OpenRouter instead of Google:
 > runtime. Synthesis is a real model call, so it consumes tokens on the configured
 > model.
 
+### Complete-input budget
+
+Before retrieval, the primary and fallback catalogue entries must expose valid
+`contextWindow` and `maxTokens`. A question that cannot fit the system/scaffold is
+rejected before an API read. All four synthesis paths budget their **rendered**
+input; text uses UTF-8 bytes as a conservative token estimate plus 1,024 tokens of
+message overhead. This is not an exact provider tokenizer or serialized-envelope
+guarantee. Output is explicitly reserved and passed to every physical completion,
+including retries/repair: at most 4,096 tokens, reduced by model output caps and
+one quarter of the smallest context window.
+
+Whole post/account/trend bundles or document fields are selected locally. Before
+media work, bounded transcript/visual evidence, image slots, references and the
+manifest are reserved. JSON escape worst cases for controls/lone surrogates are
+reserved separately when catalogue request-byte limits exist; already image-free
+questions are measured verbatim, not pattern-stripped. Omitted post bundles and
+unreserved video assets incur no
+media/video/STT call. Final input is checked again. Local omissions are disclosed
+separately from upstream paging limits; existing 700-character post/bio caps stay
+in place. Inline Sources come only from delivered evidence. The deduplicated
+no-inline fallback lists at most 20 Sources and discloses that cap.
+
+**Images now need an explicit declaration.** Put `imageInputBounds` in **user**
+settings, never project settings, keyed by the exact answering `provider/model`.
+For example, this declares an *assumed* 8,192-token upper bound for images within
+these dimensions; verify that assumption for your actual model/provider before
+using it (it is not a measured universal default):
+
+```json
+{
+  "twitter": {
+    "imageInputBounds": {
+      "your-provider/your-model": {
+        "tokensPerImage": 8192,
+        "maxWidth": 1568,
+        "maxHeight": 1568,
+        "maxImages": 4,
+        "maxBytes": 5242880
+      }
+    }
+  }
+}
+```
+
+Dimensions are clamped to 8,192, count to 100 and raw bytes to 10 MiB; token upper
+bounds are never clamped downward. Catalogue image-count/resize limits also apply.
+Only static PNG/JPEG byte headers with known dimensions are admitted; animated or
+unknown encodings, oversized dimensions/bytes and unreserved slots are omitted.
+This validates bounded geometry, not full image decoding. No automatic resizing
+or model-family formula is invented. Incorrect declarations can still cause
+provider rejection. Native-video/STT text evidence remains eligible without image
+bounds. Text-only or undeclared-image fallbacks retain the same selected sources
+and trusted question, but omit images, their manifest and attachment references.
+
 ### Shared request pacing
 
 Dispatches use a per-credential FIFO, not sequential tool execution. The largest
@@ -317,10 +373,10 @@ than silently ignored.
   offsets (UTC+10 and beyond) can spend free paging on the newer trim band before
   results begin. Start padding is deliberately conservative (one extra hour) so a
   winter boundary shift cannot silently drop the first hour of the local day.
-- **Images and the fallback.** Media is attached only when the model chosen to
-  synthesize accepts image input; if that model fails and a different model
-  answers, images are omitted rather than sent to a model that cannot read them,
-  and the answer says so.
+- **Images and the fallback.** Attachments require image support, explicit
+  per-model bounds, valid bounded geometry and input space. Unknown bounds omit
+  images, not native-video/STT text. Text-only or undeclared-image fallbacks also
+  omit manifests/references, with disclosure. See the complete-input budget above.
 - **Synthesis fallback.** If `twitter.synthesisModel` fails at runtime, the
   answer is retried with the model running the current session and the result
   carries a note naming the model that answered. Failures are classified so the

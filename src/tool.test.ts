@@ -1,3 +1,4 @@
+import { TEST_LIMITS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
 
@@ -138,7 +139,7 @@ test("execute retrieves through twitterapi.io and synthesizes", async () => {
 
   const registry = {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
     complete: async () => ({ content: [{ type: "text", text: "Synthesized (https://x.com/alice/status/111)." }] }),
   };
 
@@ -194,7 +195,7 @@ test("execute reports that pi's ModelRegistry.complete is required, and does no 
   // A registry shaped like pi 0.80.6: find/getAll exist, complete does not.
   const legacyRegistry = {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
   };
 
   registerTwitterTool(pi as any, {
@@ -230,14 +231,14 @@ test("execute falls back to the session model when synthesisModel is unset", asy
     )) as unknown as typeof fetch;
   const registry = {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
     complete: async () => ({ content: [{ type: "text", text: "Synthesized (https://x.com/alice/status/111)." }] }),
   };
 
   registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, fetcher, settings: {} });
   const result = await tool().execute("id", { query: "q" }, undefined, undefined, {
     modelRegistry: registry,
-    model: { provider: "anthropic", id: "haiku" },
+    model: { ...TEST_LIMITS, provider: "anthropic", id: "haiku" },
   });
 
   assert.match(result.content[0].text, /Model: anthropic\/haiku/);
@@ -249,7 +250,7 @@ test("execute requires synthesisModel", async () => {
   const fetcher = (async () => new Response(JSON.stringify({ tweets: [], has_next_page: false }), { status: 200 })) as unknown as typeof fetch;
   const registry = {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
     complete: async () => ({ content: [{ type: "text", text: "unused" }] }),
   };
 
@@ -288,7 +289,7 @@ test("execute surfaces a failed synthesis instead of returning an empty answer",
   // A provider failure resolves as an assistant message with stopReason "error".
   const registry = {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
     complete: async () => ({ stopReason: "error", errorMessage: "provider overloaded", content: [] }),
   };
 
@@ -307,7 +308,7 @@ test("execute surfaces a failed synthesis instead of returning an empty answer",
 function userRegistry(text: string) {
   return {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
     complete: async () => ({ content: [{ type: "text", text }] }),
   };
 }
@@ -411,7 +412,7 @@ test("mode=thread answers the user's question, not the tweet reference", async (
 
   const registry = {
     find: () => undefined,
-    getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+    getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
     complete: async (_model: unknown, context: { messages: Array<{ content: unknown }> }) => {
       seenPrompt = String(context.messages[0].content);
       return { content: [{ type: "text", text: "Friday (https://x.com/a/status/7)." }] };
@@ -1023,8 +1024,8 @@ test("a failing synthesis model falls back to the session model", async () => {
   const registry = {
     find: () => undefined,
     getAll: () => [
-      { provider: "anthropic", id: "haiku", input: ["text"] },
-      { provider: "anthropic", id: "sonnet", input: ["text"] },
+      { ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] },
+      { ...TEST_LIMITS, provider: "anthropic", id: "sonnet", input: ["text"] },
     ],
     complete: async (model: { id?: string }) => {
       if (model?.id === "haiku") throw new Error("provider overloaded");
@@ -1039,7 +1040,7 @@ test("a failing synthesis model falls back to the session model", async () => {
 
   const result = await tool().execute("id", { query: "q" }, undefined, undefined, {
     modelRegistry: registry,
-    model: { provider: "anthropic", id: "sonnet" },
+    model: { ...TEST_LIMITS, provider: "anthropic", id: "sonnet" },
   });
   assert.match(result.content[0].text, /Fallback answer/);
   assert.match(result.content[0].text, /produced by anthropic\/sonnet/);
@@ -1173,7 +1174,7 @@ test("a malformed project settings file is disclosed, not fatal (G2)", async () 
     let seenModel = "";
     const registry = {
       find: () => undefined,
-      getAll: () => [{ provider: "anthropic", id: "haiku", input: ["text"] }],
+      getAll: () => [{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }],
       complete: async (model: { provider: string; id: string }) => {
         seenModel = `${model.provider}/${model.id}`;
         return { content: [{ type: "text", text: "ok (https://x.com/a/status/7)." }] };

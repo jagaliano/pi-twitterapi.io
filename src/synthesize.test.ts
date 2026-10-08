@@ -1,3 +1,4 @@
+import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -25,7 +26,7 @@ import {
 import type { Tweet } from "./twitterapi.js";
 
 const CONFIG = loadTwitterConfig({});
-const MODEL: SynthesisModel = { provider: "anthropic", id: "claude-haiku", supportsImage: false };
+const MODEL: SynthesisModel = { ...TEST_LIMITS, provider: "anthropic", id: "claude-haiku", supportsImage: false };
 
 function tweet(overrides: Partial<Tweet> = {}): Tweet {
   return {
@@ -205,9 +206,9 @@ test("toBase64 encodes every padding case", () => {
 });
 
 const IMAGE_CONFIG = loadTwitterConfig({
-  twitter: { enableImageUnderstanding: true, enableVideoUnderstanding: true },
+  twitter: { enableImageUnderstanding: true, enableVideoUnderstanding: true, imageInputBounds: { "anthropic/vision": TEST_IMAGE_BOUNDS } },
 });
-const VISION_MODEL: SynthesisModel = { provider: "anthropic", id: "vision", supportsImage: true };
+const VISION_MODEL: SynthesisModel = { ...TEST_LIMITS, provider: "anthropic", id: "vision", supportsImage: true };
 const imageTweet = tweet({
   media: [
     { type: "photo", url: "https://pbs.twimg.com/photo.jpg" },
@@ -297,7 +298,7 @@ test("attachments carry a manifest tying each image to its post", async () => {
         seenImages = request.images.length;
         return "ok";
       },
-      fetchMedia: async () => ({ data: "AAAA", mimeType: "image/jpeg" }),
+      fetchMedia: async () => TEST_IMAGE,
     },
   });
   assert.equal(seenImages, 2);

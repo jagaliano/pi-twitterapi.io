@@ -1,3 +1,4 @@
+import { TEST_LIMITS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -7,7 +8,7 @@ import { buildCandidatePrompt, deriveCitations, synthesizeAnswer, type Synthesis
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/upstream-context.json", import.meta.url), "utf8"));
 const CONFIG = loadTwitterConfig({});
-const MODEL: SynthesisModel = { provider: "test", id: "context", supportsImage: false };
+const MODEL: SynthesisModel = { ...TEST_LIMITS, provider: "test", id: "context", supportsImage: false };
 const OUTER = "https://x.com/enclosing/status/100";
 const QUOTED = "https://x.com/quoted/status/200";
 const ORIGINAL = "https://x.com/original/status/300";

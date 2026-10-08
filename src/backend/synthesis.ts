@@ -1,5 +1,6 @@
 import type { TwitterSearchDetails } from "../types.js";
-import type { SynthesisRequest } from "../synthesize.js";
+import { SYNTHESIS_SYSTEM_PROMPT, type SynthesisRequest } from "../synthesize.js";
+import { InputBudget, renderedPrompt, withoutImages } from "../input-budget.js";
 import {
   assistantText,
   availableModels,
@@ -75,14 +76,14 @@ function createCompletion(
   registry: RegistryLike,
   run: NonNullable<RegistryLike["complete"]>,
   model: ModelLike,
+  budget: InputBudget,
 ): (request: SynthesisRequest) => Promise<string> {
   return async (request) => {
-    const promptText =
-      request.mediaManifest && request.images.length > 0
-        ? `${request.prompt}\n\nAttached images, in order:\n${request.mediaManifest}`
-        : request.prompt;
-    const attempt = (reasoningEffort?: string): Promise<unknown> =>
-      run.call(
+    budget.assert(request, model);
+    const promptText = renderedPrompt(request);
+    const attempt = (reasoningEffort?: string): Promise<unknown> => {
+      budget.assert(request, model);
+      return run.call(
         registry,
         model as never,
         {
@@ -105,8 +106,9 @@ function createCompletion(
             },
           ],
         } as never,
-        (reasoningEffort ? { signal: request.signal, reasoningEffort } : { signal: request.signal }) as never,
+        { signal: request.signal, maxTokens: budget.outputTokens, ...(reasoningEffort ? { reasoningEffort } : {}) } as never,
       );
+    };
     try {
       return completionText(await attempt());
     } catch (error) {
@@ -124,6 +126,7 @@ export interface SynthesisBackend {
   fetcher: typeof fetch;
   apiKey: string;
   model: ModelLike;
+  budget: InputBudget;
   /** Ready-to-use synthesis completion, with fallback and failure handling applied. */
   complete: (request: SynthesisRequest) => Promise<string>;
   /** Model that served the most recent completion after the primary failed. */
@@ -247,7 +250,7 @@ export function applyFallbackNote(backend: SynthesisBackend, details: TwitterSea
   if (backend.imagesDropped()) {
     details.notes = [
       ...(details.notes ?? []),
-      "The model that answered does not accept image input, so attached images were omitted.",
+      "The model that answered does not accept image input or lacks declared image bounds, so attached images were omitted, along with their references.",
     ];
   }
 }
@@ -256,7 +259,7 @@ export function applyFallbackNote(backend: SynthesisBackend, details: TwitterSea
  * Shared preflight: credentials, the synthesis model, and its completion. Runs
  * before any network work so a misconfiguration fails immediately and says why.
  */
-export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): SynthesisBackend {
+export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, query?: string): SynthesisBackend {
   const fetcher = options.fetcher ?? fetch;
   const apiKey = options.env?.TWITTERAPI_IO_API_KEY;
   if (!apiKey) {
@@ -306,13 +309,15 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Sy
     chain.push(resolved);
   }
 
+  const budget = new InputBudget(chain, options.config.maxSynthesisChars, options.config.imageInputBounds);
+  if (query !== undefined) budget.preflight(query, SYNTHESIS_SYSTEM_PROMPT);
   const completions = new Map<ModelLike, (request: SynthesisRequest) => Promise<string>>();
   let imagesDropped = false;
   const completionFor = (target: ModelLike): ((request: SynthesisRequest) => Promise<string>) => {
     let completion = completions.get(target);
     if (!completion) {
-      const completeModel = createCompletion(registry, run, target);
-      const supportsImage = (target.input ?? []).includes("image");
+      const completeModel = createCompletion(registry, run, target, budget);
+      const supportsImage = budget.acceptsImages(target);
       completion = supportsImage
         ? completeModel
         : async (request) => {
@@ -320,7 +325,7 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Sy
             // primary can fail and hand images to a text-only session model.
             if (request.images.length > 0 || request.mediaManifest) {
               imagesDropped = true;
-              return completeModel({ ...request, images: [], mediaManifest: undefined });
+              return completeModel(withoutImages(request));
             }
             return completeModel(request);
           };
@@ -332,7 +337,8 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Sy
   let fallback: ModelLike | undefined;
   const sleepForRetry = options.synthesisSleep ?? synthesisDelay;
 
-  const complete = async (request: SynthesisRequest): Promise<string> => {
+  const complete = async (input: SynthesisRequest): Promise<string> => {
+    const request = { ...input, maxTokens: budget.outputTokens };
     // Reset per call so a run that completes more than once never mislabels the
     // answering model from an earlier call.
     fallback = undefined;
@@ -373,6 +379,7 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions): Sy
     fetcher,
     apiKey,
     model,
+    budget,
     complete,
     get fallback(): ModelLike | undefined {
       return fallback;

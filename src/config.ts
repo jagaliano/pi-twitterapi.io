@@ -1,4 +1,5 @@
 import { availableParallelism } from "node:os";
+import { DEFAULT_MAX_SYNTHESIS_CHARS, type ImageInputBounds } from "./input-budget.js";
 
 import type { PiSettings } from "./settings.js";
 import { mergePiSettings } from "./settings.js";
@@ -73,6 +74,7 @@ export const USER_ONLY_CONFIG_KEYS = [
   "whisperVadModelPath",
   "whisperThreads",
   "whisperRealtimeFactor",
+  "imageInputBounds",
 ] as const;
 
 export interface TwitterConfig {
@@ -83,6 +85,10 @@ export interface TwitterConfig {
    * network work.
    */
   synthesisModel?: string;
+  /** Whole rendered synthesis text backstop; token/window checks are separate. */
+  maxSynthesisChars?: number;
+  /** Trusted declarations keyed by EXACT provider/model; absent means omit images. */
+  imageInputBounds?: Record<string, ImageInputBounds>;
   /** Attach image media to the synthesis request. */
   enableImageUnderstanding: boolean;
   /** Attach video poster frames to the synthesis request. */
@@ -254,6 +260,26 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function imageInputBounds(value: unknown, notes: string[]): Record<string, ImageInputBounds> {
+  const result: Record<string, ImageInputBounds> = Object.create(null);
+  if (value === undefined) return result;
+  if (!isObject(value)) { notes.push("twitter.imageInputBounds must be an exact provider/model object; ignoring it."); return result; }
+  for (const [model, raw] of Object.entries(value)) {
+    if (!/^[A-Za-z0-9_-]+\/[^\s\u0000-\u001f]+$/.test(model) || !isObject(raw) || ["tokensPerImage","maxWidth","maxHeight","maxImages"].some(key => typeof raw[key] !== "number" || !Number.isSafeInteger(raw[key]) || (raw[key] as number) <= 0)) {
+      notes.push(`twitter.imageInputBounds for ${model} is invalid; images for that model remain disabled.`);
+      continue;
+    }
+    result[model] = {
+      tokensPerImage: intInRange(raw.tokensPerImage, 1, 1, Number.MAX_SAFE_INTEGER, `imageInputBounds.${model}.tokensPerImage`, notes),
+      maxWidth: intInRange(raw.maxWidth, 1, 1, 8_192, `imageInputBounds.${model}.maxWidth`, notes),
+      maxHeight: intInRange(raw.maxHeight, 1, 1, 8_192, `imageInputBounds.${model}.maxHeight`, notes),
+      maxImages: intInRange(raw.maxImages, 1, 1, 100, `imageInputBounds.${model}.maxImages`, notes),
+      maxBytes: intInRange(raw.maxBytes, 10 * 1024 * 1024, 1, 10 * 1024 * 1024, `imageInputBounds.${model}.maxBytes`, notes),
+    };
+  }
+  return result;
+}
+
 function twitterBlock(settings: PiSettings | undefined): Record<string, unknown> {
   return settings && isObject(settings.twitter) ? settings.twitter : {};
 }
@@ -276,7 +302,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
   const ignored = USER_ONLY_CONFIG_KEYS.filter((key) => project[key] !== undefined);
   if (ignored.length > 0) {
     configNotes.push(
-      `twitter.${ignored.join(", twitter.")} from project settings was ignored: executable paths, endpoints and ` +
+      `twitter.${ignored.join(", twitter.")} from project settings was ignored: executable paths, endpoints, image bounds and ` +
         "credentials are read from user settings only.",
     );
   }
@@ -332,6 +358,8 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
 
   return {
     synthesisModel,
+    maxSynthesisChars: intInRange(config.maxSynthesisChars, DEFAULT_MAX_SYNTHESIS_CHARS, 1_000, 120_000, "maxSynthesisChars", configNotes),
+    imageInputBounds: imageInputBounds(user.imageInputBounds, configNotes),
     enableImageUnderstanding: config.enableImageUnderstanding === true,
     enableVideoUnderstanding,
     enableVideoProcessing: videoRequested && enableVideoUnderstanding,

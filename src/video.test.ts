@@ -444,6 +444,22 @@ test("processVideo extracts frames and never hands ffmpeg a URL (B2/F4)", async 
   });
 });
 
+test("zero input-budget frame reservation skips extraction but keeps STT", async () => {
+  await withTempDir(async dir => {
+    const { fetcher, calls } = videoFetcher({ sttText: "Reserved audio is still transcribed correctly." });
+    const { exec, invocations } = fakeExec();
+    const result = await processVideo({ postUrl: "https://x.com/a/status/1", media: videoMedia(),
+      config: loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" } }),
+      deps: { fetcher, env: { STT_API_KEY: "frame-reservation-fixture" }, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 60_000, modelSupportsImage: true, allowFrames: false,
+    });
+    assert.equal(result.frames.length, 0);
+    assert.ok(!invocations.some(args => args.some(arg => arg.includes("frame-"))));
+    assert.equal(result.transcript, "Reserved audio is still transcribed correctly.");
+    assert.ok(calls.some(url => url.includes("/audio/transcriptions")));
+  });
+});
+
 test("processVideo skips STT for gifs and discloses it (M11)", async () => {
   await withTempDir(async (dir) => {
     const { fetcher } = videoFetcher();

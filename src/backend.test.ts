@@ -1,3 +1,4 @@
+import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
 
@@ -33,8 +34,8 @@ function registry(models: Array<{ provider: string; id: string; input?: string[]
 
 test("resolveModel accepts provider/model and bare ids", () => {
   const models = registry([
-    { provider: "anthropic", id: "claude-haiku", input: ["text", "image"] },
-    { provider: "openai", id: "gpt", input: ["text"] },
+    { ...TEST_LIMITS, provider: "anthropic", id: "claude-haiku", input: ["text", "image"] },
+    { ...TEST_LIMITS, provider: "openai", id: "gpt", input: ["text"] },
   ]);
   assert.equal(resolveModel(models, "anthropic/claude-haiku")?.provider, "anthropic");
   assert.equal(resolveModel(models, "gpt")?.provider, "openai");
@@ -43,15 +44,15 @@ test("resolveModel accepts provider/model and bare ids", () => {
 });
 
 test("resolveModel falls back to a scan when find() does not know the pair", () => {
-  const models = registry([{ provider: "custom", id: "thing" }]);
+  const models = registry([{ ...TEST_LIMITS, provider: "custom", id: "thing" }]);
   const sparse: RegistryLike = { find: () => undefined, getAll: models.getAll, complete: models.complete };
   assert.equal(resolveModel(sparse, "custom/thing")?.id, "thing");
 });
 
 test("resolveModel rejects an ambiguous bare id and points at provider/model", () => {
   const models = registry([
-    { provider: "a", id: "same" },
-    { provider: "b", id: "same" },
+    { ...TEST_LIMITS, provider: "a", id: "same" },
+    { ...TEST_LIMITS, provider: "b", id: "same" },
   ]);
   assert.throws(() => resolveModel(models, "same"), /ambiguous across providers \(a, b\)/);
 });
@@ -60,9 +61,9 @@ test("a provider-qualified short form resolves to a namespaced model id", () => 
   // Command Code exposes `deepseek/deepseek-v4.1-flash` as the model id under
   // provider `commandcode`, and pi's own --model accepts `commandcode/deepseek-v4.1-flash`.
   const models = registry([
-    { provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" },
-    { provider: "commandcode", id: "deepseek/deepseek-v4-flash" },
-    { provider: "anthropic", id: "claude-haiku" },
+    { ...TEST_LIMITS, provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" },
+    { ...TEST_LIMITS, provider: "commandcode", id: "deepseek/deepseek-v4-flash" },
+    { ...TEST_LIMITS, provider: "anthropic", id: "claude-haiku" },
   ]);
 
   assert.equal(resolveModel(models, "commandcode/deepseek-v4.1-flash")?.id, "deepseek/deepseek-v4.1-flash");
@@ -76,8 +77,8 @@ test("a provider-qualified short form resolves to a namespaced model id", () => 
 
 test("an ambiguous short form is rejected with its candidates", () => {
   const models = registry([
-    { provider: "commandcode", id: "vendor/deepseek-v4.1-flash" },
-    { provider: "commandcode", id: "other/deepseek-v4.1-flash" },
+    { ...TEST_LIMITS, provider: "commandcode", id: "vendor/deepseek-v4.1-flash" },
+    { ...TEST_LIMITS, provider: "commandcode", id: "other/deepseek-v4.1-flash" },
   ]);
   assert.throws(() => resolveModel(models, "commandcode/deepseek-v4.1-flash"), /matches several models/);
 });
@@ -94,16 +95,16 @@ test("a missing synthesis model reports what is actually available", async () =>
         config,
         env: { TWITTERAPI_IO_API_KEY: testCredential() },
         fetcher: neverCalled,
-        registry: registry([{ provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" }]),
+        registry: registry([{ ...TEST_LIMITS, provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" }]),
       }),
     /Known models for "commandcode": commandcode\/deepseek\/deepseek-v4\.1-flash/,
   );
 });
 
 test("toSynthesisModel reports image support from the model input list", () => {
-  assert.equal(toSynthesisModel({ provider: "anthropic", id: "vision", input: ["text", "image"] }).supportsImage, true);
-  assert.equal(toSynthesisModel({ provider: "openai", id: "text-only", input: ["text"] }).supportsImage, false);
-  assert.equal(toSynthesisModel({ provider: "openai", id: "unknown" }).supportsImage, false);
+  assert.equal(toSynthesisModel({ ...TEST_LIMITS, provider: "anthropic", id: "vision", input: ["text", "image"] }).supportsImage, true);
+  assert.equal(toSynthesisModel({ ...TEST_LIMITS, provider: "openai", id: "text-only", input: ["text"] }).supportsImage, false);
+  assert.equal(toSynthesisModel({ ...TEST_LIMITS, provider: "openai", id: "unknown" }).supportsImage, false);
 });
 
 test("assistantText joins text blocks and ignores everything else", () => {
@@ -267,7 +268,7 @@ test("notes the pages spent trimming out-of-window posts", async () => {
     );
   }) as unknown as typeof fetch;
 
-  const reg = registry([{ provider: "anthropic", id: "haiku", input: ["text"] }]);
+  const reg = registry([{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }]);
   reg.complete = async () => ({ content: [{ type: "text", text: "cited (https://x.com/a/status/2)" }] });
 
   const { details, markdown } = await runTwitterApiSearch({
@@ -298,7 +299,7 @@ test("an explicit invalid page budget is rejected rather than clamped into valid
           config,
           env: { TWITTERAPI_IO_API_KEY: testCredential() },
           fetcher: neverCalled,
-          registry: registry([{ provider: "anthropic", id: "haiku", input: ["text"] }]),
+          registry: registry([{ ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] }]),
           maxPages: bad,
         }),
       /maxPages must be a positive integer/,
@@ -328,8 +329,8 @@ function chainRegistry(
   return {
     find: () => undefined,
     getAll: () => [
-      { provider: "anthropic", id: "haiku", input: ["text"] },
-      { provider: "anthropic", id: "sonnet", input: ["text"] },
+      { ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text"] },
+      { ...TEST_LIMITS, provider: "anthropic", id: "sonnet", input: ["text"] },
     ],
     complete: complete as never,
   };
@@ -371,13 +372,13 @@ test("classifySynthesisError maps provider failures to kinds", () => {
 });
 
 test("a text-only fallback does not receive images", async () => {
-  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku", enableImageUnderstanding: true } });
+  const config = loadTwitterConfig({ twitter: { synthesisModel: "anthropic/haiku", enableImageUnderstanding: true, imageInputBounds: { "anthropic/haiku": TEST_IMAGE_BOUNDS } } });
   const seen: { model: string; hasImage: boolean }[] = [];
   const registry = {
     find: () => undefined,
     getAll: () => [
-      { provider: "anthropic", id: "haiku", input: ["text", "image"] },
-      { provider: "anthropic", id: "sonnet", input: ["text"] },
+      { ...TEST_LIMITS, provider: "anthropic", id: "haiku", input: ["text", "image"] },
+      { ...TEST_LIMITS, provider: "anthropic", id: "sonnet", input: ["text"] },
     ],
     complete: async (model: { id?: string }, context: { messages?: { content?: unknown }[] }) => {
       const content = context?.messages?.[0]?.content;
@@ -391,7 +392,7 @@ test("a text-only fallback does not receive images", async () => {
   const fetcher = (async (input: string | URL) => {
     const url = String(input);
     if (url.includes("/media/")) {
-      return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "image/jpeg" } });
+      return new Response(Buffer.from(TEST_IMAGE.data, "base64"), { status: 200, headers: { "content-type": TEST_IMAGE.mimeType } });
     }
     return new Response(
       JSON.stringify({

@@ -86,6 +86,8 @@ export interface ProcessVideoInput {
   deadline: number;
   /** Whether the synthesis model accepts image input (frames). */
   modelSupportsImage: boolean;
+  /** Caller reserved attachment space; false skips frame extraction, not native/STT. */
+  allowFrames?: boolean;
 }
 
 /** HEAD probes are cheap (~0.1 s), but one hanging request must not eat the phase. */
@@ -1401,7 +1403,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     // Tier 2 — frames (only when the synthesis model accepts images). A trimmed
     // clip is bounded by construction, so it supplies the frame timing it needs.
     const frameDurationMs = durationKnown ? (durationMs as number) : trimmed ? maxSeconds * 1000 : undefined;
-    if (!nativeMethod && modelSupportsImage && haveFfmpeg && frameDurationMs) {
+    if (!nativeMethod && modelSupportsImage && input.allowFrames !== false && haveFfmpeg && frameDurationMs) {
       try {
         const timing = frameTiming(frameDurationMs, config.maxFrames, maxSeconds);
         const files = await extractFrames(ctx, mediaFile, dir, timing, () => remaining(deadline, now));

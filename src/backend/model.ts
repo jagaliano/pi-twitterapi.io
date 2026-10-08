@@ -1,4 +1,5 @@
 import type { TwitterConfig } from "../config.js";
+import type { BudgetModel } from "../input-budget.js";
 import type { SynthesisModel } from "../synthesize.js";
 import type { ExecFn } from "./video.js";
 
@@ -19,7 +20,7 @@ export interface RegistryLike {
   complete?(model: never, context: never, options?: never): Promise<unknown>;
 }
 
-export interface ModelLike {
+export interface ModelLike extends BudgetModel {
   provider: string;
   id: string;
   input?: readonly string[];
@@ -84,7 +85,7 @@ export function availableModels(known: readonly ModelLike[], provider: string | 
 }
 
 export function toSynthesisModel(model: ModelLike): SynthesisModel {
-  return { provider: model.provider, id: model.id, supportsImage: (model.input ?? []).includes("image") };
+  return { provider: model.provider, id: model.id, supportsImage: (model.input ?? []).includes("image"), contextWindow: model.contextWindow, maxTokens: model.maxTokens, inputLimits: model.inputLimits };
 }
 
 /** Concatenate the text blocks of an assistant message. */

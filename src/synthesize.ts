@@ -9,6 +9,7 @@
  * candidate set is counted and disclosed instead of being published as a source.
  */
 import type { TwitterSearchDetails } from "./types.js";
+import { InputBudget } from "./input-budget.js";
 import type { TwitterConfig } from "./config.js";
 import type { BoundProcessVideo } from "./backend/video.js";
 import { metadataUrl, statusIdFromUrl } from "./twitterapi.js";
@@ -25,19 +26,36 @@ export interface SynthesisModel {
   id: string;
   /** Whether the model advertises image input (`model.input` includes "image"). */
   supportsImage: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  inputLimits?: import("./input-budget.js").BudgetModel["inputLimits"];
 }
 
 export interface SynthesisRequest {
   model: SynthesisModel;
   system: string;
   prompt: string;
+  /** Same delivered sources/question rendered without attachment references. */
+  textOnlyPrompt?: string;
   images: ImageAttachment[];
   /** Ordered description of `images`, so an attachment can be traced to its post. */
   mediaManifest?: string;
   signal?: AbortSignal;
+  /** Explicit output reserve, applied to EVERY physical completion. */
+  maxTokens?: number;
+}
+
+interface MediaInputPlan {
+  imageSlots: number;
+  videoAssets: ReadonlySet<TweetMedia>;
+  budget: InputBudget;
 }
 
 export interface SynthesisDeps {
+  /** Resolved complete answering/fallback chain, before retrieval. */
+  inputBudget?: InputBudget;
+  /** Collector admission reserved before processing; never allocated per source. */
+  mediaInputPlan?: MediaInputPlan;
   /** Run one completion and return the assistant text. */
   complete(request: SynthesisRequest): Promise<string>;
   /**
@@ -705,6 +723,10 @@ export async function collectMedia(
   const clock = deps.now ?? Date.now;
   const fetchMedia = deps.fetchMedia;
   const processVideo = config.enableVideoProcessing ? deps.processVideo : undefined;
+  const inputPlan = deps.mediaInputPlan;
+  const admitsImage = () => !inputPlan || images.length < inputPlan.imageSlots;
+  const checkedImage = (image: ImageAttachment) => !inputPlan || inputPlan.budget.acceptsImage(image);
+  let inputImageSkips = 0;
   // Bound attempts as well as accepted attachments: dead URLs cannot bypass caps.
   const attemptCap = Math.max(1, config.maxMediaPerSearch) * 3;
   const budgetMs = deps.mediaBudgetMs ?? MEDIA_PHASE_BUDGET_MS;
@@ -742,6 +764,7 @@ export async function collectMedia(
   const fetchImage = async (candidate: MediaCandidate, limit: number): Promise<boolean> => {
     const { media } = candidate;
     if (!model.supportsImage || !fetchMedia || !media.url) return false;
+    if (inputPlan && inputPlan.imageSlots === 0) return false;
     if (downloadedImages.has(media.url)) {
       const index = downloadedImages.get(media.url);
       if (index === undefined) return false;
@@ -749,6 +772,7 @@ export async function collectMedia(
       referenceImage(candidate, index);
       return true;
     }
+    if (!admitsImage()) { inputImageSkips++; return false; }
     if (attachments >= config.maxMediaPerSearch) {
       skippedForCap++;
       return false;
@@ -759,9 +783,10 @@ export async function collectMedia(
     }
     attempts++;
     const attachment = await fetchMedia(media.url, Math.max(1, limit - clock()));
-    if (!attachment) {
+    if (!attachment || !checkedImage(attachment)) {
+      if (attachment) inputImageSkips++;
+      else failed++;
       downloadedImages.set(media.url, undefined);
-      failed++;
       return false;
     }
     const index = images.length;
@@ -789,22 +814,30 @@ export async function collectMedia(
   let videosOverBudget = 0;
   for (const candidate of candidates.filter((item) => isVideoMedia(item.media))) {
     const displayUrl = sourceUrl(candidate.bindings[0].sourcePostUrl, "post") ?? NO_PERMALINK;
+    if (processVideo && inputPlan && !inputPlan.videoAssets.has(candidate.media)) {
+      await fetchPoster(candidate);
+      continue;
+    }
     if (processVideo && videosStarted < config.maxVideosPerSearch && clock() < videoPhaseDeadline) {
       videosStarted++;
       try {
         const result = await processVideo({
           postUrl: displayUrl, media: candidate.media, config,
           deadline: videoPhaseDeadline, modelSupportsImage: model.supportsImage,
+          allowFrames: admitsImage() && (!inputPlan || inputPlan.imageSlots > 0),
         });
         const frames = model.supportsImage ? result.frames.slice(0, config.maxFrames) : [];
+        let acceptedFrames = 0;
         for (const frame of frames) {
+          if (!admitsImage() || !checkedImage(frame)) { inputImageSkips++; continue; }
+          acceptedFrames++;
           const index = images.length;
           images.push({ data: frame.data, mimeType: frame.mimeType });
           labels.push(untrustedInline(`${mediaLabel(candidate)}; processor frame label: ${frame.label}`, 2_000));
           referenceImage(candidate, index);
         }
         notes.push(...result.notes);
-        const gotEvidence = frames.length > 0 || Boolean(result.transcript) || Boolean(result.visualNotes);
+        const gotEvidence = acceptedFrames > 0 || Boolean(result.transcript) || Boolean(result.visualNotes);
         if (gotEvidence) {
           for (const binding of candidate.bindings) evidence.push({
             postUrl: binding.sourcePostUrl ?? "", postId: binding.sourcePostId, binding,
@@ -850,8 +883,85 @@ export async function collectMedia(
         `${Math.round(budgetMs / 1_000)}s per search so one media-heavy topic cannot stall the call.`,
     );
   }
+  if (inputImageSkips) notes.push(`${inputImageSkips} image(s) omitted by complete-input slot/raster/dimension/byte bounds.`);
   if (failed > 0) notes.push(`${failed} media item(s) could not be downloaded and were skipped.`);
   return { images, labels, notes, available, evidence, references };
+}
+
+function synthesisBudget(model: SynthesisModel, deps: SynthesisDeps, config?: TwitterConfig): InputBudget {
+  return deps.inputBudget ?? new InputBudget([model], config?.maxSynthesisChars, config?.imageInputBounds);
+}
+
+function localOmissionNotes(omitted: number, kind: string): string[] {
+  return omitted ? [`Complete-input budget omitted ${omitted} retrieved ${kind} locally; upstream retrieval and local selection are separate limits.`] : [];
+}
+
+/** Never truncate the trusted question or split a source into an uncitable fragment. */
+function retainBundles<T>(items: T[], render: (items: T[]) => string, system: string, budget: InputBudget): T[] {
+  if (!budget.fits({ system, prompt: render([]), images: [] })) throw new Error("twitter input budget: question/system scaffold does not fit.");
+  const retained: T[] = [];
+  for (const item of items) if (budget.fits({ system, prompt: render([...retained, item]), images: [] })) retained.push(item);
+  if (items.length && !retained.length) throw new Error("twitter input budget: no whole retrieved source/field fits; reduce the question or use a larger context.");
+  return retained;
+}
+
+/** Reserve renderer-worst-case evidence BEFORE any paid video/model work. */
+function preparePostInput(query: string, input: Tweet[], config: TwitterConfig, model: SynthesisModel, deps: SynthesisDeps, budget: InputBudget, now: () => number): { tweets: Tweet[]; plan: MediaInputPlan; notes: string[] } {
+  const system = SYNTHESIS_SYSTEM_PROMPT;
+  const forecast = (tweets: Tweet[], videos: ReadonlySet<TweetMedia>, slots: number) => {
+    const candidates = mediaCandidates(tweets).candidates;
+    const bindings = candidates.filter(candidate => videos.has(candidate.media)).flatMap(candidate => candidate.bindings);
+    const references: MediaReference[] = candidates.flatMap(candidate => candidate.bindings.flatMap(binding => Array.from({ length: slots }, (_, imageIndex) => ({ binding, imageIndex }))));
+    const render = (char: string) => {
+      const evidence: VideoEvidenceBlock[] = bindings.map(binding => ({ binding, postUrl: binding.sourcePostUrl ?? "", method: char.repeat(101), transcript: char.repeat(MAX_TRANSCRIPT_CHARS + 1), visualNotes: char.repeat(MAX_VISUAL_NOTES_CHARS + 1) }));
+      return { prompt: buildCandidatePrompt(query, tweets, evidence, { now, mediaReferences: references }), textOnlyPrompt: buildCandidatePrompt(query, tweets, evidence, { now }), mediaManifest: slots ? Array.from({ length: slots }, (_, index) => `${index + 1}. ${char.repeat(2_001)}`).join("\n") : undefined };
+    };
+    // Three UTF-8 bytes/code unit bound token text; six JSON bytes/code unit
+    // bound controls/lone surrogates independently, without charging JSON
+    // escape overhead as model tokens or silently normalizing actual evidence.
+    return { system, ...render("界"), images: Array.from({ length: slots }, () => ({} as ImageAttachment)), jsonForecast: render("\u0000") };
+  };
+  let tweets: Tweet[] = [], videos = new Set<TweetMedia>(), slots = 0;
+  if (!budget.fits(forecast([], videos, 0))) throw new Error("twitter input budget: question/system scaffold does not fit.");
+  for (const tweet of input) {
+    const next = [...tweets, tweet], candidates = mediaCandidates(next).candidates;
+    const retainedVideos = new Set(candidates.filter(candidate => videos.has(candidate.media)).map(candidate => candidate.media));
+    if (!budget.fits(forecast(next, retainedVideos, slots), slots)) continue;
+    tweets = next; videos = retainedVideos;
+    if (config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo) {
+      for (const candidate of candidates.filter(candidate => isVideoMedia(candidate.media))) {
+        if (videos.has(candidate.media) || videos.size >= config.maxVideosPerSearch) continue;
+        const proposed = new Set([...videos, candidate.media]);
+        if (budget.fits(forecast(tweets, proposed, slots), slots)) videos = proposed;
+      }
+    }
+    if (model.supportsImage && budget.imageBounds) {
+      const photos = candidates.filter(candidate => !isVideoMedia(candidate.media)).length;
+      const videoCount = candidates.filter(candidate => isVideoMedia(candidate.media)).length;
+      const potential = Math.min(budget.imageBounds.maxImages, Math.min(config.maxMediaPerSearch, (config.enableImageUnderstanding ? photos : 0) + (config.enableVideoUnderstanding ? videoCount : 0)) + videos.size * config.maxFrames);
+      while (slots < potential && budget.fits(forecast(tweets, videos, slots + 1), slots + 1)) slots++;
+    }
+  }
+  if (input.length && !tweets.length) throw new Error("twitter input budget: no whole retrieved post bundle fits; reduce the question or use a larger context.");
+  const notes = localOmissionNotes(input.length - tweets.length, "post bundle(s)");
+  const candidates = mediaCandidates(tweets).candidates;
+  const requested = config.enableImageUnderstanding || config.enableVideoUnderstanding;
+  if (requested && candidates.length && (!budget.imageBounds || !slots)) notes.push("Complete-input budget omitted image attachments: no space or no explicit imageInputBounds for the configured model. Text/native-video speech and visual evidence remain eligible.");
+  const skippedVideos = config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo ? candidates.filter(candidate => isVideoMedia(candidate.media) && !videos.has(candidate.media)).length : 0;
+  if (skippedVideos) notes.push(`Complete-input budget did not reserve preprocessing for ${skippedVideos} video asset(s); no video/STT provider call was made for those assets.`);
+  if (contextPosts(tweets).some(tweet => postText(tweet).length > MAX_TEXT_CHARS)) notes.push(`Post text is truncated at the existing ${MAX_TEXT_CHARS}-character cap; long-text expansion is not part of this input-budget change.`);
+  return { tweets, plan: { imageSlots: slots, videoAssets: videos, budget }, notes };
+}
+
+function deriveAllowedCitations(text: string, sources: string[]): string[] {
+  const allowed = new Map(sources.map(url => [normalizeUrl(url), url]));
+  return [...new Set(extractUrls(text).map(url => allowed.get(normalizeUrl(url))).filter((url): url is string => Boolean(url)))];
+}
+
+function fallbackSources(sources: string[], notes: string[]): string[] {
+  const unique = [...new Set(sources)];
+  if (unique.length > 20) notes.push(`No-inline Sources is capped at 20; ${unique.length - 20} additional delivered source URL(s) were omitted from that fallback list.`);
+  return unique.slice(0, 20);
 }
 
 export interface SynthesizeOptions {
@@ -870,7 +980,8 @@ export interface SynthesizeOptions {
 
 /** Run the synthesis hop and return contract-shaped details. */
 export async function synthesizeAnswer(options: SynthesizeOptions): Promise<TwitterSearchDetails> {
-  const { query, tweets, config, model, deps, signal, incomplete } = options;
+  const { query, tweets: retrievedTweets, config, model, deps, signal, incomplete } = options;
+  let tweets = retrievedTweets;
   if (tweets.length === 0) {
     return {
       query,
@@ -888,36 +999,43 @@ export async function synthesizeAnswer(options: SynthesizeOptions): Promise<Twit
     };
   }
 
-  const media = await collectMedia(tweets, config, model, deps);
-  const text = await deps.complete({
+  const budget = synthesisBudget(model, deps, config);
+  const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
+  const selection = preparePostInput(query, tweets, config, model, deps, budget, now);
+  tweets = selection.tweets;
+  const media = await collectMedia(tweets, config, model, { ...deps, mediaInputPlan: selection.plan });
+  const request: SynthesisRequest = {
     model,
     system: SYNTHESIS_SYSTEM_PROMPT,
-    prompt: buildCandidatePrompt(query, tweets, media.evidence, { now: deps.now, mediaReferences: media.references }),
+    prompt: buildCandidatePrompt(query, tweets, media.evidence, { now, mediaReferences: media.references }),
+    textOnlyPrompt: buildCandidatePrompt(query, tweets, media.evidence, { now }),
     images: media.images,
     // Without this, flattened attachments lose their provenance: the model sees
     // images with no way to tell which post each came from, and downloads that
     // failed shift the positions of the rest.
     mediaManifest:
       media.labels.length > 0 ? media.labels.map((label, index) => `${index + 1}. ${label}`).join("\n") : undefined,
-    signal,
-  });
+    signal, maxTokens: budget.outputTokens,
+  };
+  budget.assert(request);
+  const text = await deps.complete(request);
 
   const { citations: citedInline, fabricated } = deriveCitations(text, tweets);
   const sources = contextPosts(tweets);
   const validSources = [...new Set(sources.map((tweet) => sourceUrl(tweet.url, "post")).filter((url): url is string => Boolean(url)))];
   const rejectedSources = sources.filter((tweet) => tweet.url && !sourceUrl(tweet.url, "post")).length;
-  const notes = [...media.notes, ...omittedSourceNote(rejectedSources)];
+  const notes = [...selection.notes, ...media.notes, ...omittedSourceNote(rejectedSources)];
   // When the model cites nothing inline we list the posts actually retrieved
   // rather than emitting an empty Sources section. Only permalinks we fetched
   // are ever listed — the fallback cannot invent anything.
   const citations =
     citedInline.length > 0
       ? citedInline
-      : validSources;
+      : fallbackSources(validSources, notes);
 
   if (citedInline.length === 0 && citations.length > 0) {
     notes.push(
-      `The answer cited no permalinks inline; Sources lists the ${citations.length} post(s) retrieved for this query.`,
+      `The answer cited no permalinks inline; Sources lists ${citations.length} delivered post source(s) for this query.`,
     );
   }
   if (fabricated.length > 0) {
@@ -1083,7 +1201,8 @@ export interface SynthesizeTrendsOptions {
 
 /** Synthesis hop for a trends lookup; mirrors the post/account contract. */
 export async function synthesizeTrends(options: SynthesizeTrendsOptions): Promise<TwitterSearchDetails> {
-  const { query, trends, model, deps, signal } = options;
+  const { query, trends: retrievedTrends, model, deps, signal } = options;
+  let trends = retrievedTrends;
   if (trends.length === 0) {
     return {
       query,
@@ -1095,23 +1214,24 @@ export async function synthesizeTrends(options: SynthesizeTrendsOptions): Promis
     };
   }
 
-  const text = await deps.complete({
-    model,
-    system: TREND_SYNTHESIS_SYSTEM_PROMPT,
-    prompt: buildTrendCandidatePrompt(query, trends, { now: deps.now }),
-    images: [],
-    signal,
-  });
+  const budget = synthesisBudget(model, deps);
+  const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
+  trends = retainBundles(trends, items => buildTrendCandidatePrompt(query, items, { now }), TREND_SYNTHESIS_SYSTEM_PROMPT, budget);
+  const request: SynthesisRequest = { model, system: TREND_SYNTHESIS_SYSTEM_PROMPT, prompt: buildTrendCandidatePrompt(query, trends, { now }), images: [], signal, maxTokens: budget.outputTokens };
+  budget.assert(request);
+  const text = await deps.complete(request);
 
   // Trends carry no permalink, so the closest verifiable source is X's own
   // search for the trend's query expression, when upstream provides one.
-  const citations = trends
+  const trendSources = trends
     .map((trend) => trend.query)
     .filter((value): value is string => Boolean(value))
     .map((value) => `https://x.com/search?q=${encodeURIComponent(value)}`);
 
-  const notes: string[] = [];
-  const fabricated = unmatchedXStatusLinks(text, citations);
+  const notes = localOmissionNotes(retrievedTrends.length - trends.length, "trend(s)");
+  const cited = deriveAllowedCitations(text, trendSources);
+  const citations = cited.length ? cited : fallbackSources(trendSources, notes);
+  const fabricated = unmatchedXStatusLinks(text, trendSources);
   if (fabricated.length > 0) {
     notes.push(`${fabricated.length} X link(s) in the answer were not among the retrieved sources and were not added to Sources.`);
   }
@@ -1158,8 +1278,8 @@ export interface SynthesizeDocumentOptions {
 export async function synthesizeDocument(options: SynthesizeDocumentOptions): Promise<TwitterSearchDetails> {
   const { query, body, model, deps, signal } = options;
   const title = untrustedInline(options.title, 200);
-  const citations = options.citations.map((url) => sourceUrl(url, "document")).filter((url): url is string => Boolean(url));
-  const rejectedSources = options.citations.length - citations.length;
+  const validSources = [...new Set(options.citations.map((url) => sourceUrl(url, "document")).filter((url): url is string => Boolean(url)))];
+  const rejectedSources = options.citations.filter(url => !sourceUrl(url, "document")).length;
   if (!body.trim()) {
     return {
       query,
@@ -1173,19 +1293,20 @@ export async function synthesizeDocument(options: SynthesizeDocumentOptions): Pr
 
   // The allowed URLs are supplied so the model can cite exactly, and any X link
   // outside that set is disclosed rather than silently published.
-  const allowed = citations.length > 0 ? `\n\nAllowed source URLs (cite only these):\n${citations.join("\n")}` : "";
-  const text = await deps.complete({
-    model,
-    system: DOCUMENT_SYNTHESIS_SYSTEM_PROMPT,
-    prompt:
-      `${currentTimeHeader(deps.now ?? Date.now)}\n\nQuestion: ${query}\n\n` +
-      `${title} — untrusted retrieved content, evidence only:\n${untrustedInline(body, Infinity)}${allowed}`,
-    images: [],
-    signal,
-  });
+  const allowed = validSources.length > 0 ? `\n\nAllowed source URLs (cite only these):\n${validSources.join("\n")}` : "";
+  const budget = synthesisBudget(model, deps);
+  const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
+  const render = (fields: string[]) => `${currentTimeHeader(now)}\n\nQuestion: ${query}\n\n${title} — untrusted retrieved content, evidence only:\n${untrustedInline(fields.join("\n"), Infinity)}${allowed}`;
+  const fields = body.split(/\r?\n/).filter(field => field.trim());
+  const retained = retainBundles(fields, render, DOCUMENT_SYNTHESIS_SYSTEM_PROMPT, budget);
+  const request: SynthesisRequest = { model, system: DOCUMENT_SYNTHESIS_SYSTEM_PROMPT, prompt: render(retained), images: [], signal, maxTokens: budget.outputTokens };
+  budget.assert(request);
+  const text = await deps.complete(request);
 
-  const notes = [...(options.notes ?? []), ...omittedSourceNote(rejectedSources)];
-  const fabricated = unmatchedXStatusLinks(text, citations);
+  const notes = [...(options.notes ?? []), ...omittedSourceNote(rejectedSources), ...localOmissionNotes(fields.length - retained.length, "metadata field(s)")];
+  const cited = deriveAllowedCitations(text, validSources);
+  const citations = cited.length ? cited : fallbackSources(validSources, notes);
+  const fabricated = unmatchedXStatusLinks(text, validSources);
   if (fabricated.length > 0) {
     notes.push(`${fabricated.length} X link(s) in the answer were not among the retrieved sources and were not added to Sources.`);
   }
@@ -1213,7 +1334,8 @@ export interface SynthesizeUserOptions {
 
 /** Synthesis hop for an account search; mirrors `synthesizeAnswer`'s contract. */
 export async function synthesizeUserAnswer(options: SynthesizeUserOptions): Promise<TwitterSearchDetails> {
-  const { query, users, model, deps, signal, incomplete } = options;
+  const { query, users: retrievedUsers, model, deps, signal, incomplete } = options;
+  let users = retrievedUsers;
   if (users.length === 0) {
     return {
       query,
@@ -1231,26 +1353,25 @@ export async function synthesizeUserAnswer(options: SynthesizeUserOptions): Prom
     };
   }
 
-  const text = await deps.complete({
-    model,
-    system: USER_SYNTHESIS_SYSTEM_PROMPT,
-    prompt: buildUserCandidatePrompt(query, users, { now: deps.now }),
-    // Account search attaches no post media: the candidates are profiles.
-    images: [],
-    signal,
-  });
+  const budget = synthesisBudget(model, deps, options.config);
+  const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
+  users = retainBundles(users, items => buildUserCandidatePrompt(query, items, { now }), USER_SYNTHESIS_SYSTEM_PROMPT, budget);
+  const request: SynthesisRequest = { model, system: USER_SYNTHESIS_SYSTEM_PROMPT, prompt: buildUserCandidatePrompt(query, users, { now }), images: [], signal, maxTokens: budget.outputTokens };
+  budget.assert(request);
+  const text = await deps.complete(request);
 
   const { citations: citedInline, fabricated } = deriveUserCitations(text, users);
   const validSources = users.map((user) => sourceUrl(user.profileUrl, "profile")).filter((url): url is string => Boolean(url));
-  const notes = omittedSourceNote(users.filter((user) => !sourceUrl(user.profileUrl, "profile")).length);
+  const notes = [...localOmissionNotes(retrievedUsers.length - users.length, "account(s)"), ...omittedSourceNote(users.filter((user) => !sourceUrl(user.profileUrl, "profile")).length)];
+  if (users.some(user => (user.bio?.length ?? 0) > MAX_TEXT_CHARS)) notes.push(`Account bios retain the existing ${MAX_TEXT_CHARS}-character truncation cap.`);
   if (users.some((user) => user.pinnedTweetIds?.some((id) => /^\d{1,25}$/.test(id)))) {
     notes.push("Pinned post ids are profile metadata only; their content was not fetched.");
   }
   // Contract parity with the post path: when nothing is cited inline, Sources
   // lists what was actually retrieved rather than going empty.
-  const citations = citedInline.length > 0 ? citedInline : validSources;
+  const citations = citedInline.length > 0 ? citedInline : fallbackSources(validSources, notes);
   if (citedInline.length === 0 && citations.length > 0) {
-    notes.push(`The answer cited no profile URLs inline; Sources lists the ${citations.length} account(s) retrieved for this query.`);
+    notes.push(`The answer cited no profile URLs inline; Sources lists ${citations.length} delivered account(s) for this query.`);
   }
   if (fabricated.length > 0) {
     notes.push(`${fabricated.length} link(s) in the answer did not match any retrieved account and were dropped from Sources.`);

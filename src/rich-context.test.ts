@@ -1,3 +1,4 @@
+import { TEST_LIMITS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -8,7 +9,7 @@ import { runTwitterApiUserTimeline } from "./backend.js";
 
 const fixture = JSON.parse(readFileSync(new globalThis.URL("./fixtures/upstream-context.json", import.meta.url), "utf8"));
 const URL = "https://x.com/example/status/100";
-const MODEL = { provider: "test", id: "rich", supportsImage: false };
+const MODEL = { ...TEST_LIMITS, provider: "test", id: "rich", supportsImage: false };
 const CONFIG = loadTwitterConfig({});
 const raw = (extra: Record<string, unknown> = {}) => ({ id: "100", url: URL, text: "Read https://t.co/abc", ...extra });
 const urls = { urls: [{ url: "https://t.co/abc", expanded_url: "https://example.org/article" }] };
@@ -213,7 +214,7 @@ test("synthetic pin ids/stubs are not fetched implicitly, with missing/unrecogni
 });
 
 test("timeline pin-availability notes survive the actual backend result", async () => {
-  const model = { provider: "test", id: "rich", input: ["text"] };
+  const model = { ...TEST_LIMITS, provider: "test", id: "rich", input: ["text"] };
   const result = await runTwitterApiUserTimeline({
     query: "Q", userName: "example", config: loadTwitterConfig({ twitter: { synthesisModel: "test/rich", minRequestIntervalMs: 0 } }),
     env: { TWITTERAPI_IO_API_KEY: "test-key" },
