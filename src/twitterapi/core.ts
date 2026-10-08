@@ -21,6 +21,8 @@ export interface TweetAuthor {
 }
 
 export interface TweetMedia {
+  /** Exact decimal upstream id_str, when available (never a rounded JSON number). */
+  id?: string;
   /** "photo", "video", "animated_gif". */
   type?: string;
   /** Direct media URL. For videos this is the poster frame (a JPEG). */

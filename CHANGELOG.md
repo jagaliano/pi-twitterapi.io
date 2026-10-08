@@ -15,7 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   post; truncated RT copies are replaced by longer originals within existing caps.
 - Valid fetched nested permalinks join inline and deduplicated fallback Sources.
   New context fields use the existing prompt-boundary and source-URL guards.
-  Nested media processing and larger text/input budgets remain subsequent work.
+- Quoted/reposted media uses the existing shared image/video caps, attempt bounds
+  and phase deadlines. Repeated assets share one attempt and ordered image slot;
+  different videos sharing a poster retain distinct audio-processing identities.
+  Exact decimal media `id_str` recognizes nested/standalone CDN query aliases only
+  when media kind, file locations and duration bounds agree; actual URLs are not
+  rewritten. Exact-locator deduplication survives optional IDs; late identity
+  matches coalesce aliases before caps without losing source bindings.
+- Media evidence carries enclosing and original-source identities separately,
+  including anonymous sources and reordered candidates. Mirrored RT assets belong
+  to the fetched original. Image references and speech stay under that source's
+  heading; display fields retain the existing prompt guards.
+- Multiple videos from one source retain separate evidence within the video cap;
+  video-cap/deadline fallbacks are disclosed. Larger input budgets remain next.
 
 ## [0.3.5] - 2026-10-07
 

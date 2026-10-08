@@ -260,8 +260,17 @@ than silently ignored.
   is retained, with reply target, language and quote-count metadata. Id-only stubs
   are ignored; media-only sources survive. Longer original text replaces a
   truncated RT copy under the existing text caps, without changing the enclosing
-  post's identity. Valid fetched nested permalinks can be cited. Nested media
-  kinds are metadata here; their media processing is not yet enabled.
+  post's identity. Valid fetched nested permalinks can be cited. Own, quoted and
+  reposted media share the existing caps and phase deadlines (photos still come
+  first). Repeated assets are downloaded/processed once, including mirrored RT
+  media; exact numeric media IDs recognize endpoint-specific CDN query aliases
+  only when media kind, file locations and duration bounds agree. Exact URL
+  matches still deduplicate when an ID is absent from one envelope. Actual
+  download URLs are unchanged; without an ID, different query URLs remain distinct. A common poster
+  does not imply common audio. Ordered image references
+  and quoted/reposted speech remain tied to their fetched original and enclosing
+  post. Missing/invalid permalinks are not guessed; anonymous media bindings use
+  object identity, so they cannot be transferred to unrelated candidates.
 - **Media is best-effort.** By default a video post is represented by its poster
   frame and the limitation is disclosed, because pi's synthesis interface cannot
   ingest video. With `enableVideoProcessing` (see above) the video itself is analysed —

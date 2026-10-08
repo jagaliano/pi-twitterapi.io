@@ -15,7 +15,9 @@ function asMedia(raw: unknown): TweetMedia | undefined {
     .sort((a, b) => (a.bitrate ?? 0) - (b.bitrate ?? 0));
   const playable = playableVariants.map((v) => v.url);
   const duration = isObject(raw.video_info) && typeof raw.video_info.duration_millis === "number" ? raw.video_info.duration_millis : undefined;
+  const mediaId = typeof raw.id_str === "string" && /^\d{1,20}$/.test(raw.id_str) ? raw.id_str : undefined;
   const media: TweetMedia = {
+    ...(mediaId ? { id: mediaId } : {}),
     type: str(raw.type),
     url: str(raw.media_url_https) ?? str(raw.media_url),
     videoVariants: playable.length > 0 ? playable : undefined,
