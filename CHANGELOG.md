@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-call settings reload using the execution context's working directory.
+  User/project edits apply without `/reload`; overlapping calls retain independent
+  snapshots and project-level sensitive keys remain ignored and disclosed.
 - Complete rendered-input budgeting across posts, accounts, trends and documents:
   catalogue context/output preflight before retrieval, UTF-8-byte text estimates,
   reserved output on every completion/repair/retry/fallback, and a clamped 60,000

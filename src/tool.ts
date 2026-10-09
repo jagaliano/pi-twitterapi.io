@@ -42,7 +42,7 @@ export interface TwitterToolOptions {
   userSettings?: PiSettings;
   /** Project settings; executable/endpoint/credential keys are ignored and disclosed. */
   projectSettings?: PiSettings;
-  /** Directory the project `.pi/settings.json` is read from (default `process.cwd()`). */
+  /** Project-directory fallback when execute has no `ctx.cwd` (then `process.cwd()`). */
   cwd?: string;
   /** Agent config directory for user settings (default pi's `getAgentDir()`). */
   agentDir?: string;
@@ -137,26 +137,6 @@ const ALL_PARAMS = [
 export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOptions = {}): void {
   const env = options.env ?? process.env;
   const fetcher = options.fetcher ?? fetch;
-  // A single `settings` blob is trusted (back-compat). Otherwise read user and
-  // project settings separately so project-level executable paths, endpoints and
-  // credential names can be ignored (B1/F1).
-  // Both readers report a malformed file instead of throwing: `twitter` must still
-  // be registered, with the problem disclosed, when a settings file has a typo (G2).
-  const userRead: PiSettingsRead = options.settings
-    ? { settings: options.settings }
-    : options.userSettings
-      ? { settings: options.userSettings }
-      : readPiUserSettingsResult(options.agentDir);
-  const projectRead: PiSettingsRead | undefined = options.settings
-    ? undefined
-    : options.projectSettings
-      ? { settings: options.projectSettings }
-      : readPiProjectSettingsResult(options.cwd);
-  const config = loadTwitterConfig(userRead.settings, {
-    projectSettings: projectRead?.settings,
-    settingsErrors: [userRead.error, projectRead?.error].filter((error): error is string => Boolean(error)),
-  });
-
   pi.registerTool({
     name: "twitter",
     label: "Twitter",
@@ -215,6 +195,24 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     }),
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      // Fresh, call-local snapshot: edits apply without /reload and parallel
+      // calls keep their own cwd/config through retrieval and synthesis.
+      // Legacy `settings` stays trusted; separate project settings never gain
+      // executable/endpoint/credential/image-bound privileges (B1/F1).
+      const userRead: PiSettingsRead = options.settings
+        ? { settings: options.settings }
+        : options.userSettings
+          ? { settings: options.userSettings }
+          : readPiUserSettingsResult(options.agentDir);
+      const projectRead: PiSettingsRead | undefined = options.settings
+        ? undefined
+        : options.projectSettings
+          ? { settings: options.projectSettings }
+          : readPiProjectSettingsResult(ctx?.cwd ?? options.cwd);
+      const config = loadTwitterConfig(userRead.settings, {
+        projectSettings: projectRead?.settings,
+        settingsErrors: [userRead.error, projectRead?.error].filter((error): error is string => Boolean(error)),
+      });
       const supplied = params as Record<string, unknown>;
       const requested = typeof supplied.mode === "string" ? supplied.mode : "posts";
       if (!isTwitterMode(requested)) {

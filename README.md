@@ -34,7 +34,10 @@ export TWITTERAPI_IO_API_KEY="your-twitterapi.io-key"
 
 The settings file is strict JSON (no comments). Add the `twitter` block to
 `~/.pi/agent/settings.json` — or `<cwd>/.pi/settings.json` for a project-scoped
-override — and set only the keys you need:
+override — and set only the keys you need. Both files are read at the start of
+**every tool call**, using that call's `ctx.cwd` for the project. Edits apply to
+the next call without `/reload`; in-flight calls keep their own configuration
+snapshot. Project overrides still cannot supply user-only sensitive keys.
 
 ```json
 {
