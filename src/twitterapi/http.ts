@@ -1,3 +1,4 @@
+import type { RunTelemetry } from "../telemetry.js";
 import type { ProgressCallback } from "../progress.js";
 import { createHash } from "node:crypto";
 import { isObject, TWITTERAPI_BASE_URL, type FetchLike } from "./core.js";
@@ -210,6 +211,7 @@ export function ensureSuccessfulPayload(
   body: unknown,
   bodyError: string | undefined,
   attempts: number,
+  telemetry?: RunTelemetry,
 ): Record<string, unknown> {
   if (!response.ok) {
     throw new Error(describeHttpFailure(response.status, isObject(body) ? errorDetail(body) : undefined, attempts));
@@ -229,12 +231,14 @@ export function ensureSuccessfulPayload(
   if (body.status === "error") {
     throw new Error(`twitterapi.io error: ${errorDetail(body) ?? "unknown"}`);
   }
+  telemetry?.page(body);
   return body;
 }
 
 /** Options shared by every twitterapi.io endpoint: retry, pacing, cancellation. */
 export interface TwitterApiRequestOptions {
   progress?: ProgressCallback;
+  telemetry?: RunTelemetry;
   /** Per-request timeout in ms (default 30_000). */
   timeoutMs?: number;
   /** Retry attempts for 429/503 responses (default 3). */

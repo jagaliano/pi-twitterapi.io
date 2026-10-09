@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Call-local physical usage counters in the expanded tool view: upstream retries
+  and accepted pages/lookups, returned/retained sources, media/native-video/STT
+  fetches, every SDK synthesis attempt/repair/fallback, and reported token samples.
+  Disjoint retrieval/preprocessing/synthesis timings sum to total; video timing is
+  explicitly nested in preprocessing. No billing estimate or markdown change.
 - Call-local, display-only progress updates for pagination, media/video phases,
   and every physical synthesis completion/repair/fallback. Pi's partial view shows
   the latest phase; cancellation suppresses late updates and observer failures

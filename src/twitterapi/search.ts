@@ -1,3 +1,4 @@
+import type { RunTelemetry } from "../telemetry.js";
 import { reportProgress, type ProgressCallback } from "../progress.js";
 import {
   ADVANCED_SEARCH_PATH,
@@ -22,6 +23,7 @@ import { asTweet } from "./tweet.js";
 
 export interface SearchTweetsOptions {
   progress?: ProgressCallback;
+  telemetry?: RunTelemetry;
   /** Max pages to fetch (default 5). Bounds total requests when pages come back empty. */
   maxPages?: number;
   /**
@@ -161,7 +163,7 @@ export async function searchTweets(
 
     // Errors are validated in one place, in the order that preserves the most
     // useful signal: status, then unreadable body, then shape, then semantics.
-    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
     if (!Array.isArray(payload.tweets)) {
       throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
     }

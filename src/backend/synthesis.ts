@@ -1,3 +1,4 @@
+import { RunTelemetry } from "../telemetry.js";
 import { reportProgress, type ProgressCallback } from "../progress.js";
 import type { TwitterSearchDetails } from "../types.js";
 import { SYNTHESIS_SYSTEM_PROMPT, type SynthesisRequest } from "../synthesize.js";
@@ -79,54 +80,67 @@ function createCompletion(
   model: ModelLike,
   budget: InputBudget,
   progress?: ProgressCallback,
+  telemetry?: RunTelemetry,
 ): (request: SynthesisRequest) => Promise<string> {
   return async (request) => {
     budget.assert(request, model);
     const promptText = renderedPrompt(request);
-    const attempt = (reasoningEffort?: string): Promise<unknown> => {
+    const attempt = async (reasoningEffort?: string): Promise<string> => {
       budget.assert(request, model);
       reportProgress({ progress, signal: request.signal }, `synthesizing with ${model.provider}/${model.id}`);
-      return run.call(
-        registry,
-        model as never,
-        {
-          systemPrompt: request.system,
-          messages: [
-            {
-              role: "user",
-              content:
-                request.images.length > 0
-                  ? [
-                      { type: "text", text: promptText },
-                      ...request.images.map((image) => ({
-                        type: "image",
-                        data: image.data,
-                        mimeType: image.mimeType,
-                      })),
-                    ]
-                  : request.prompt,
-              timestamp: Date.now(),
-            },
-          ],
-        } as never,
-        { signal: request.signal, maxTokens: budget.outputTokens, ...(reasoningEffort ? { reasoningEffort } : {}) } as never,
-      );
+      if (telemetry) telemetry.usage.synthesisAttempts++;
+      try {
+        const message = await run.call(
+          registry,
+          model as never,
+          {
+            systemPrompt: request.system,
+            messages: [
+              {
+                role: "user",
+                content:
+                  request.images.length > 0
+                    ? [
+                        { type: "text", text: promptText },
+                        ...request.images.map((image) => ({
+                          type: "image",
+                          data: image.data,
+                          mimeType: image.mimeType,
+                        })),
+                      ]
+                    : request.prompt,
+                timestamp: Date.now(),
+              },
+            ],
+          } as never,
+          { signal: request.signal, maxTokens: budget.outputTokens, ...(reasoningEffort ? { reasoningEffort } : {}) } as never,
+        );
+        telemetry?.tokens(message);
+        return completionText(message);
+      } catch (error) {
+        if (telemetry) telemetry.usage.synthesisFailures++;
+        throw error;
+      }
     };
     try {
-      return completionText(await attempt());
+      return await attempt();
     } catch (error) {
       // Authoritative cancellation wins: never spend another registry call on a
       // repair after the caller has gone away (P2-2).
       if (classifySynthesisError(error, request.signal) === "cancelled") throw error;
       const effort = supportedReasoningEffort(error);
       if (!effort) throw error;
-      return completionText(await attempt(effort));
+      return await attempt(effort);
     }
   };
 }
 
 export interface SynthesisBackend {
   fetcher: typeof fetch;
+  mediaFetcher: typeof fetch;
+  nativeVideoFetcher: typeof fetch;
+  sttFetcher: typeof fetch;
+  telemetry: RunTelemetry;
   apiKey: string;
   model: ModelLike;
   budget: InputBudget;
@@ -263,6 +277,7 @@ export function applyFallbackNote(backend: SynthesisBackend, details: TwitterSea
  * before any network work so a misconfiguration fails immediately and says why.
  */
 export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, query?: string): SynthesisBackend {
+  const telemetry = new RunTelemetry(options.telemetryNow);
   const fetcher = options.fetcher ?? fetch;
   const apiKey = options.env?.TWITTERAPI_IO_API_KEY;
   if (!apiKey) {
@@ -319,7 +334,7 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, que
   const completionFor = (target: ModelLike): ((request: SynthesisRequest) => Promise<string>) => {
     let completion = completions.get(target);
     if (!completion) {
-      const completeModel = createCompletion(registry, run, target, budget, options.progress);
+      const completeModel = createCompletion(registry, run, target, budget, options.progress, telemetry);
       const supportsImage = budget.acceptsImages(target);
       completion = supportsImage
         ? completeModel
@@ -379,11 +394,19 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, que
   // `fallback` is resolved lazily: the completion runs after this object is
   // built, so a plain property would freeze the pre-run value (undefined).
   const backend: SynthesisBackend = {
-    fetcher,
+    fetcher: telemetry.fetcher(fetcher, "upstream"),
+    mediaFetcher: telemetry.fetcher(fetcher, "media"),
+    nativeVideoFetcher: telemetry.fetcher(fetcher, "nativeVideo"),
+    sttFetcher: telemetry.fetcher(fetcher, "stt"),
+    telemetry,
     apiKey,
     model,
     budget,
-    complete,
+    complete: async (request) => {
+      telemetry.phase("synthesisMs");
+      try { return await complete(request); }
+      finally { telemetry.phase("preprocessingMs"); }
+    },
     get fallback(): ModelLike | undefined {
       return fallback;
     },

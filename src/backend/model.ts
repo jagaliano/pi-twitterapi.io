@@ -41,6 +41,8 @@ export interface BackendOptions {
   fallbackModelIds?: string[];
   /** Override the retry delay between last-model attempts (tests). */
   synthesisSleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Injected monotonic measurement clock (tests); unrelated to pacing/deadline clocks. */
+  telemetryNow?: () => number;
   /** Injected local-process runner for video processing (tests). */
   videoExec?: ExecFn;
 }

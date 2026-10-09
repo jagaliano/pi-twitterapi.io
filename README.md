@@ -212,6 +212,38 @@ work, and the exact synthesis model (including retries and fallbacks). Updates
 are call-local, optional and display-only; observer errors do not fail the call,
 and cancellation suppresses late updates. They never enter the answer or Sources.
 
+### Usage and timings
+
+Expand a completed tool call to see call-local `details.usage` and
+`details.timings`. Final answer markdown and the collapsed view are unchanged.
+Counters measure actual injected fetch/SDK invocations, not estimated billing:
+
+- Upstream attempts include retries; accepted pages/lookups include empty results.
+  Returned posts count raw root-array entries (duplicates/stubs included) and
+  timeline pin objects. Retained posts are the root bundles delivered after input
+  selection, not separately counted quoted/reposted context. Account/trend counts
+  follow their respective synthesis inputs. Document modes such as `about` can
+  show accounts `1 returned/0 retained`: account-shaped metadata was returned,
+  but it is summarized as document fields, not retained as an account-prompt root.
+- Media requests include HEAD probes and GET downloads. Native-video requests
+  include upload/poll/generate/delete; STT includes response-format retry uploads.
+  HTTP/fetch failures mean non-2xx responses or rejected fetches, **not** later body,
+  analysis or admission failures. Local ffmpeg/whisper work makes no provider request.
+- SDK synthesis attempts include repair, retry and fallback invocations; the old
+  `details.synthesisCalls` remains the successful logical-hop counter. SDK-reported
+  token fields are summed only when present, including failed messages. Missing
+  reports remain unknown; `reportedCalls` and partial fields do not represent the
+  unreported attempts. SDK-internal HTTP retries and native-video/STT token billing
+  are not observable here. No dollar/credit estimate is invented.
+
+`totalMs = retrievalMs + preprocessingMs + synthesisMs`: retrieval includes
+preflight, pacing/retries, response reads and mapping; preprocessing includes
+input selection, media/video work and final citation/disclosure processing;
+synthesis includes its full fallback/repair/backoff chain. `videoMs` is explicitly
+**nested inside preprocessing**, never added again. These backend wall times omit
+settings reload and UI/markdown formatting. Calls that fail entirely still throw
+as before; these details cover completed answers, including recovered failures.
+
 ### Complete-input budget
 
 Before retrieval, the primary and fallback catalogue entries must expose valid

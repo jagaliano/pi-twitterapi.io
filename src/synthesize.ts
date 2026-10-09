@@ -1,3 +1,4 @@
+import type { RunTelemetry } from "./telemetry.js";
 /**
  * Synthesis hop for the twitterapi.io backend.
  *
@@ -53,6 +54,7 @@ interface MediaInputPlan {
 }
 
 export interface SynthesisDeps {
+  telemetry?: RunTelemetry;
   progress?: ProgressCallback;
   signal?: AbortSignal;
   /** Resolved complete answering/fallback chain, before retrieval. */
@@ -993,6 +995,7 @@ export interface SynthesizeOptions {
 /** Run the synthesis hop and return contract-shaped details. */
 export async function synthesizeAnswer(options: SynthesizeOptions): Promise<TwitterSearchDetails> {
   const { query, tweets: retrievedTweets, config, model, deps, signal, incomplete } = options;
+  deps.telemetry?.phase("preprocessingMs");
   let tweets = retrievedTweets;
   if (tweets.length === 0) {
     return {
@@ -1015,6 +1018,7 @@ export async function synthesizeAnswer(options: SynthesizeOptions): Promise<Twit
   const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
   const selection = preparePostInput(query, tweets, config, model, deps, budget, now);
   tweets = selection.tweets;
+  if (deps.telemetry) deps.telemetry.usage.postsRetained = tweets.length;
   const media = await collectMedia(tweets, config, model, { ...deps, mediaInputPlan: selection.plan });
   const request: SynthesisRequest = {
     model,
@@ -1214,6 +1218,7 @@ export interface SynthesizeTrendsOptions {
 /** Synthesis hop for a trends lookup; mirrors the post/account contract. */
 export async function synthesizeTrends(options: SynthesizeTrendsOptions): Promise<TwitterSearchDetails> {
   const { query, trends: retrievedTrends, model, deps, signal } = options;
+  deps.telemetry?.phase("preprocessingMs");
   let trends = retrievedTrends;
   if (trends.length === 0) {
     return {
@@ -1229,6 +1234,7 @@ export async function synthesizeTrends(options: SynthesizeTrendsOptions): Promis
   const budget = synthesisBudget(model, deps);
   const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
   trends = retainBundles(trends, items => buildTrendCandidatePrompt(query, items, { now }), TREND_SYNTHESIS_SYSTEM_PROMPT, budget);
+  if (deps.telemetry) deps.telemetry.usage.trendsRetained = trends.length;
   const request: SynthesisRequest = { model, system: TREND_SYNTHESIS_SYSTEM_PROMPT, prompt: buildTrendCandidatePrompt(query, trends, { now }), images: [], signal, maxTokens: budget.outputTokens };
   budget.assert(request);
   const text = await deps.complete(request);
@@ -1289,6 +1295,7 @@ export interface SynthesizeDocumentOptions {
 /** Synthesis hop for a single retrieved object (for example an X Space). */
 export async function synthesizeDocument(options: SynthesizeDocumentOptions): Promise<TwitterSearchDetails> {
   const { query, body, model, deps, signal } = options;
+  deps.telemetry?.phase("preprocessingMs");
   const title = untrustedInline(options.title, 200);
   const validSources = [...new Set(options.citations.map((url) => sourceUrl(url, "document")).filter((url): url is string => Boolean(url)))];
   const rejectedSources = options.citations.filter(url => !sourceUrl(url, "document")).length;
@@ -1347,6 +1354,7 @@ export interface SynthesizeUserOptions {
 /** Synthesis hop for an account search; mirrors `synthesizeAnswer`'s contract. */
 export async function synthesizeUserAnswer(options: SynthesizeUserOptions): Promise<TwitterSearchDetails> {
   const { query, users: retrievedUsers, model, deps, signal, incomplete } = options;
+  deps.telemetry?.phase("preprocessingMs");
   let users = retrievedUsers;
   if (users.length === 0) {
     return {
@@ -1368,6 +1376,7 @@ export async function synthesizeUserAnswer(options: SynthesizeUserOptions): Prom
   const budget = synthesisBudget(model, deps, options.config);
   const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
   users = retainBundles(users, items => buildUserCandidatePrompt(query, items, { now }), USER_SYNTHESIS_SYSTEM_PROMPT, budget);
+  if (deps.telemetry) deps.telemetry.usage.accountsRetained = users.length;
   const request: SynthesisRequest = { model, system: USER_SYNTHESIS_SYSTEM_PROMPT, prompt: buildUserCandidatePrompt(query, users, { now }), images: [], signal, maxTokens: budget.outputTokens };
   budget.assert(request);
   const text = await deps.complete(request);

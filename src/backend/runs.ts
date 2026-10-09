@@ -86,21 +86,25 @@ function incompleteReason(stoppedBy: string | undefined, pages: number): string 
 
 /** Build synthesis deps, wiring the optional bound video pre-processor (M5). */
 function mediaDeps(
-  backend: Pick<SynthesisBackend, "complete" | "fetcher" | "budget">,
+  backend: Pick<SynthesisBackend, "complete" | "mediaFetcher" | "nativeVideoFetcher" | "sttFetcher" | "budget" | "telemetry">,
   options: TwitterApiSynthesisOptions,
 ): SynthesisDeps {
   return {
     progress: options.progress,
+    telemetry: backend.telemetry,
     signal: options.signal,
     complete: backend.complete,
     inputBudget: backend.budget,
-    fetchMedia: createFetchMedia(backend.fetcher, options.signal),
+    fetchMedia: createFetchMedia(backend.mediaFetcher, options.signal),
     processVideo: options.config.enableVideoProcessing
       ? createProcessVideo({
-          fetcher: options.fetcher ?? fetch,
+          fetcher: backend.mediaFetcher,
+          nativeFetcher: backend.nativeVideoFetcher,
+          sttFetcher: backend.sttFetcher,
           env: options.env ?? {},
           signal: options.signal,
           progress: options.progress,
+          telemetry: backend.telemetry,
           exec: options.videoExec,
         })
       : undefined,
@@ -128,6 +132,7 @@ export async function runTwitterApiSearch(
   const search = await searchTweets(params, apiKey, fetcher, {
     signal: options.signal,
     progress: options.progress,
+    telemetry: backend.telemetry,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
     maxPages: options.config.maxPages,
@@ -182,6 +187,7 @@ export async function runTwitterApiSearch(
   }
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
 
   return { markdown: formatTwitterResults(details), details };
 }
@@ -199,6 +205,7 @@ export async function runTwitterApiUserSearch(
   const search = await searchUsers(options.query, apiKey, fetcher, {
     signal: options.signal,
     progress: options.progress,
+    telemetry: backend.telemetry,
     count: options.count,
     // Configured budgets apply here too: the ceiling is a hard cap, and the base
     // budget is the configured one rather than this endpoint's own default.
@@ -215,7 +222,7 @@ export async function runTwitterApiUserSearch(
     model: toSynthesisModel(model),
     signal: options.signal,
     incomplete,
-    deps: { complete, inputBudget: backend.budget },
+    deps: { complete, inputBudget: backend.budget, telemetry: backend.telemetry },
   });
   if (incomplete) {
     details.notes = [
@@ -236,6 +243,7 @@ export async function runTwitterApiUserSearch(
   }
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -255,6 +263,7 @@ export async function runTwitterApiThread(
   const thread = await fetchThread(options.tweet, apiKey, fetcher, {
     signal: options.signal,
     progress: options.progress,
+    telemetry: backend.telemetry,
     maxPages: pageBudget(options.maxPages, options.config),
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
@@ -283,6 +292,7 @@ export async function runTwitterApiThread(
   }
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -306,14 +316,16 @@ async function completeTweetAnswer(
   details.notes = [...(details.notes ?? []), ...input.notes];
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }
 
 /** Page/pacing options every extended read takes from the config. */
-function tweetReadOptions(options: TwitterApiSynthesisOptions) {
+function tweetReadOptions(options: TwitterApiSynthesisOptions, backend: Pick<SynthesisBackend, "telemetry">) {
   return {
     signal: options.signal,
     progress: options.progress,
+    telemetry: backend.telemetry,
     maxPages: options.config.maxPages,
     maxPagesCeiling: options.config.maxPagesCeiling,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
@@ -338,7 +350,7 @@ export async function runTwitterApiUserTimeline(
     { userName: options.userName, userId: options.userId },
     backend.apiKey,
     backend.fetcher,
-    { ...tweetReadOptions(options), includeReplies: options.includeReplies, limit: options.limit },
+    { ...tweetReadOptions(options, backend), includeReplies: options.includeReplies, limit: options.limit },
   );
   const incomplete = incompleteReason(timeline.stoppedBy, timeline.pagesFetched);
   const who = options.userName ? `@${options.userName.replace(/^@+/, "")}` : (options.userId ?? "the account");
@@ -362,7 +374,7 @@ export async function runTwitterApiReplies(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
   const replies = await fetchTweetReplies(options.tweet, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     queryType: options.queryType,
     limit: options.limit,
   });
@@ -390,7 +402,7 @@ export async function runTwitterApiQuotes(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
   const quotes = await fetchTweetQuotes(options.tweet, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     sinceTime: options.sinceTime,
     untilTime: options.untilTime,
     includeReplies: options.includeReplies,
@@ -419,6 +431,7 @@ export async function runTwitterApiTrends(
   const { trends } = await fetchTrends(options.woeid, backend.apiKey, backend.fetcher, {
     signal: options.signal,
     progress: options.progress,
+    telemetry: backend.telemetry,
     count: options.count,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
@@ -428,10 +441,11 @@ export async function runTwitterApiTrends(
     trends,
     model: toSynthesisModel(backend.model),
     signal: options.signal,
-    deps: { complete: backend.complete, inputBudget: backend.budget },
+    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
   });
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -450,19 +464,21 @@ async function completeUserAnswer(
     model: toSynthesisModel(backend.model),
     signal: options.signal,
     incomplete: input.incomplete,
-    deps: { complete: backend.complete, inputBudget: backend.budget },
+    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }
 
 /** Retry/pacing options every lookup takes from the config. */
-function lookupOptions(options: TwitterApiSynthesisOptions) {
+function lookupOptions(options: TwitterApiSynthesisOptions, backend: Pick<SynthesisBackend, "telemetry">) {
   return {
     signal: options.signal,
     progress: options.progress,
+    telemetry: backend.telemetry,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
   };
@@ -482,7 +498,7 @@ export async function runTwitterApiMentions(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
   const mentions = await fetchUserMentions(options.userName, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     sinceTime: options.sinceTime,
     untilTime: options.untilTime,
     limit: options.limit,
@@ -509,7 +525,7 @@ async function runFollow(
   const backend = resolveSynthesisBackend(options, options.query);
   const fetchFn = direction === "followers" ? fetchFollowers : fetchFollowings;
   const result = await fetchFn(options.userName, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     pageSize: options.pageSize,
     limit: options.limit,
   });
@@ -545,7 +561,7 @@ export async function runTwitterApiProfile(
   options: TwitterApiProfileOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
-  const user = await fetchUserProfile(options.userName, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const user = await fetchUserProfile(options.userName, backend.apiKey, backend.fetcher, lookupOptions(options, backend));
   return completeUserAnswer(backend, options, {
     query: options.query,
     users: [user],
@@ -563,7 +579,7 @@ export async function runTwitterApiTweetsByIds(
   options: TwitterApiTweetsByIdsOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
-  const result = await fetchTweetsByIds(options.ids, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const result = await fetchTweetsByIds(options.ids, backend.apiKey, backend.fetcher, lookupOptions(options, backend));
   const notes = [`Answered from ${result.tweets.length} post(s) fetched by id.`];
   // Asking for five posts and reporting "3 post(s)" hides the fact that two were
   // never returned — deleted, protected, or simply missing upstream (G9).
@@ -596,7 +612,7 @@ export async function runTwitterApiAbout(
   options: TwitterApiAboutOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
-  const about = await fetchUserAbout(options.userName, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const about = await fetchUserAbout(options.userName, backend.apiKey, backend.fetcher, lookupOptions(options, backend));
   const fields = flattenObject(about as unknown as Record<string, unknown>);
   const notes = [`Answered from the about page of @${about.handle}.`];
   if (fields.length > 200) {
@@ -609,11 +625,12 @@ export async function runTwitterApiAbout(
     citations: [about.profileUrl],
     model: toSynthesisModel(backend.model),
     signal: options.signal,
-    deps: { complete: backend.complete, inputBudget: backend.budget },
+    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
     notes,
   });
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }
 
@@ -629,7 +646,7 @@ export async function runTwitterApiRetweeters(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
   const result = await fetchTweetRetweeters(options.tweet, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     limit: options.limit,
   });
   const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
@@ -654,7 +671,7 @@ export async function runTwitterApiCommunity(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
   const result = await fetchCommunityTweets(options.communityId, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     limit: options.limit,
   });
   const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
@@ -677,7 +694,7 @@ export async function runTwitterApiList(
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
   const result = await fetchListTweets(options.listId, backend.apiKey, backend.fetcher, {
-    ...tweetReadOptions(options),
+    ...tweetReadOptions(options, backend),
     limit: options.limit,
   });
   const incomplete = incompleteReason(result.stoppedBy, result.pagesFetched);
@@ -726,7 +743,7 @@ export async function runTwitterApiSpace(
   options: TwitterApiSpaceOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
-  const space = await fetchSpaceDetail(options.spaceId, backend.apiKey, backend.fetcher, lookupOptions(options));
+  const space = await fetchSpaceDetail(options.spaceId, backend.apiKey, backend.fetcher, lookupOptions(options, backend));
   const fields = flattenObject(space.data);
   const body = fields.slice(0, 200).join("\n");
   const notes =
@@ -740,10 +757,11 @@ export async function runTwitterApiSpace(
     citations: [`https://x.com/i/spaces/${space.id}`],
     model: toSynthesisModel(backend.model),
     signal: options.signal,
-    deps: { complete: backend.complete, inputBudget: backend.budget },
+    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
     notes,
   });
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
   return { markdown: formatTwitterResults(details), details };
 }

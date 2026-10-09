@@ -1,3 +1,4 @@
+import type { RunTelemetry } from "../telemetry.js";
 /**
  * Optional video evidence extraction for pi-twitterapi.io.
  *
@@ -35,6 +36,10 @@ export type ExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface VideoDeps {
+  telemetry?: RunTelemetry;
+  /** Classified fetch boundaries; default to fetcher for existing direct callers. */
+  nativeFetcher?: typeof fetch;
+  sttFetcher?: typeof fetch;
   progress?: ProgressCallback;
   fetcher: typeof fetch;
   /** Environment for credential lookup. Never read from `process.env` inside. */
@@ -657,7 +662,7 @@ async function geminiInline(
     generationConfig: GEMINI_GENERATION_CONFIG,
   };
   try {
-    const response = await deps.fetcher(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    const response = await (deps.nativeFetcher ?? deps.fetcher)(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(body),
@@ -699,7 +704,7 @@ async function geminiFiles(
 
   const core = async (): Promise<GeminiResult> => {
     try {
-      const start = await deps.fetcher(`${base}/upload/v1beta/files`, {
+      const start = await (deps.nativeFetcher ?? deps.fetcher)(`${base}/upload/v1beta/files`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -720,7 +725,7 @@ async function geminiFiles(
         return { error: "Gemini upload start returned an upload URL that is not https on the configured host." };
       }
 
-      const upload = await deps.fetcher(uploadUrl, {
+      const upload = await (deps.nativeFetcher ?? deps.fetcher)(uploadUrl, {
         method: "POST",
         headers: {
           "content-length": String(bytes.byteLength),
@@ -742,7 +747,7 @@ async function geminiFiles(
 
       let active = false;
       for (let i = 0; i < 60 && remaining(deadline, now) > 1; i += 1) {
-        const poll = await deps.fetcher(`${base}/v1beta/${fileName}`, {
+        const poll = await (deps.nativeFetcher ?? deps.fetcher)(`${base}/v1beta/${fileName}`, {
           headers: { "x-goog-api-key": apiKey },
           signal: opSignal(deps, deadline, now),
           redirect: "error",
@@ -758,7 +763,7 @@ async function geminiFiles(
       }
       if (!active) return { error: "Gemini file did not become ACTIVE before the deadline.", uploaded: true };
 
-      const generated = await deps.fetcher(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      const generated = await (deps.nativeFetcher ?? deps.fetcher)(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
@@ -783,7 +788,7 @@ async function geminiFiles(
   let deleted = false;
   if (fileName) {
     try {
-      const del = await deps.fetcher(`${base}/v1beta/${fileName}`, {
+      const del = await (deps.nativeFetcher ?? deps.fetcher)(`${base}/v1beta/${fileName}`, {
         method: "DELETE",
         headers: { "x-goog-api-key": apiKey },
         signal: AbortSignal.timeout(5_000),
@@ -856,7 +861,7 @@ async function openAiCompatibleVideo(
     ],
   };
   try {
-    const response = await deps.fetcher(url, {
+    const response = await (deps.nativeFetcher ?? deps.fetcher)(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
@@ -1064,7 +1069,7 @@ async function remoteStt(
       if (config.sttLanguage && config.sttLanguage !== "auto") form.append("language", config.sttLanguage);
       form.append("response_format", format);
       if (format === "verbose_json") form.append("timestamp_granularities[]", "segment");
-      return deps.fetcher(url, {
+      return (deps.sttFetcher ?? deps.fetcher)(url, {
         method: "POST",
         headers: { authorization: `Bearer ${apiKey}` },
         body: form,
@@ -1179,7 +1184,15 @@ async function whisperCpp(
  * (in order) native video via the configured endpoint, frames, and STT, subject
  * to `maxVideoSeconds`, the byte cap, and the phase deadline.
  */
+/** Measure all exits, including cancellation and cleanup; nested in preprocessing. */
 export async function processVideo(input: ProcessVideoInput): Promise<VideoEvidence> {
+  const telemetry = input.deps.telemetry;
+  const start = telemetry?.now();
+  try { return await processVideoImpl(input); }
+  finally { if (start !== undefined) telemetry?.addVideoTime(start); }
+}
+
+async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence> {
   const { media, config, deps, deadline, modelSupportsImage } = input;
   const now = deps.now ?? Date.now;
   const exec = deps.exec ?? defaultExec();

@@ -520,6 +520,17 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         body += theme.fg("muted", `\n• ${details.notes.length} note(s), `) + keyHint("app.tools.expand", "to expand");
       }
 
+      if (options.expanded && details.usage && details.timings) {
+        const u = details.usage, t = details.timings;
+        body += theme.fg("muted", `\nUsage: upstream ${u.upstreamAttempts} attempts (${u.upstreamHttpFailures} HTTP/fetch failures) · ${u.successfulPages} accepted pages/lookups · posts ${u.postsReturned} returned/${u.postsRetained} retained · accounts ${u.accountsReturned}/${u.accountsRetained} · trends ${u.trendsReturned}/${u.trendsRetained}`);
+        body += theme.fg("muted", `\nRequests: media ${u.mediaAttempts} (${u.mediaHeadAttempts} HEAD, ${u.mediaHttpFailures} HTTP/fetch failures) · native video ${u.nativeVideoAttempts} (${u.nativeVideoHttpFailures} HTTP/fetch failures) · STT ${u.sttAttempts} (${u.sttHttpFailures} HTTP/fetch failures) · SDK synthesis ${u.synthesisAttempts} (${u.synthesisFailures} failures)`);
+        const tokens = u.synthesisTokens;
+        const reported = tokens ? Object.entries(tokens).filter(([key]) => key !== "reportedCalls").map(([key, value]) => `${key} ${value}`).join(" · ") : "unknown";
+        body += theme.fg("muted", `\nSynthesis tokens (${tokens?.reportedCalls ?? 0}/${u.synthesisAttempts} calls reported; fields may be partial): ${reported}`);
+        const seconds = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
+        body += theme.fg("muted", `\nTimings: total ${seconds(t.totalMs)} · retrieval ${seconds(t.retrievalMs)} · preprocessing ${seconds(t.preprocessingMs)} · synthesis ${seconds(t.synthesisMs)} · video ${seconds(t.videoMs)} (nested in preprocessing, not additive)`);
+      }
+
       text.setText(header + body);
       return text;
     },

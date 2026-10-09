@@ -72,7 +72,7 @@ export async function searchUsers(
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
     if (!Array.isArray(payload.users)) {
       throw new Error("twitterapi.io returned a malformed response (missing users array)");
     }
@@ -160,7 +160,7 @@ export async function fetchThread(
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
     if (!Array.isArray(payload.tweets)) {
       throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
     }
@@ -267,7 +267,7 @@ async function walkTweets(
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
     const rawTweets = options.extract ? options.extract(payload) : payload.tweets;
     if (!Array.isArray(rawTweets)) {
       throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
@@ -541,7 +541,7 @@ export async function fetchTrends(
   }
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
   if (!Array.isArray(payload.trends)) {
     throw new Error("twitterapi.io returned a malformed response (missing trends array)");
   }
@@ -608,7 +608,7 @@ async function walkUsers(
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
     if (!Array.isArray(payload[options.arrayKey])) {
       throw new Error(`twitterapi.io returned a malformed response (missing ${options.arrayKey} array)`);
     }
@@ -744,7 +744,7 @@ export async function fetchUserProfile(
   url.searchParams.set("userName", handle);
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
   const user = asUser(payload.data);
   if (!user) throw new Error(`twitterapi.io returned no profile for "${handle}"`);
   return user;
@@ -776,7 +776,7 @@ export async function fetchTweetsByIds(
   url.searchParams.set("tweet_ids", cleaned.join(","));
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
   if (!Array.isArray(payload.tweets)) {
     throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
   }
@@ -849,7 +849,7 @@ export async function fetchSpaceDetail(
   url.searchParams.set("space_id", id);
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
   // Live responses nest the object under `detail` (the docs say `data`), and use
   // a string there to report "not found". Accept both envelopes.
   const raw = payload.detail ?? payload.data;
@@ -971,7 +971,7 @@ export async function fetchUserAbout(
   url.searchParams.set("userName", handle);
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
+  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
   const user = asUserAbout(payload.data ?? payload);
   if (!user) throw new Error(`twitterapi.io returned no about data for "${handle}"`);
   return user;
