@@ -8,6 +8,7 @@
  * whatever the model happens to type. A generated link that was not in the
  * candidate set is counted and disclosed instead of being published as a source.
  */
+import { reportProgress, type ProgressCallback } from "./progress.js";
 import type { TwitterSearchDetails } from "./types.js";
 import { InputBudget } from "./input-budget.js";
 import type { TwitterConfig } from "./config.js";
@@ -52,6 +53,8 @@ interface MediaInputPlan {
 }
 
 export interface SynthesisDeps {
+  progress?: ProgressCallback;
+  signal?: AbortSignal;
   /** Resolved complete answering/fallback chain, before retrieval. */
   inputBudget?: InputBudget;
   /** Collector admission reserved before processing; never allocated per source. */
@@ -731,6 +734,13 @@ export async function collectMedia(
   const attemptCap = Math.max(1, config.maxMediaPerSearch) * 3;
   const budgetMs = deps.mediaBudgetMs ?? MEDIA_PHASE_BUDGET_MS;
   const deadline = clock() + budgetMs;
+  // Phases visit photos before videos; progress tracks first attempted assets,
+  // not their original source-array indices. Poster fallback keeps its position.
+  const positions = new Map<MediaCandidate, number>();
+  const updateMedia = (candidate: MediaCandidate) => {
+    if (!positions.has(candidate)) positions.set(candidate, positions.size + 1);
+    reportProgress(deps, `media ${positions.get(candidate)}/${candidates.length}`);
+  };
   let attempts = 0;
   // Photos/posters share this cap. Video frames retain the separate per-video cap.
   let attachments = 0;
@@ -782,6 +792,7 @@ export async function collectMedia(
       return false;
     }
     attempts++;
+    updateMedia(candidate);
     const attachment = await fetchMedia(media.url, Math.max(1, limit - clock()));
     if (!attachment || !checkedImage(attachment)) {
       if (attachment) inputImageSkips++;
@@ -820,6 +831,7 @@ export async function collectMedia(
     }
     if (processVideo && videosStarted < config.maxVideosPerSearch && clock() < videoPhaseDeadline) {
       videosStarted++;
+      updateMedia(candidate);
       try {
         const result = await processVideo({
           postUrl: displayUrl, media: candidate.media, config,

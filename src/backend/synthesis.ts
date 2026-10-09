@@ -1,3 +1,4 @@
+import { reportProgress, type ProgressCallback } from "../progress.js";
 import type { TwitterSearchDetails } from "../types.js";
 import { SYNTHESIS_SYSTEM_PROMPT, type SynthesisRequest } from "../synthesize.js";
 import { InputBudget, renderedPrompt, withoutImages } from "../input-budget.js";
@@ -77,12 +78,14 @@ function createCompletion(
   run: NonNullable<RegistryLike["complete"]>,
   model: ModelLike,
   budget: InputBudget,
+  progress?: ProgressCallback,
 ): (request: SynthesisRequest) => Promise<string> {
   return async (request) => {
     budget.assert(request, model);
     const promptText = renderedPrompt(request);
     const attempt = (reasoningEffort?: string): Promise<unknown> => {
       budget.assert(request, model);
+      reportProgress({ progress, signal: request.signal }, `synthesizing with ${model.provider}/${model.id}`);
       return run.call(
         registry,
         model as never,
@@ -316,7 +319,7 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, que
   const completionFor = (target: ModelLike): ((request: SynthesisRequest) => Promise<string>) => {
     let completion = completions.get(target);
     if (!completion) {
-      const completeModel = createCompletion(registry, run, target, budget);
+      const completeModel = createCompletion(registry, run, target, budget, options.progress);
       const supportsImage = budget.acceptsImages(target);
       completion = supportsImage
         ? completeModel

@@ -1,3 +1,4 @@
+import type { ProgressCallback } from "../progress.js";
 import { createHash } from "node:crypto";
 import { isObject, TWITTERAPI_BASE_URL, type FetchLike } from "./core.js";
 
@@ -233,6 +234,7 @@ export function ensureSuccessfulPayload(
 
 /** Options shared by every twitterapi.io endpoint: retry, pacing, cancellation. */
 export interface TwitterApiRequestOptions {
+  progress?: ProgressCallback;
   /** Per-request timeout in ms (default 30_000). */
   timeoutMs?: number;
   /** Retry attempts for 429/503 responses (default 3). */

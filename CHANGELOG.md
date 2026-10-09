@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Call-local, display-only progress updates for pagination, media/video phases,
+  and every physical synthesis completion/repair/fallback. Pi's partial view shows
+  the latest phase; cancellation suppresses late updates and observer failures
+  cannot fail or retry paid work. Final answer markdown is unchanged.
 - Per-call settings reload using the execution context's working directory.
   User/project edits apply without `/reload`; overlapping calls retain independent
   snapshots and project-level sensitive keys remain ignored and disclosed.

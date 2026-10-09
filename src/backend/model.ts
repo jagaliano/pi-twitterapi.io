@@ -1,3 +1,4 @@
+import type { ProgressCallback } from "../progress.js";
 import type { TwitterConfig } from "../config.js";
 import type { BudgetModel } from "../input-budget.js";
 import type { SynthesisModel } from "../synthesize.js";
@@ -27,6 +28,7 @@ export interface ModelLike extends BudgetModel {
 }
 /** Options shared by every twitterapi.io run path. */
 export interface BackendOptions {
+  progress?: ProgressCallback;
   env?: Record<string, string | undefined>;
   fetcher?: typeof fetch;
   registry?: RegistryLike;

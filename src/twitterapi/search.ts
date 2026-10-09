@@ -1,3 +1,4 @@
+import { reportProgress, type ProgressCallback } from "../progress.js";
 import {
   ADVANCED_SEARCH_PATH,
   TWITTERAPI_BASE_URL,
@@ -20,6 +21,7 @@ import {
 import { asTweet } from "./tweet.js";
 
 export interface SearchTweetsOptions {
+  progress?: ProgressCallback;
   /** Max pages to fetch (default 5). Bounds total requests when pages come back empty. */
   maxPages?: number;
   /**
@@ -136,6 +138,7 @@ export async function searchTweets(
     if (signal?.aborted) throw new CancelledError();
     // Shared HTTP-attempt pacing also covers first requests and retries.
     pages += 1;
+    reportProgress(options, `page ${pages}/${trimBandHours > 0 ? pageCeiling : basePageBudget} · ${collected.length} posts`);
     let url: URL;
     try {
       url = new URL(TWITTERAPI_BASE_URL + ADVANCED_SEARCH_PATH);
@@ -202,6 +205,7 @@ export async function searchTweets(
     // nothing further ahead can be in-window.
     if (trimBandHours === 0 || pageTrimmedNewer === 0) pagesOnBudget += 1;
 
+    reportProgress(options, `page ${pages}/${trimBandHours > 0 ? pageCeiling : basePageBudget} · ${collected.length} posts`);
     const step = advanceOrStop(payload, seenCursors);
     if (typeof step === "string") {
       stoppedBy = step;

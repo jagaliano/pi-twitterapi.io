@@ -204,6 +204,14 @@ For native video through OpenRouter instead of Google:
 > runtime. Synthesis is a real model call, so it consumes tokens on the configured
 > model.
 
+### Progress
+
+Pi's in-progress tool view shows the latest phase: page/collected-post or account
+counts, deduplicated media attempt positions, video download/native/frame/STT
+work, and the exact synthesis model (including retries and fallbacks). Updates
+are call-local, optional and display-only; observer errors do not fail the call,
+and cancellation suppresses late updates. They never enter the answer or Sources.
+
 ### Complete-input budget
 
 Before retrieval, the primary and fallback catalogue entries must expose valid

@@ -90,6 +90,8 @@ function mediaDeps(
   options: TwitterApiSynthesisOptions,
 ): SynthesisDeps {
   return {
+    progress: options.progress,
+    signal: options.signal,
     complete: backend.complete,
     inputBudget: backend.budget,
     fetchMedia: createFetchMedia(backend.fetcher, options.signal),
@@ -98,6 +100,7 @@ function mediaDeps(
           fetcher: options.fetcher ?? fetch,
           env: options.env ?? {},
           signal: options.signal,
+          progress: options.progress,
           exec: options.videoExec,
         })
       : undefined,
@@ -124,6 +127,7 @@ export async function runTwitterApiSearch(
   const params = normalizeParams(options.params);
   const search = await searchTweets(params, apiKey, fetcher, {
     signal: options.signal,
+    progress: options.progress,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
     maxPages: options.config.maxPages,
@@ -194,6 +198,7 @@ export async function runTwitterApiUserSearch(
 
   const search = await searchUsers(options.query, apiKey, fetcher, {
     signal: options.signal,
+    progress: options.progress,
     count: options.count,
     // Configured budgets apply here too: the ceiling is a hard cap, and the base
     // budget is the configured one rather than this endpoint's own default.
@@ -249,6 +254,7 @@ export async function runTwitterApiThread(
 
   const thread = await fetchThread(options.tweet, apiKey, fetcher, {
     signal: options.signal,
+    progress: options.progress,
     maxPages: pageBudget(options.maxPages, options.config),
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
@@ -307,6 +313,7 @@ async function completeTweetAnswer(
 function tweetReadOptions(options: TwitterApiSynthesisOptions) {
   return {
     signal: options.signal,
+    progress: options.progress,
     maxPages: options.config.maxPages,
     maxPagesCeiling: options.config.maxPagesCeiling,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
@@ -411,6 +418,7 @@ export async function runTwitterApiTrends(
   const backend = resolveSynthesisBackend(options, options.query);
   const { trends } = await fetchTrends(options.woeid, backend.apiKey, backend.fetcher, {
     signal: options.signal,
+    progress: options.progress,
     count: options.count,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
@@ -454,6 +462,7 @@ async function completeUserAnswer(
 function lookupOptions(options: TwitterApiSynthesisOptions) {
   return {
     signal: options.signal,
+    progress: options.progress,
     minRequestIntervalMs: options.config.minRequestIntervalMs,
     retryBaseDelayMs: options.config.retryBaseDelayMs,
   };

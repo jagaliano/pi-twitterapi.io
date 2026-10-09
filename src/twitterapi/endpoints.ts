@@ -1,3 +1,4 @@
+import { reportProgress } from "../progress.js";
 import {
   TWITTERAPI_BASE_URL,
   isObject,
@@ -65,6 +66,7 @@ export async function searchUsers(
   while (collected.length < target && pages < maxPages) {
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} accounts`);
     const url = new URL(TWITTERAPI_BASE_URL + USER_SEARCH_PATH);
     url.searchParams.set("query", trimmed);
     if (cursor) url.searchParams.set("cursor", cursor);
@@ -89,6 +91,7 @@ export async function searchUsers(
       if (collected.length >= target) break;
     }
 
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} accounts`);
     const step = advanceOrStop(payload, seenCursors);
     if (typeof step === "string") {
       stoppedBy = step;
@@ -151,6 +154,7 @@ export async function fetchThread(
   while (pages < maxPages) {
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} posts`);
     const url = new URL(TWITTERAPI_BASE_URL + THREAD_CONTEXT_PATH);
     url.searchParams.set("tweetId", id);
     if (cursor) url.searchParams.set("cursor", cursor);
@@ -183,6 +187,7 @@ export async function fetchThread(
       stoppedBy = "exhausted";
       break;
     }
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} posts`);
     const step = advanceOrStop(payload, seenCursors);
     if (typeof step === "string") {
       stoppedBy = step;
@@ -253,6 +258,7 @@ async function walkTweets(
   while (pages < maxPages && (limit === undefined || collected.length < limit)) {
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} posts`);
     const url = new URL(TWITTERAPI_BASE_URL + path);
     for (const [key, value] of Object.entries(options.params ?? {})) {
       if (value === undefined || value === "") continue;
@@ -280,6 +286,7 @@ async function walkTweets(
       if (limit !== undefined && collected.length >= limit) break;
     }
 
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} posts`);
     const step = advanceOrStop(payload, seenCursors);
     if (typeof step === "string") {
       stoppedBy = step;
@@ -532,6 +539,7 @@ export async function fetchTrends(
     }
     url.searchParams.set("count", String(options.count));
   }
+  reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
   const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
   if (!Array.isArray(payload.trends)) {
@@ -591,6 +599,7 @@ async function walkUsers(
   while (pages < maxPages && (limit === undefined || collected.length < limit)) {
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} accounts`);
     const url = new URL(TWITTERAPI_BASE_URL + path);
     for (const [key, value] of Object.entries(options.params ?? {})) {
       if (value === undefined || value === "") continue;
@@ -616,6 +625,7 @@ async function walkUsers(
       if (limit !== undefined && collected.length >= limit) break;
     }
 
+    reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} accounts`);
     const step = advanceOrStop(payload, seenCursors);
     if (typeof step === "string") {
       stoppedBy = step;
@@ -732,6 +742,7 @@ export async function fetchUserProfile(
   const settings = resolveRequestSettings(options);
   const url = new URL(TWITTERAPI_BASE_URL + USER_INFO_PATH);
   url.searchParams.set("userName", handle);
+  reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
   const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
   const user = asUser(payload.data);
@@ -763,6 +774,7 @@ export async function fetchTweetsByIds(
   const settings = resolveRequestSettings(options);
   const url = new URL(TWITTERAPI_BASE_URL + TWEETS_BY_IDS_PATH);
   url.searchParams.set("tweet_ids", cleaned.join(","));
+  reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
   const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
   if (!Array.isArray(payload.tweets)) {
@@ -835,6 +847,7 @@ export async function fetchSpaceDetail(
   const settings = resolveRequestSettings(options);
   const url = new URL(TWITTERAPI_BASE_URL + SPACE_DETAIL_PATH);
   url.searchParams.set("space_id", id);
+  reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
   const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
   // Live responses nest the object under `detail` (the docs say `data`), and use
@@ -956,6 +969,7 @@ export async function fetchUserAbout(
   const settings = resolveRequestSettings(options);
   const url = new URL(TWITTERAPI_BASE_URL + USER_ABOUT_PATH);
   url.searchParams.set("userName", handle);
+  reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
   const payload = ensureSuccessfulPayload(response, body, bodyError, attempts);
   const user = asUserAbout(payload.data ?? payload);

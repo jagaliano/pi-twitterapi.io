@@ -28,6 +28,7 @@ import {
 } from "./backend.js";
 import { tweetIdFromInput, type ReplySort, type TwitterApiSearchParams } from "./twitterapi.js";
 import { loadTwitterConfig } from "./config.js";
+import { reportProgress } from "./progress.js";
 import type { TwitterSearchDetails } from "./types.js";
 
 export interface TwitterToolOptions {
@@ -194,7 +195,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       count: Type.Optional(Type.Number({ description: "mode=posts/users: max items (posts default 10, accounts default 20; max 50). mode=trends: number of trends (min 30)." })),
     }),
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       // Fresh, call-local snapshot: edits apply without /reload and parallel
       // calls keep their own cwd/config through retrieval and synthesis.
       // Legacy `settings` stays trusted; separate project settings never gain
@@ -286,6 +287,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       // When the configured model fails at runtime, the answer is retried with
       // the session model — but only when it is a different model.
       const fallbackModelIds = config.synthesisModel && sessionModelId ? [sessionModelId] : undefined;
+      const progress = onUpdate ? (text: string) => onUpdate({ content: [{ type: "text", text }], details: { progress: text } }) : undefined;
       const base = {
         config: effectiveConfig,
         env,
@@ -293,6 +295,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         signal,
         registry: ctx?.modelRegistry,
         fallbackModelIds,
+        progress: (text: string) => reportProgress({ progress, signal }, text),
       } as const;
 
       // A mode that cannot apply a parameter must say so. Silently ignoring it
@@ -488,7 +491,8 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 
       if (options.isPartial) {
-        text.setText(theme.fg("muted", "Reading X…"));
+        const phase = (result.details as { progress?: string } | undefined)?.progress ?? result.content.find(block => block.type === "text")?.text ?? "Reading X…";
+        text.setText(theme.fg("muted", phase));
         return text;
       }
 

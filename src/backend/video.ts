@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { reportProgress, type ProgressCallback } from "../progress.js";
 import type { TwitterConfig } from "../config.js";
 import type { ImageAttachment } from "../synthesize.js";
 import type { TweetMedia } from "../twitterapi.js";
@@ -34,6 +35,7 @@ export type ExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface VideoDeps {
+  progress?: ProgressCallback;
   fetcher: typeof fetch;
   /** Environment for credential lookup. Never read from `process.env` inside. */
   env?: Record<string, string | undefined>;
@@ -1194,6 +1196,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     return evidence;
   }
 
+  reportProgress(deps, "video: downloading");
   const isGif = media.type === "animated_gif";
   const inlineThreshold = deps.inlineRawBytes ?? GEMINI_INLINE_RAW_BYTES;
   // Same ranking as the selector, so the production retry loop can no longer
@@ -1346,6 +1349,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
             "explicit twitter.videoApiKeyEnv over https.",
         );
       } else {
+        reportProgress(deps, "video: native analysis");
         const apiKey = env[config.videoApiKeyEnv] as string;
         const model = config.videoModel as string;
         const bytes = new Uint8Array(await readFile(mediaFile));
@@ -1405,6 +1409,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     const frameDurationMs = durationKnown ? (durationMs as number) : trimmed ? maxSeconds * 1000 : undefined;
     if (!nativeMethod && modelSupportsImage && input.allowFrames !== false && haveFfmpeg && frameDurationMs) {
       try {
+        reportProgress(deps, "video: frames");
         const timing = frameTiming(frameDurationMs, config.maxFrames, maxSeconds);
         const files = await extractFrames(ctx, mediaFile, dir, timing, () => remaining(deadline, now));
         const total = files.length;
@@ -1441,6 +1446,7 @@ export async function processVideo(input: ProcessVideoInput): Promise<VideoEvide
     // a paid transcription would add nothing. Also skip it when native analysis
     // stated that there is no speech at all (V3).
     if (!isGif && !transcript && !nativeStructured && haveFfmpeg && (localStt || remoteSttConfigured)) {
+      reportProgress(deps, "video: transcribing");
       const audioFile = join(dir, localStt ? "audio.wav" : "audio.mp3");
       const haveAudio = await extractAudio(ctx, mediaFile, audioFile, localStt, maxSeconds, remaining(deadline, now));
       if (haveAudio) {
