@@ -262,8 +262,11 @@ reserved separately when catalogue request-byte limits exist; already image-free
 questions are measured verbatim, not pattern-stripped. Omitted post bundles and
 unreserved video assets incur no
 media/video/STT call. Final input is checked again. Local omissions are disclosed
-separately from upstream paging limits; existing 700-character post/bio caps stay
-in place. Inline Sources come only from delivered evidence. The deduplicated
+separately from upstream paging limits. Own, quoted and reposted post text is
+retained in full when its whole source bundle fits; there is no per-post
+700-character cut. Bundles that cannot fit are omitted before media work, or a
+clear error is returned if none fit. Bio/metadata limits remain unchanged.
+Inline Sources come only from delivered evidence. The deduplicated
 no-inline fallback lists at most 20 Sources and discloses that cap.
 
 **Images now need an explicit declaration.** Put `imageInputBounds` in **user**
@@ -369,7 +372,7 @@ than silently ignored.
 - **Quoted/reposted context keeps its original attribution.** One nested level
   is retained, with reply target, language and quote-count metadata. Id-only stubs
   are ignored; media-only sources survive. Longer original text replaces a
-  truncated RT copy under the existing text caps, without changing the enclosing
+  truncated RT copy within the complete-input budget, without changing the enclosing
   post's identity. Valid fetched nested permalinks can be cited. Own, quoted and
   reposted media share the existing caps and phase deadlines (photos still come
   first). Repeated assets are downloaded/processed once, including mirrored RT
@@ -388,8 +391,8 @@ than silently ignored.
   Mirrored wrapper alt text is suppressed under the fetched original's ownership,
   even with media understanding disabled; captions are not transplanted.
   An article preview is not its full body; alt text is not visual analysis. These
-  destinations never join `Sources`. The existing 700-character post/bio caps
-  remain until complete-input budgeting is implemented.
+  destinations never join `Sources`. Long post bodies use the complete-input
+  budget; bio and metadata field caps remain unchanged.
 - **Profile/pin metadata is explicit.** Available author/profile counts and
   website destinations are included. Profile pin IDs do not imply their content
   was fetched. A full pin supplied by the timeline is marked and deduplicated;

@@ -138,12 +138,12 @@ test("rich optional cardinalities are bounded with rendering omission disclosure
   assert.equal(malformed.author?.mediaCount, undefined);
 });
 
-test("long raw text survives mapping, but the delivered 700-character cap waits for 2.6", () => {
+test("long raw text survives mapping and complete-input prompt rendering", () => {
   const text = "x".repeat(800) + "LONG_POST_TAIL";
   const tweet = asTweet(raw({ text }))!;
   assert.equal(tweet.text, text);
   assert.ok(tweet.text!.length > 700);
-  assert.ok(!buildCandidatePrompt("Q", [tweet]).includes("LONG_POST_TAIL"));
+  assert.ok(buildCandidatePrompt("Q", [tweet]).includes("LONG_POST_TAIL"));
 });
 
 test("author/profile counts retain finite zero values and profile website expansion", () => {

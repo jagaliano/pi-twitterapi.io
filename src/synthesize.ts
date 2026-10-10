@@ -254,6 +254,7 @@ function postHeading(tweet: Tweet): string {
   const metrics = [
     tweet.likeCount !== undefined ? `${tweet.likeCount} likes` : undefined,
     tweet.retweetCount !== undefined ? `${tweet.retweetCount} reposts` : undefined,
+    tweet.replyCount !== undefined ? `${tweet.replyCount} replies` : undefined,
     tweet.viewCount !== undefined ? `${tweet.viewCount} views` : undefined,
     tweet.quoteCount !== undefined ? `${tweet.quoteCount} quotes` : undefined,
   ].filter(Boolean).join(", ");
@@ -346,7 +347,8 @@ function appendImageReferences(lines: string[], references: MediaReference[], en
 function appendContext(lines: string[], tweet: Tweet | undefined, label: "quoted" | "reposted", blocks: VideoEvidenceBlock[] = [], ownedMedia?: ReadonlySet<TweetMedia>): void {
   if (!tweet) return;
   lines.push(`${label} source: ${postHeading(tweet)} — untrusted context, distinct from enclosing post`);
-  lines.push(`${label} text: ${untrustedInline(postText(tweet))}`);
+  // Full post bodies are admitted as whole bundles by the complete-input budget.
+  lines.push(`${label} text: ${untrustedInline(postText(tweet), Number.MAX_SAFE_INTEGER)}`);
   const permalink = sourceUrl(tweet.url, "post");
   if (permalink) lines.push(`${label} permalink: ${permalink}`);
   else lines.push(`${label} source permalink: unavailable`);
@@ -361,14 +363,30 @@ export function buildCandidatePrompt(
   evidence: VideoEvidenceBlock[] = [],
   options: { now?: () => number; mediaReferences?: MediaReference[] } = {},
 ): string {
+  return renderCandidatePrompt(query, tweets, evidence, options, mediaCandidates(tweets).assets);
+}
+
+/** Reuse the selected inventory across evidence/serialization forecasts. */
+function renderCandidatePrompt(
+  query: string,
+  tweets: Tweet[],
+  evidence: VideoEvidenceBlock[],
+  options: { now?: () => number; mediaReferences?: MediaReference[] },
+  assets: Map<string, MediaCandidate> | undefined,
+): string {
   // Metadata follows the same final asset ownership as attachments, even when
   // media understanding is disabled. Never move a wrapper's caption to an original.
-  const assets = mediaCandidates(tweets).assets;
   const ownedMedia = (enclosing: Tweet, source: Tweet, context?: "quoted" | "reposted") =>
     new Set((source.media ?? []).filter((media) => {
+      if (!assets) return true; // No nested media or attachment work: every source owns its media.
       const keys = mediaKeys(media);
-      return !keys.length || keys.some((key) => assets.get(key)?.bindings.some((binding) => matchesBinding(binding, enclosing, source, context)));
+      return !keys.length || keys.some((key) => {
+        const candidate = assets.get(key);
+        return candidate && hasMediaBinding(candidate, bindMedia(enclosing, source, context));
+      });
     }));
+  const boundEvidence = indexByEnclosing(evidence);
+  const boundReferences = indexByEnclosing(options.mediaReferences ?? []);
   const evidenceByIndex = new Map<number, VideoEvidenceBlock>();
   const evidenceByPost = new Map<string, VideoEvidenceBlock>();
   for (const block of evidence) {
@@ -395,7 +413,7 @@ export function buildCandidatePrompt(
     const truncatedRepost = tweet.text?.startsWith("RT @") && (tweet.retweetOf?.text?.length ?? 0) > tweet.text.length;
     lines.push(truncatedRepost
       ? "text: Repost; longer original follows (truncated RT copy omitted)."
-      : `text: ${untrustedInline(postText(tweet))}`);
+      : `text: ${untrustedInline(postText(tweet), Number.MAX_SAFE_INTEGER)}`);
     const permalink = sourceUrl(tweet.url, "post");
     if (permalink) lines.push(`permalink: ${permalink}`);
     lines.push(...postMetadata(tweet, ownedMedia(tweet, tweet)));
@@ -411,15 +429,15 @@ export function buildCandidatePrompt(
       (tweet.url ? evidenceByPost.get(`url:${tweet.url}`) : undefined) ??
       (identifiable ? undefined : evidenceByIndex.get(index));
     const boundBlocks = (source: Tweet, context?: "quoted" | "reposted") =>
-      evidence.filter((block) => block.binding && matchesBinding(block.binding, tweet, source, context));
+      itemsForEnclosing(boundEvidence, tweet).filter((block) => block.binding && matchesBinding(block.binding, tweet, source, context));
     appendVideoEvidence(lines, [...(evidenceBlock ? [evidenceBlock] : []), ...boundBlocks(tweet)]);
-    appendImageReferences(lines, options.mediaReferences ?? [], tweet, tweet);
+    appendImageReferences(lines, itemsForEnclosing(boundReferences, tweet), tweet, tweet);
     // Evidence and image slots stay under their actual source heading. Both
     // identity namespaces are checked; collection order is never an identity.
     for (const [label, source] of [["quoted", tweet.quoted], ["reposted", tweet.retweetOf]] as const) {
       if (!source) continue;
       appendContext(lines, source, label, boundBlocks(source, label), ownedMedia(tweet, source, label));
-      appendImageReferences(lines, options.mediaReferences ?? [], tweet, source, label);
+      appendImageReferences(lines, itemsForEnclosing(boundReferences, tweet), tweet, source, label);
     }
     lines.push("");
   });
@@ -588,6 +606,10 @@ function isVideoMedia(media: TweetMedia): boolean {
 interface MediaCandidate {
   media: TweetMedia;
   bindings: MediaBinding[];
+  /** Stable insertion order survives late alias coalescing. */
+  order: number;
+  keys: Set<string>;
+  bindingIndex: Map<string | Tweet, MediaBinding[]>;
 }
 
 /** Asset identity, not post identity. A shared poster alone is not a shared video. */
@@ -628,17 +650,77 @@ function bindMedia(enclosing: Tweet, source: Tweet, context?: "quoted" | "repost
   };
 }
 
-function addMediaBinding(candidate: MediaCandidate, binding: MediaBinding): void {
+function enclosingKeys(binding: MediaBinding): (string | Tweet)[] {
+  return binding.enclosingPost ? [binding.enclosingPost] : [
+    ...(binding.enclosingPostId ? [`id:${binding.enclosingPostId}`] : []),
+    ...(binding.enclosingPostUrl ? [`url:${binding.enclosingPostUrl}`] : []),
+  ];
+}
+
+function indexByEnclosing<T extends { binding?: MediaBinding }>(items: T[]): Map<string | Tweet, T[]> {
+  const index = new Map<string | Tweet, T[]>();
+  for (const item of items) if (item.binding) for (const key of enclosingKeys(item.binding)) {
+    const mapped = index.get(key) ?? [];
+    mapped.push(item);
+    index.set(key, mapped);
+  }
+  return index;
+}
+
+function itemsForEnclosing<T>(index: Map<string | Tweet, T[]>, enclosing: Tweet): T[] {
+  if (!index.size) return [];
+  return [...new Set(enclosingKeys(bindMedia(enclosing, enclosing)).flatMap(key => index.get(key) ?? []))];
+}
+
+function hasMediaBinding(candidate: MediaCandidate, binding: MediaBinding): boolean {
   const enclosing = binding.enclosingPost ?? { text: "", id: binding.enclosingPostId, url: binding.enclosingPostUrl };
   const source = binding.sourcePost ?? { text: "", id: binding.sourcePostId, url: binding.sourcePostUrl };
-  if (!candidate.bindings.some((existing) => matchesBinding(existing, enclosing, source, binding.context))) {
-    candidate.bindings.push(binding);
+  const mapped = new Set(enclosingKeys(binding).flatMap(key => candidate.bindingIndex.get(key) ?? []));
+  return [...mapped].some(existing => matchesBinding(existing, enclosing, source, binding.context));
+}
+
+function addMediaBinding(candidate: MediaCandidate, binding: MediaBinding): void {
+  if (hasMediaBinding(candidate, binding)) return;
+  candidate.bindings.push(binding);
+  for (const key of enclosingKeys(binding)) {
+    const bindings = candidate.bindingIndex.get(key) ?? [];
+    bindings.push(binding);
+    candidate.bindingIndex.set(key, bindings);
   }
 }
 
 function mediaCandidates(tweets: Tweet[]): { candidates: MediaCandidate[]; available: number; duplicates: number; assets: Map<string, MediaCandidate> } {
   const candidates: MediaCandidate[] = [];
   const assets = new Map<string, MediaCandidate>();
+  // Preserve first compatible root semantics, including partial ID/URL identities,
+  // without parsing and scanning every unrelated root for every owned asset.
+  const rootIndex = new Map<string, Tweet>();
+  const rootOrder = new Map<Tweet, number>();
+  const rootKey = (...parts: string[]) => JSON.stringify(parts);
+  for (const [order, post] of tweets.entries()) {
+    if (!rootOrder.has(post)) rootOrder.set(post, order);
+    const id = post.id, url = sourceUrl(post.url, "post");
+    const keys = [
+      ...(id ? [rootKey("id", id)] : []), ...(url ? [rootKey("url", url)] : []),
+      ...(id && url ? [rootKey("pair", id, url)] : []),
+      ...(id && !url ? [rootKey("id-only", id)] : []),
+      ...(url && !id ? [rootKey("url-only", url)] : []),
+    ];
+    for (const key of keys) if (!rootIndex.has(key)) rootIndex.set(key, post);
+  }
+  const rootFor = (binding: MediaBinding): Tweet | undefined => {
+    if (binding.enclosingPost) return binding.enclosingPost;
+    const id = binding.enclosingPostId, url = binding.enclosingPostUrl;
+    const keys = id && url ? [rootKey("pair", id, url), rootKey("id-only", id), rootKey("url-only", url)]
+      : id ? [rootKey("id", id)] : url ? [rootKey("url", url)] : [];
+    let first: Tweet | undefined;
+    for (const key of keys) {
+      const post = rootIndex.get(key);
+      if (post && (!first || rootOrder.get(post)! < rootOrder.get(first)!)) first = post;
+    }
+    return first;
+  };
+  let nextOrder = 0;
   let available = 0;
   let duplicates = 0;
   for (const enclosing of tweets) {
@@ -651,7 +733,8 @@ function mediaCandidates(tweets: Tweet[]): { candidates: MediaCandidate[]; avail
         const matches = new Set(keys.flatMap((key) => assets.get(key) ?? []));
         // A later ID can bridge an earlier exact-only copy and a known alias.
         // Coalesce before any work/caps, retaining first-source ordering/URLs.
-        let candidate = candidates.find((item) => matches.has(item));
+        let candidate: MediaCandidate | undefined;
+        for (const match of matches) if (!candidate || match.order < candidate.order) candidate = match;
         if (candidate) {
           duplicates++;
           for (const other of matches) {
@@ -659,14 +742,15 @@ function mediaCandidates(tweets: Tweet[]): { candidates: MediaCandidate[]; avail
             duplicates++;
             for (const existing of other.bindings) addMediaBinding(candidate, existing);
             candidates.splice(candidates.indexOf(other), 1);
-            for (const [key, asset] of assets) if (asset === other) assets.set(key, candidate);
+            for (const key of other.keys) { assets.set(key, candidate); candidate.keys.add(key); }
           }
           addMediaBinding(candidate, binding);
         } else {
-          candidate = { media, bindings: [binding] };
+          candidate = { media, bindings: [], order: nextOrder++, keys: new Set(), bindingIndex: new Map() };
+          addMediaBinding(candidate, binding);
           candidates.push(candidate);
         }
-        for (const key of keys) assets.set(key, candidate);
+        for (const key of keys) { assets.set(key, candidate); candidate.keys.add(key); }
       }
     }
   }
@@ -676,9 +760,10 @@ function mediaCandidates(tweets: Tweet[]): { candidates: MediaCandidate[]; avail
   for (const candidate of candidates) {
     const bindings = candidate.bindings;
     candidate.bindings = [];
+    candidate.bindingIndex.clear();
     for (const binding of bindings) {
       const enclosing = binding.context === undefined
-        ? tweets.find((post) => matchesBinding(binding, post, post))
+        ? rootFor(binding)
         : undefined;
       const original = enclosing
         ? ([["reposted", enclosing.retweetOf], ["quoted", enclosing.quoted]] as const)
@@ -712,6 +797,7 @@ export async function collectMedia(
   model: SynthesisModel,
   deps: SynthesisDeps,
 ): Promise<MediaCollection> {
+  deps.signal?.throwIfAborted();
   const notes: string[] = [];
   const images: ImageAttachment[] = [];
   const labels: string[] = [];
@@ -795,7 +881,9 @@ export async function collectMedia(
     }
     attempts++;
     updateMedia(candidate);
+    deps.signal?.throwIfAborted();
     const attachment = await fetchMedia(media.url, Math.max(1, limit - clock()));
+    deps.signal?.throwIfAborted();
     if (!attachment || !checkedImage(attachment)) {
       if (attachment) inputImageSkips++;
       else failed++;
@@ -826,6 +914,7 @@ export async function collectMedia(
   let videosOverCap = 0;
   let videosOverBudget = 0;
   for (const candidate of candidates.filter((item) => isVideoMedia(item.media))) {
+    deps.signal?.throwIfAborted();
     const displayUrl = sourceUrl(candidate.bindings[0].sourcePostUrl, "post") ?? NO_PERMALINK;
     if (processVideo && inputPlan && !inputPlan.videoAssets.has(candidate.media)) {
       await fetchPoster(candidate);
@@ -835,11 +924,13 @@ export async function collectMedia(
       videosStarted++;
       updateMedia(candidate);
       try {
+        deps.signal?.throwIfAborted();
         const result = await processVideo({
           postUrl: displayUrl, media: candidate.media, config,
           deadline: videoPhaseDeadline, modelSupportsImage: model.supportsImage,
           allowFrames: admitsImage() && (!inputPlan || inputPlan.imageSlots > 0),
         });
+        deps.signal?.throwIfAborted();
         const frames = model.supportsImage ? result.frames.slice(0, config.maxFrames) : [];
         let acceptedFrames = 0;
         for (const frame of frames) {
@@ -870,6 +961,7 @@ export async function collectMedia(
           );
         }
       } catch (error) {
+        deps.signal?.throwIfAborted(); // Caller cancellation is not a poster-fallback failure.
         notes.push(`Video processing failed for ${displayUrl}: ${(error as Error).message}`);
         await fetchPoster(candidate);
       }
@@ -920,15 +1012,24 @@ function retainBundles<T>(items: T[], render: (items: T[]) => string, system: st
 }
 
 /** Reserve renderer-worst-case evidence BEFORE any paid video/model work. */
-function preparePostInput(query: string, input: Tweet[], config: TwitterConfig, model: SynthesisModel, deps: SynthesisDeps, budget: InputBudget, now: () => number): { tweets: Tweet[]; plan: MediaInputPlan; notes: string[] } {
+async function preparePostInput(query: string, input: Tweet[], config: TwitterConfig, model: SynthesisModel, deps: SynthesisDeps, budget: InputBudget, now: () => number, signal: AbortSignal | undefined = deps.signal): Promise<{ tweets: Tweet[]; plan: MediaInputPlan; notes: string[] }> {
+  signal?.throwIfAborted();
   const system = SYNTHESIS_SYSTEM_PROMPT;
-  const forecast = (tweets: Tweet[], videos: ReadonlySet<TweetMedia>, slots: number) => {
-    const candidates = mediaCandidates(tweets).candidates;
+  // Root-only metadata cannot have mirrored nested ownership. When attachment
+  // work is disabled, no asset inventory is needed to render those prefixes.
+  const needsInventory = config.enableImageUnderstanding || config.enableVideoUnderstanding ||
+    input.some(tweet => tweet.quoted?.media?.length || tweet.retweetOf?.media?.length);
+  const forecast = (tweets: Tweet[], videos: ReadonlySet<TweetMedia>, slots: number, inventory: ReturnType<typeof mediaCandidates>) => {
+    const candidates = inventory.candidates;
+    if (!slots && !videos.size) {
+      const prompt = renderCandidatePrompt(query, tweets, [], { now }, needsInventory ? inventory.assets : undefined);
+      return { system, prompt, textOnlyPrompt: prompt, images: [] };
+    }
     const bindings = candidates.filter(candidate => videos.has(candidate.media)).flatMap(candidate => candidate.bindings);
     const references: MediaReference[] = candidates.flatMap(candidate => candidate.bindings.flatMap(binding => Array.from({ length: slots }, (_, imageIndex) => ({ binding, imageIndex }))));
     const render = (char: string) => {
       const evidence: VideoEvidenceBlock[] = bindings.map(binding => ({ binding, postUrl: binding.sourcePostUrl ?? "", method: char.repeat(101), transcript: char.repeat(MAX_TRANSCRIPT_CHARS + 1), visualNotes: char.repeat(MAX_VISUAL_NOTES_CHARS + 1) }));
-      return { prompt: buildCandidatePrompt(query, tweets, evidence, { now, mediaReferences: references }), textOnlyPrompt: buildCandidatePrompt(query, tweets, evidence, { now }), mediaManifest: slots ? Array.from({ length: slots }, (_, index) => `${index + 1}. ${char.repeat(2_001)}`).join("\n") : undefined };
+      return { prompt: renderCandidatePrompt(query, tweets, evidence, { now, mediaReferences: references }, inventory.assets), textOnlyPrompt: renderCandidatePrompt(query, tweets, evidence, { now }, inventory.assets), mediaManifest: slots ? Array.from({ length: slots }, (_, index) => `${index + 1}. ${char.repeat(2_001)}`).join("\n") : undefined };
     };
     // Three UTF-8 bytes/code unit bound token text; six JSON bytes/code unit
     // bound controls/lone surrogates independently, without charging JSON
@@ -936,34 +1037,37 @@ function preparePostInput(query: string, input: Tweet[], config: TwitterConfig, 
     return { system, ...render("界"), images: Array.from({ length: slots }, () => ({} as ImageAttachment)), jsonForecast: render("\u0000") };
   };
   let tweets: Tweet[] = [], videos = new Set<TweetMedia>(), slots = 0;
-  if (!budget.fits(forecast([], videos, 0))) throw new Error("twitter input budget: question/system scaffold does not fit.");
-  for (const tweet of input) {
-    const next = [...tweets, tweet], candidates = mediaCandidates(next).candidates;
+  let inventory = mediaCandidates([]);
+  if (!budget.fits(forecast([], videos, 0, inventory))) throw new Error("twitter input budget: question/system scaffold does not fit.");
+  for (const [index, tweet] of input.entries()) {
+    // Let caller cancellation run during large synchronous selection batches.
+    if (index && index % 32 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+    signal?.throwIfAborted();
+    const next = [...tweets, tweet], nextInventory = needsInventory ? mediaCandidates(next) : inventory, candidates = nextInventory.candidates;
     const retainedVideos = new Set(candidates.filter(candidate => videos.has(candidate.media)).map(candidate => candidate.media));
-    if (!budget.fits(forecast(next, retainedVideos, slots), slots)) continue;
-    tweets = next; videos = retainedVideos;
+    if (!budget.fits(forecast(next, retainedVideos, slots, nextInventory), slots)) continue;
+    tweets = next; videos = retainedVideos; inventory = nextInventory;
     if (config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo) {
       for (const candidate of candidates.filter(candidate => isVideoMedia(candidate.media))) {
         if (videos.has(candidate.media) || videos.size >= config.maxVideosPerSearch) continue;
         const proposed = new Set([...videos, candidate.media]);
-        if (budget.fits(forecast(tweets, proposed, slots), slots)) videos = proposed;
+        if (budget.fits(forecast(tweets, proposed, slots, inventory), slots)) videos = proposed;
       }
     }
     if (model.supportsImage && budget.imageBounds) {
       const photos = candidates.filter(candidate => !isVideoMedia(candidate.media)).length;
       const videoCount = candidates.filter(candidate => isVideoMedia(candidate.media)).length;
       const potential = Math.min(budget.imageBounds.maxImages, Math.min(config.maxMediaPerSearch, (config.enableImageUnderstanding ? photos : 0) + (config.enableVideoUnderstanding ? videoCount : 0)) + videos.size * config.maxFrames);
-      while (slots < potential && budget.fits(forecast(tweets, videos, slots + 1), slots + 1)) slots++;
+      while (slots < potential && budget.fits(forecast(tweets, videos, slots + 1, inventory), slots + 1)) slots++;
     }
   }
   if (input.length && !tweets.length) throw new Error("twitter input budget: no whole retrieved post bundle fits; reduce the question or use a larger context.");
   const notes = localOmissionNotes(input.length - tweets.length, "post bundle(s)");
-  const candidates = mediaCandidates(tweets).candidates;
+  const candidates = inventory.candidates;
   const requested = config.enableImageUnderstanding || config.enableVideoUnderstanding;
   if (requested && candidates.length && (!budget.imageBounds || !slots)) notes.push("Complete-input budget omitted image attachments: no space or no explicit imageInputBounds for the configured model. Text/native-video speech and visual evidence remain eligible.");
   const skippedVideos = config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo ? candidates.filter(candidate => isVideoMedia(candidate.media) && !videos.has(candidate.media)).length : 0;
   if (skippedVideos) notes.push(`Complete-input budget did not reserve preprocessing for ${skippedVideos} video asset(s); no video/STT provider call was made for those assets.`);
-  if (contextPosts(tweets).some(tweet => postText(tweet).length > MAX_TEXT_CHARS)) notes.push(`Post text is truncated at the existing ${MAX_TEXT_CHARS}-character cap; long-text expansion is not part of this input-budget change.`);
   return { tweets, plan: { imageSlots: slots, videoAssets: videos, budget }, notes };
 }
 
@@ -994,7 +1098,8 @@ export interface SynthesizeOptions {
 
 /** Run the synthesis hop and return contract-shaped details. */
 export async function synthesizeAnswer(options: SynthesizeOptions): Promise<TwitterSearchDetails> {
-  const { query, tweets: retrievedTweets, config, model, deps, signal, incomplete } = options;
+  const { query, tweets: retrievedTweets, config, model, deps, signal: requestedSignal, incomplete } = options;
+  const signal = requestedSignal ?? deps.signal;
   deps.telemetry?.phase("preprocessingMs");
   let tweets = retrievedTweets;
   if (tweets.length === 0) {
@@ -1016,10 +1121,11 @@ export async function synthesizeAnswer(options: SynthesizeOptions): Promise<Twit
 
   const budget = synthesisBudget(model, deps, config);
   const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
-  const selection = preparePostInput(query, tweets, config, model, deps, budget, now);
+  const selection = await preparePostInput(query, tweets, config, model, deps, budget, now, signal);
+  signal?.throwIfAborted(); // Cancellation can run at the selection await boundary.
   tweets = selection.tweets;
   if (deps.telemetry) deps.telemetry.usage.postsRetained = tweets.length;
-  const media = await collectMedia(tweets, config, model, { ...deps, mediaInputPlan: selection.plan });
+  const media = await collectMedia(tweets, config, model, { ...deps, signal, mediaInputPlan: selection.plan });
   const request: SynthesisRequest = {
     model,
     system: SYNTHESIS_SYSTEM_PROMPT,
@@ -1034,6 +1140,7 @@ export async function synthesizeAnswer(options: SynthesizeOptions): Promise<Twit
     signal, maxTokens: budget.outputTokens,
   };
   budget.assert(request);
+  signal?.throwIfAborted(); // A media await must not advance cancelled work into synthesis.
   const text = await deps.complete(request);
 
   const { citations: citedInline, fabricated } = deriveCitations(text, tweets);

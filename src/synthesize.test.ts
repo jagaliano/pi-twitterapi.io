@@ -94,10 +94,10 @@ test("buildCandidatePrompt lists every permalink and marks media", () => {
   assert.match(prompt, /media: video/);
 });
 
-test("buildCandidatePrompt truncates very long post text", () => {
-  const prompt = buildCandidatePrompt("q", [tweet({ text: "x".repeat(1200) })]);
-  assert.ok(prompt.includes("…"));
-  assert.ok(prompt.length < 1200);
+test("buildCandidatePrompt preserves long post text for complete-input admission", () => {
+  const text = "x".repeat(1200) + " LONG_POST_TAIL";
+  const prompt = buildCandidatePrompt("q", [tweet({ text })]);
+  assert.ok(prompt.includes(`text: ${text}`));
 });
 
 test("statusId and extractUrls handle real-world link shapes", () => {

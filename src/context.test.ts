@@ -200,8 +200,8 @@ test("synthesis receives attributed context and returns only fetched inline sour
   assert.ok(result.notes?.some((note) => /1 link.*did not match/.test(note)));
 });
 
-test("nested text cap remains 700 until complete-input budgeting is implemented", () => {
+test("nested post text is preserved for complete-input budgeting", () => {
   const post = context();
-  post.quoted!.text = "x".repeat(801);
-  assert.ok(buildCandidatePrompt("q", [post]).split("\n").includes(`quoted text: ${"x".repeat(700)}…`));
+  post.quoted!.text = "x".repeat(801) + " QUOTED_TAIL";
+  assert.ok(buildCandidatePrompt("q", [post]).split("\n").includes(`quoted text: ${post.quoted!.text}`));
 });

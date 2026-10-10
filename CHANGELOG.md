@@ -7,8 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-09
+
+### Fixed
+
+- Large-input admission no longer repeatedly scans unrelated media assets, owners,
+  image references and video bindings. Forecasts reuse their selected inventory;
+  disabled root-only media work skips unused inventories, and large selection
+  batches yield to caller cancellation.
+- Top-level/dependency caller signals are applied consistently across selection,
+  media awaits and completion dispatch. Cancellation cannot start a subsequent
+  image/video request, trigger paid poster fallback, or advance into synthesis.
+- Parsed reply counts, including zero, now reach synthesis under their own,
+  quoted or reposted source headings.
+
 ### Added
 
+- Full own/quoted/reposted post text within complete-input budgets instead of the
+  old 700-character per-post cut. Whole bundles that do not fit are omitted before
+  media billing, with disclosure; no fitting bundle gives a clear error. Bio and
+  metadata limits stay unchanged. The answering and fallback models see the same
+  retained long text, including validated link expansion and source attribution.
 - Call-local physical usage counters in the expanded tool view: upstream retries
   and accepted pages/lookups, returned/retained sources, media/native-video/STT
   fetches, every SDK synthesis attempt/repair/fallback, and reported token samples.
@@ -30,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count/byte limits. Missing bounds now omit attachments with disclosure; bounded
   PNG/JPEG headers and shared slots are checked. Text-only/unbounded-image
   fallbacks remove manifests/references without altering the trusted question.
-  Native-video/STT text remains eligible; existing 700-character text caps stay.
+  Native-video/STT text remains eligible; bio/metadata caps stay unchanged.
 - Local input omissions and no-inline fallback Sources (deduplicated/capped at20)
   are disclosed separately from upstream retrieval incompleteness.
 - Process-local, per-credential HTTP-attempt pacing across concurrent endpoints,
@@ -42,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - One-level quoted/reposted source context, including media-only sources and
   typed reply/language/quote metadata. Id-only stubs and deeper nesting are omitted.
 - Original repost text and source identity remain distinct from the enclosing
-  post; truncated RT copies are replaced by longer originals within existing caps.
+  post; truncated RT copies are replaced by longer originals within the complete-input budget.
 - Valid fetched nested permalinks join inline and deduplicated fallback Sources.
   New context fields use the existing prompt-boundary and source-URL guards.
 - Quoted/reposted media uses the existing shared image/video caps, attempt bounds
@@ -66,8 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Available author/profile counts, website and pin IDs are included. Pin IDs do
   not imply fetched content; supplied full timeline pins deduplicate, while
   missing/unknown pin content is disclosed without an extra paid lookup.
-  Non-null timeline-pin shapes have synthetic coverage only. Existing 700-character
-  post/bio caps remain pending complete-input budgeting.
+  Non-null timeline-pin shapes have synthetic coverage only. Long post text now
+  uses complete-input budgeting; bio/metadata caps remain unchanged.
 
 ## [0.3.5] - 2026-10-07
 
@@ -477,7 +496,8 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.5...v0.4.0
 [0.3.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.2...v0.2.0
