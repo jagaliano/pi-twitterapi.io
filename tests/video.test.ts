@@ -400,6 +400,69 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+test("remote STT runtime refuses unsafe URLs even when the loader is bypassed", async () => {
+  for (const endpoint of ["http://stt.example/v1", "http://localhost:8080/v1", "https://", "https://stt.example\n.invalid/v1"]) {
+    await withTempDir(async dir => {
+      const { fetcher, calls } = videoFetcher();
+      const { exec } = fakeExec();
+      const config = loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper" } });
+      const result = await processVideo({
+        postUrl: "https://x.com/a/status/1", media: videoMedia(),
+        config: { ...config, sttEndpoint: endpoint },
+        deps: { fetcher, env: { STT_API_KEY: "synthetic-runtime-key" }, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+        deadline: 60_000, modelSupportsImage: false,
+      });
+      assert.equal(result.transcript, undefined);
+      assert.ok(!calls.some(url => url.includes("/audio/transcriptions")), "no credential or audio upload");
+      assert.ok(result.notes.some(note => /STT endpoint.*https:\/\//.test(note)));
+    });
+  }
+});
+
+test("remote STT runtime refuses implicit default-key binding", async () => {
+  await withTempDir(async dir => {
+    const { fetcher, calls } = videoFetcher();
+    const { exec } = fakeExec();
+    const result = await processVideo({
+      postUrl: "https://x.com/a/status/1", media: videoMedia(),
+      config: { ...loadTwitterConfig({}), sttEndpoint: "https://stt.example/v1", sttModel: "whisper" },
+      deps: { fetcher, env: { STT_API_KEY: "synthetic-default-key" }, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
+      deadline: 60_000, modelSupportsImage: false,
+    });
+    assert.equal(result.transcript, undefined);
+    assert.ok(!calls.some(url => url.includes("/audio/transcriptions")));
+    assert.ok(result.notes.some(note => /set twitter\.sttApiKeyEnv explicitly/.test(note)));
+  });
+});
+
+test("remote STT binds the chosen key, rejects redirects and does not fall back to another key", async () => {
+  await withTempDir(async dir => {
+    const { fetcher } = videoFetcher();
+    const { exec } = fakeExec();
+    const uploads: RequestInit[] = [];
+    const config = loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1/", sttApiKeyEnv: "TEST_STT", sttModel: "whisper" } });
+    const deps: VideoDeps = {
+      fetcher, sttFetcher: async (input, init) => {
+        assert.equal(String(input), "https://stt.example/v1/audio/transcriptions");
+        uploads.push(init!);
+        return Response.json({ text: "Chosen endpoint speech." });
+      },
+      env: { TEST_STT: "synthetic-chosen-key", STT_API_KEY: "synthetic-unrelated-key" },
+      exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0,
+    };
+    const first = await processVideo({ postUrl: "https://x.com/a/status/1", media: videoMedia(), config, deps, deadline: 60_000, modelSupportsImage: false });
+    assert.equal(first.transcript, "Chosen endpoint speech.");
+    assert.equal(uploads.length, 1);
+    assert.equal(new Headers(uploads[0].headers).get("authorization"), "Bearer synthetic-chosen-key");
+    assert.equal(uploads[0].redirect, "error");
+    assert.ok(uploads[0].body instanceof FormData);
+
+    const missing = await processVideo({ postUrl: "https://x.com/a/status/1", media: videoMedia(), config, deps: { ...deps, env: { STT_API_KEY: "synthetic-unrelated-key" } }, deadline: 60_000, modelSupportsImage: false });
+    assert.equal(missing.transcript, undefined);
+    assert.equal(uploads.length, 1, "missing chosen key must not use STT_API_KEY instead");
+  });
+});
+
 test("processVideo extracts frames and never hands ffmpeg a URL (B2/F4)", async () => {
   await withTempDir(async (dir) => {
     const { fetcher } = videoFetcher();
@@ -449,7 +512,7 @@ test("zero input-budget frame reservation skips extraction but keeps STT", async
     const { fetcher, calls } = videoFetcher({ sttText: "Reserved audio is still transcribed correctly." });
     const { exec, invocations } = fakeExec();
     const result = await processVideo({ postUrl: "https://x.com/a/status/1", media: videoMedia(),
-      config: loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" } }),
+      config: loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" } }),
       deps: { fetcher, env: { STT_API_KEY: "frame-reservation-fixture" }, exec, checkBinary: async () => true, mktemp: async () => dir, rmTemp: async () => {}, now: () => 0 },
       deadline: 60_000, modelSupportsImage: true, allowFrames: false,
     });
@@ -474,7 +537,7 @@ test("processVideo skips STT for gifs and discloses it (M11)", async () => {
       now: () => 0,
     };
     const config = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const result = await processVideo({
       postUrl: "https://x.com/a/status/2",
@@ -503,7 +566,7 @@ test("processVideo produces a transcript via an explicit STT endpoint", async ()
       now: () => 0,
     };
     const config = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const result = await processVideo({
       postUrl: "https://x.com/a/status/3",
@@ -852,7 +915,7 @@ test("an unrecognised videoEndpointType still lets the STT fallback answer", asy
     }) as unknown as typeof fetch;
     const config = {
       ...loadTwitterConfig({
-        twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+        twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
       }),
       videoEndpointTypeInvalid: true,
     };
@@ -893,7 +956,7 @@ test("a text-only synthesis model is told its frames were skipped (M2/F9)", asyn
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
     const base = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const { exec, invocations } = fakeExec();
     const deps: VideoDeps = {
@@ -1711,7 +1774,7 @@ test("STT does not retry when the audio format itself is rejected (P2-7)", async
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
     const config = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const result = await processVideo({
       postUrl: "https://x.com/a/status/23",
@@ -1800,7 +1863,7 @@ test("STT reports a non-format 400 instead of re-uploading the audio (P2-7)", as
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
     const config = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const result = await processVideo({
       postUrl: "https://x.com/a/status/22",
@@ -1836,7 +1899,7 @@ test("STT reports auth failures instead of re-uploading the audio (P2-7)", async
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
     const config = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const result = await processVideo({
       postUrl: "https://x.com/a/status/16",
@@ -1877,7 +1940,7 @@ test("STT falls back to plain text only when the format itself is rejected (P2-7
       return new Response(new Uint8Array(1_024).fill(1), { status: 200, headers: { "content-type": "video/mp4" } });
     }) as unknown as typeof fetch;
     const config = loadTwitterConfig({
-      twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+      twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
     });
     const result = await processVideo({
       postUrl: "https://x.com/a/status/18",
@@ -1909,7 +1972,7 @@ test("STT is skipped when native analysis already produced a transcript (P2-7)",
         videoEndpointType: "gemini-files",
         videoModel: "gemini-2.5-flash",
         videoApiKeyEnv: "GOOGLE_API_KEY",
-        sttEndpoint: "https://stt.example/v1",
+        sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY",
         sttModel: "whisper-large-v3-turbo",
       },
     });
@@ -2297,7 +2360,7 @@ const NATIVE_STT_CONFIG = loadTwitterConfig({
     videoEndpointType: "gemini-files",
     videoModel: "gemini-2.5-flash",
     videoApiKeyEnv: "GOOGLE_API_KEY",
-    sttEndpoint: "https://stt.example/v1",
+    sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY",
     sttModel: "whisper-large-v3-turbo",
   },
 });
@@ -2350,7 +2413,7 @@ test("a native reply that says nothing about speech still allows STT (V3)", asyn
 // ------------------------------------- STT hallucination filter + times (V4)
 
 const STT_CONFIG = loadTwitterConfig({
-  twitter: { sttEndpoint: "https://stt.example/v1", sttModel: "whisper-large-v3-turbo" },
+  twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "STT_API_KEY", sttModel: "whisper-large-v3-turbo" },
 });
 
 /** Serves the MP4, then an STT reply. */

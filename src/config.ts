@@ -128,8 +128,10 @@ export interface TwitterConfig {
   videoModel?: string;
   /** Env var holding the native-video API key (default `GOOGLE_API_KEY`). */
   videoApiKeyEnv: string;
-  /** OpenAI-compatible STT base URL. Unset disables remote STT. */
+  /** HTTPS STT base URL; settings require an explicitly named credential env var. Unset disables remote STT. */
   sttEndpoint?: string;
+  /** Loader accepted the HTTPS endpoint with an explicit user credential name. */
+  sttEndpointExplicit?: boolean;
   /** STT model id (e.g. "whisper-large-v3-turbo"). */
   sttModel?: string;
   /** Env var holding the STT API key (default `STT_API_KEY`). */
@@ -265,6 +267,16 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Reject malformed/non-HTTPS endpoints before any authenticated upload. */
+export function isHttpsEndpoint(endpoint: string): boolean {
+  if (!/^https:\/\//i.test(endpoint) || /[\s\u0000-\u001f\u007f]/.test(endpoint)) return false;
+  try {
+    return new URL(endpoint).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function imageInputBounds(value: unknown, notes: string[]): Record<string, ImageInputBounds> {
   const result: Record<string, ImageInputBounds> = Object.create(null);
   if (value === undefined) return result;
@@ -361,6 +373,22 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     videoEndpoint = undefined;
   }
 
+  // STT has no default provider: require the user to pair an endpoint with a
+  // credential name explicitly, just as for custom native-video endpoints.
+  const explicitSttKeyEnv = text(user.sttApiKeyEnv);
+  let sttEndpoint = text(user.sttEndpoint);
+  if (sttEndpoint && !explicitSttKeyEnv) {
+    configNotes.push(
+      "twitter.sttEndpoint was ignored: set twitter.sttApiKeyEnv explicitly with an endpoint, so the " +
+        "default key is never sent to another host.",
+    );
+    sttEndpoint = undefined;
+  }
+  if (sttEndpoint && !isHttpsEndpoint(sttEndpoint)) {
+    configNotes.push("twitter.sttEndpoint was ignored: it must be a valid https:// URL.");
+    sttEndpoint = undefined;
+  }
+
   const cacheMode = user.evidenceCache;
   const validCacheMode = typeof cacheMode === "string" && ["off", "read", "write", "read-write"].includes(cacheMode);
   const evidenceCache: EvidenceCacheMode = validCacheMode ? cacheMode as EvidenceCacheMode : "off";
@@ -382,9 +410,10 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     videoEndpointExplicit: Boolean(videoEndpoint && explicitKeyEnv),
     videoModel: text(user.videoModel),
     videoApiKeyEnv: explicitKeyEnv ?? DEFAULT_VIDEO_API_KEY_ENV,
-    sttEndpoint: text(user.sttEndpoint),
+    sttEndpoint,
+    sttEndpointExplicit: Boolean(sttEndpoint && explicitSttKeyEnv),
     sttModel: text(user.sttModel),
-    sttApiKeyEnv: text(user.sttApiKeyEnv) ?? DEFAULT_STT_API_KEY_ENV,
+    sttApiKeyEnv: explicitSttKeyEnv ?? DEFAULT_STT_API_KEY_ENV,
     sttLanguage: text(user.sttLanguage) ?? "auto",
     ffmpegPath: text(user.ffmpegPath),
     whisperCppBinary: text(user.whisperCppBinary),

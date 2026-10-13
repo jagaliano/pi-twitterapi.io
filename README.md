@@ -72,7 +72,7 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 | `evidenceCache` | no | User-only text evidence persistence: `off` (default), `read`, `write`, or `read-write`. See privacy and deletion below. |
 | `videoEndpointType` | no | Native-video wire format: `gemini-files` (default, Google) or `openai-compatible` (video-capable chat-completions endpoints that accept this `video_url` shape; verified with OpenRouter). An unrecognised string disables native video — frames and STT still run — and is reported in the answer rather than silently changing provider. |
 | `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
-| `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var (default `STT_API_KEY`). No hidden default provider. |
+| `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var. The endpoint must be a valid `https://` URL and `sttApiKeyEnv` must be set explicitly (including when using `STT_API_KEY`). Otherwise remote STT is disabled with a note. No hidden default provider. |
 | `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
 | `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary) — download it from [ffmpeg.org](https://ffmpeg.org/) or your package manager. |
 | `whisperCppBinary` / `whisperModelPath` | no | Local whisper.cpp binary and GGML model (both user-installed) — see [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp) for builds and model downloads. |
@@ -109,7 +109,9 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 > settings only** — project `.pi/settings.json` values for those keys are
 > ignored and disclosed. A custom `videoEndpoint` is only honoured when
 > `videoApiKeyEnv` is set explicitly (and must be `https://`), so the default
-> key is never sent to another host.
+> key is never sent to another host. `sttEndpoint` likewise requires a valid
+> HTTPS URL and an explicitly set `sttApiKeyEnv`; set it to `STT_API_KEY` if that
+> is the variable you use. Plain HTTP endpoints are refused, including localhost.
 >
 > **Retention and duration.** When native video uses the Gemini Files API the
 > upload is deleted on a **best-effort** basis once the call finishes, with its
@@ -220,7 +222,8 @@ worst-case evidence does not fit the complete-input budget is skipped before
 processing, letting the next ranked asset try the slot. Video-cap, input-budget
 and shared-deadline skips are disclosed separately. Photos still download first,
 existing caps/deadlines remain shared, and poster-only mode keeps source order.
-No extra retrieval calls or persistence are introduced. This applies to both
+Ranking adds no retrieval calls and does not change the opt-in evidence-cache
+policy below. This applies to both
 answer and text-only evidence output; evidence output still omits all images.
 
 For native video through OpenRouter instead of Google:
@@ -265,6 +268,10 @@ input budgets still apply; cached text is not a way around them.
   errors and credential fields are not stored; known runtime credential echoes
   are excluded from reuse/storage. Transcripts/descriptions themselves can
   contain sensitive content: **this is plaintext local storage, not encryption**.
+- Persistence currently requires POSIX ownership/permission checks (`process.getuid`).
+  On Windows these checks cannot pass, so caching is unavailable and processing
+  continues without cache reuse/storage. Clearing an existing cache directory is
+  refused; if no directory exists, clear succeeds with zero entries removed.
 - A versioned digest identifies the complete playable variant ladder and order,
   media identity/duration, provider/endpoint/models, clip/processing/filter policy,
   language, credential availability (never values), and local binary/model file
@@ -340,7 +347,7 @@ synthesis includes its full fallback/repair/backoff chain. `videoMs` is explicit
 settings reload and UI/markdown formatting. Calls that fail entirely still throw
 as before; these details cover completed answers, including recovered failures.
 
-### Evidence output (3.1)
+### Evidence output
 
 Pass `output: "posts"` with **any of the 17 read modes**. The name selects the
 output contract, not the retrieval mode: accounts, trends and documents return
@@ -367,8 +374,9 @@ physical requests remain visible in telemetry. Local STT remains eligible too.
 
 **Text-only v1, regardless of the main agent's image capability.** No photos,
 poster images or extracted frames are returned; photo/poster downloads and frame
-extraction are skipped. Image omissions are disclosed. No new persistence or
-cache is introduced.
+extraction are skipped. Image omissions are disclosed. Optional video text can
+use the same user-only evidence cache described above; persistence remains off
+by default.
 
 Whole source bundles/metadata fields are selected under `maxSynthesisChars`,
 reserving possible video evidence **before** processing. Oversized questions fail
@@ -534,9 +542,12 @@ than silently ignored.
   IDs/stubs/unknown pin shapes do not trigger another paid lookup, and missing
   content is disclosed. Non-null timeline-pin handling currently has synthetic
   coverage only; the live inventory returned null pins.
-- **Media is best-effort.** By default a video post is represented by its poster
-  frame and the limitation is disclosed, because pi's synthesis interface cannot
-  ingest video. With `enableVideoProcessing` (see above) the video itself is analysed —
+- **Media is best-effort and opt-in.** Image/video understanding is off by default.
+  Without video processing, enabling `enableVideoUnderstanding` represents a video
+  by its poster frame only when the synthesis model accepts images, explicit
+  `imageInputBounds` are configured, and input/media budgets allow it. Missing
+  attachments are disclosed; pi's synthesis interface cannot ingest video. With
+  `enableVideoProcessing` (see above) the video itself is analysed —
   locally trimmed frames/audio, and/or the configured native-video or STT
   endpoint — and the poster is kept only as the fallback when that yields nothing.
 - **Partial retrieval is disclosed.** If paging stops early (page cap, cursor
@@ -614,8 +625,8 @@ version, including parameter mapping, lives in
 | Date range | `from_date` / `to_date` (`YYYY-MM-DD`) | same, `mode=posts`; plus unix windows for `quotes`/`mentions` |
 | Result order | chosen by the model | `queryType` (`Latest`/`Top`), `replySort` |
 | Item-count control | ❌ | ✅ `count`, `limit` |
-| Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached when the model accepts images) |
-| Video understanding | ✅ `enable_video_understanding` | ⚠️ poster frame by default; opt-in `enableVideoProcessing` adds native video (`gemini-files` or an `openai-compatible` endpoint) and/or frames + STT |
+| Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (requires image-capable model, explicit `imageInputBounds` and budget) |
+| Video understanding | ✅ `enable_video_understanding` | ⚠️ opt-in poster frames require image bounds; `enableVideoProcessing` adds native video (`gemini-files` or an `openai-compatible` endpoint) and/or frames + STT |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Cost | xAI tokens + per post/profile | twitterapi.io credits + your model's tokens; opt-in video and STT add endpoint charges — [cost comparison](docs/pricing-comparison.md) |

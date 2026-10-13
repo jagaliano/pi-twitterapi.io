@@ -218,7 +218,7 @@ export async function cacheKey(input: ProcessVideoInput): Promise<string | undef
     schema: 1, processing: PROCESSING_VERSION,
     media: { type: media.type, id: media.id, duration: media.durationMillis, variants },
     video: { type: c.videoEndpointType, invalid: c.videoEndpointTypeInvalid === true, endpoint: endpoint(c.videoEndpoint ?? (c.videoEndpointType === "gemini-files" ? "https://generativelanguage.googleapis.com" : undefined)), authorized: c.videoEndpointExplicit, model: c.videoModel, keyEnv: c.videoApiKeyEnv, credentialAvailable: Boolean(deps.env?.[c.videoApiKeyEnv]) },
-    stt: { endpoint: endpoint(c.sttEndpoint), model: c.sttModel, keyEnv: c.sttApiKeyEnv, credentialAvailable: Boolean(deps.env?.[c.sttApiKeyEnv]), language: c.sttLanguage },
+    stt: { endpoint: endpoint(c.sttEndpoint), authorized: c.sttEndpointExplicit === true, model: c.sttModel, keyEnv: c.sttApiKeyEnv, credentialAvailable: Boolean(deps.env?.[c.sttApiKeyEnv]), language: c.sttLanguage },
     processingConfig: { seconds: c.maxVideoSeconds, bytes: c.maxVideoBytes, frames: c.maxFrames, budget: c.videoBudgetMs, enableImages: c.enableImageUnderstanding, enableVideo: c.enableVideoUnderstanding, enableProcessing: c.enableVideoProcessing, ffmpeg, whisper, model, vad, threads: c.whisperThreads, realtimeFactor: c.whisperRealtimeFactor },
     injectedPolicy: { inline: deps.inlineRawBytes, probeTimeout: deps.probeTimeoutMs, probeBudget: deps.probeBudgetMs },
   };

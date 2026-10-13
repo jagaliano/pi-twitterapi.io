@@ -61,6 +61,20 @@ test("provider/endpoint/model/clip/language/filter/variant changes miss, credent
   assert.notEqual(await cacheKey({ ...base, deps: { ...base.deps, env: {} } }), key);
 });
 
+test("changing explicit STT authorization cannot reuse previously cached text", async t => {
+  const dir = await temp(t), base = input(dir);
+  const disabled = { ...base, config: { ...base.config, sttEndpointExplicit: false } };
+  const unset = { ...base, config: { ...base.config, sttEndpointExplicit: undefined } };
+  assert.notEqual(await cacheKey(base), await cacheKey(disabled));
+  assert.equal(await cacheKey(disabled), await cacheKey(unset));
+  let calls = 0;
+  await withEvidenceCache(base, async () => { calls++; return result(); });
+  const fresh = await withEvidenceCache(disabled, async () => { calls++; return { ...result(), transcript: "Fresh processing under changed authorization." }; });
+  assert.equal(calls, 2);
+  assert.equal(fresh.transcript, "Fresh processing under changed authorization.");
+  assert.ok(!fresh.notes.some(note => /Cached text evidence/.test(note)));
+});
+
 test("local model replacement at the same path invalidates evidence without executing binaries", async t => {
   const dir = await temp(t), model = join(dir, "model.bin"); await writeFile(model, "first");
   const i = input(dir, { config: cfg({ whisperModelPath: model, whisperCppBinary: "whisper-does-not-exist" }) });

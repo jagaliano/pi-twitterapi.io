@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { reportProgress, type ProgressCallback } from "../progress.js";
-import type { TwitterConfig } from "../config.js";
+import { isHttpsEndpoint, type TwitterConfig } from "../config.js";
 import type { ImageAttachment } from "../synthesize.js";
 import type { TweetMedia } from "../twitterapi.js";
 import { isAllowedMediaUrl, readCapped } from "./media.js";
@@ -1053,6 +1053,12 @@ async function remoteStt(
   const model = config.sttModel;
   const apiKey = config.sttApiKeyEnv ? deps.env?.[config.sttApiKeyEnv] : undefined;
   if (!endpoint || !model || !apiKey) return {};
+  // Direct callers can bypass the settings loader; refuse cleartext/malformed
+  // endpoints again before reading audio or handing a credential to fetch.
+  if (!isHttpsEndpoint(endpoint)) return { note: "STT endpoint was ignored: it must be a valid https:// URL." };
+  if (!config.sttEndpointExplicit) {
+    return { note: "STT endpoint was ignored: set twitter.sttApiKeyEnv explicitly with an endpoint." };
+  }
   const url = `${endpoint.replace(/\/$/, "")}/audio/transcriptions`;
   try {
     const bytes = await readFile(audioFile);

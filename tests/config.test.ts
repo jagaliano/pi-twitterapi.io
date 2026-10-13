@@ -145,6 +145,52 @@ test("an unrecognised videoEndpointType is flagged so native video is skipped", 
   assert.equal(loadTwitterConfig({ twitter: { videoEndpointType: "   " } }).videoEndpointTypeInvalid, false);
 });
 
+test("STT refuses non-HTTPS and malformed endpoints with a disclosure", () => {
+  for (const endpoint of ["http://stt.example/v1", "http://localhost:8080/v1", "ftp://stt.example/v1", "//stt.example/v1", "https://", "https://stt.example\n.invalid/v1"]) {
+    const config = loadTwitterConfig({ twitter: { sttEndpoint: endpoint, sttApiKeyEnv: "TEST_STT", sttModel: "whisper" } });
+    assert.equal(config.sttEndpoint, undefined, endpoint);
+    assert.equal(config.sttEndpointExplicit, false);
+    assert.ok(config.configNotes.some(note => /twitter\.sttEndpoint.*https:\/\//.test(note)));
+    assert.ok(!config.configNotes.some(note => /stt\.example|localhost/.test(note)), "do not echo potentially credential-bearing endpoints");
+  }
+});
+
+test("STT endpoint requires an explicit credential name, including the default", () => {
+  for (const key of [undefined, "", "   ", 42]) {
+    const config = loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: key } });
+    assert.equal(config.sttEndpoint, undefined);
+    assert.equal(config.sttEndpointExplicit, false);
+    assert.ok(config.configNotes.some(note => /set twitter\.sttApiKeyEnv explicitly/.test(note)));
+  }
+  for (const key of ["TEST_STT", "STT_API_KEY"]) {
+    const config = loadTwitterConfig({ twitter: { sttEndpoint: "  https://stt.example/v1/  ", sttApiKeyEnv: `  ${key}  ` } });
+    assert.equal(config.sttEndpoint, "https://stt.example/v1/");
+    assert.equal(config.sttApiKeyEnv, key);
+    assert.equal(config.sttEndpointExplicit, true);
+    assert.deepEqual(config.configNotes, []);
+  }
+  assert.equal(loadTwitterConfig({}).sttEndpoint, undefined);
+  assert.deepEqual(loadTwitterConfig({}).configNotes, []);
+});
+
+test("project settings cannot provide or replace an STT endpoint/credential pair", () => {
+  const projectSettings = { twitter: { sttEndpoint: "https://evil.example/v1", sttApiKeyEnv: "PROJECT_SECRET", sttModel: "other" } };
+  const unset = loadTwitterConfig({}, { projectSettings });
+  assert.equal(unset.sttEndpoint, undefined);
+  assert.equal(unset.sttEndpointExplicit, false);
+  assert.equal(unset.sttApiKeyEnv, "STT_API_KEY");
+
+  const config = loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1", sttApiKeyEnv: "TEST_STT", sttModel: "whisper" } }, { projectSettings });
+  assert.equal(config.sttEndpoint, "https://stt.example/v1");
+  assert.equal(config.sttApiKeyEnv, "TEST_STT");
+  assert.equal(config.sttModel, "whisper");
+  assert.equal(config.sttEndpointExplicit, true);
+  assert.ok(config.configNotes.some(note => /project settings was ignored/.test(note)));
+
+  const borrowedKey = loadTwitterConfig({ twitter: { sttEndpoint: "https://stt.example/v1" } }, { projectSettings });
+  assert.equal(borrowedKey.sttEndpoint, undefined, "a project key cannot authorize a user endpoint");
+});
+
 test("only the twitter settings block is read", () => {
   const config = loadTwitterConfig({ someOtherExtension: { synthesisModel: "anthropic/haiku", maxPages: 9 } });
   assert.equal(config.synthesisModel, undefined);

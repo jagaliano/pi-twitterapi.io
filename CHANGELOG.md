@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-13
+
+Prepared locally; not yet published.
+
+### Fixed
+
+- Remote STT endpoints require a valid HTTPS URL and an explicitly configured
+  `sttApiKeyEnv`, even when using `STT_API_KEY`. Invalid endpoints or missing
+  credential bindings disable remote STT with a disclosure instead of sending
+  audio/credentials to an unintended or cleartext endpoint. The upload boundary
+  rechecks HTTPS and explicit binding for programmatically constructed configs;
+  redirects remain refused. Cache identities include STT authorization so changed
+  binding policy cannot replay previously cached text.
+- README clarifies opt-in evidence persistence, image-bound requirements, and
+  the current POSIX-only cache limitation (Windows bypasses caching safely).
+
+### Validation limitations
+
+- The planned three-query `output: "answer"` versus `"posts"` benchmark
+  (latency, cost and answer quality) was not completed for 0.5.0. Existing live
+  evidence/answer and cache-hit checks validate behavior, not comparative savings
+  or quality. No benchmark figures are claimed here; that release-roadmap item
+  remains outstanding.
+
 ## [0.5.1] - 2026-10-13
 
 ### Changed
