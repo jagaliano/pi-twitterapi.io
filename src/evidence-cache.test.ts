@@ -68,6 +68,55 @@ test("local model replacement at the same path invalidates evidence without exec
   const a = await cacheKey(i); await writeFile(model, "changed model"); assert.notEqual(await cacheKey(i), a);
 });
 
+for (const field of ["ffmpegPath", "whisperCppBinary", "whisperModelPath", "whisperVadModelPath"] as const) {
+  for (const viaPath of field === "ffmpegPath" || field === "whisperCppBinary" ? [false, true] : [false]) {
+    test(`${field} symlink/.. ${viaPath ? "PATH" : "explicit"} traversal fingerprints the file actually used`, async t => {
+      const dir = await temp(t), name = "traversal-probe", actual = join(dir, "real", name), shadow = join(dir, name);
+      await mkdir(join(dir, "real", "sub"), { recursive: true });
+      await symlink(join(dir, "real", "sub"), join(dir, "link"));
+      const executable = field === "ffmpegPath" || field === "whisperCppBinary";
+      const body = (text: string) => executable ? `#!/bin/sh\nprintf '%s' '${text}'\n` : text;
+      await writeFile(actual, body("first evidence"), { mode: executable ? 0o700 : 0o600 });
+      await writeFile(shadow, body("wrong evidence"), { mode: executable ? 0o700 : 0o600 });
+      const traversal = `${dir}/link/..`, requested = viaPath ? name : `${traversal}/${name}`;
+      if (viaPath) {
+        const previous = process.env.PATH;
+        process.env.PATH = traversal;
+        t.after(() => { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; });
+      }
+      const i = input(dir, { config: cfg({ [field]: requested }) }), key = await cacheKey(i);
+      assert.equal(key, await cacheKey({ ...i, config: cfg({ [field]: actual }) }), "identity must match OS traversal, not lexical normalization");
+      let calls = 0;
+      const run = async () => {
+        calls++;
+        const transcript = executable ? (await promisify(execFile)(requested, [])).stdout : await readFile(requested, "utf8");
+        return { ...result(), transcript };
+      };
+      assert.equal((await withEvidenceCache(i, run)).transcript, "first evidence");
+      await writeFile(shadow, body("changed shadow evidence"));
+      assert.equal(await cacheKey(i), key, "unrelated lexical shadow must not invalidate evidence");
+      assert.equal((await withEvidenceCache(i, run)).transcript, "first evidence");
+      assert.equal(calls, 1);
+      await writeFile(actual, body("replacement evidence"));
+      assert.notEqual(await cacheKey(i), key, "actual file replacement must invalidate evidence");
+      assert.equal((await withEvidenceCache(i, run)).transcript, "replacement evidence");
+      assert.equal(calls, 2);
+    });
+  }
+}
+
+test("absent executable PATH bypasses persistence rather than guessing a local identity", async t => {
+  const dir = await temp(t), previous = process.env.PATH;
+  delete process.env.PATH;
+  t.after(() => { if (previous !== undefined) process.env.PATH = previous; });
+  let calls = 0;
+  for (let n = 0; n < 2; n++) {
+    const e = await withEvidenceCache(input(dir), async () => { calls++; return result(); });
+    assert.match(e.notes.join(" "), /cache.*unavailable/i);
+  }
+  assert.equal(calls, 2); assert.deepEqual(await readdir(dir), []);
+});
+
 test("read/write switches are independent and off leaves stored files until explicit clear", async t => {
   const dir = await temp(t); let calls = 0;
   const run = async () => { calls++; return result(); };

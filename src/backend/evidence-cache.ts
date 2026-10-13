@@ -1,7 +1,7 @@
 import { constants, type Stats } from "node:fs";
 import { access, lstat, mkdir, open, readdir, rename, rmdir, stat, unlink, realpath } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, isAbsolute, join, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { reportProgress } from "../progress.js";
 import { isAllowedMediaUrl } from "./media.js";
@@ -181,8 +181,14 @@ export class TextEvidenceCache {
 /** Resolve local executable/model identity without running or caching binary detection (3.4). */
 async function fingerprint(path: string | undefined, executable = false): Promise<unknown> {
   if (!path) return undefined;
-  const candidates = executable && !isAbsolute(path) && !path.includes("/")
-    ? (process.env.PATH ?? "").split(delimiter).map(part => resolve(part, path)) : [resolve(path)];
+  const explicit = isAbsolute(path) || path.includes("/") || (process.platform === "win32" && path.includes("\\"));
+  const pathEnv = process.env.PATH;
+  if (executable && !explicit && pathEnv === undefined) throw new Error("Executable PATH is unavailable for cache identity");
+  // Preserve symlink/.. traversal until realpath, just as binary detection and
+  // processing do. Lexical resolve()/join() can fingerprint a different file.
+  const extensions = process.platform === "win32" && !/\.(exe|com)$/i.test(path) ? ["", ".exe", ".com"] : [""];
+  const candidates = executable && !explicit
+    ? pathEnv!.split(delimiter).flatMap(part => extensions.map(ext => part ? `${part}${sep}${path}${ext}` : path + ext)) : [path];
   for (const candidate of candidates) {
     try {
       const target = await realpath(candidate), s = await stat(target, { bigint: true });
