@@ -205,6 +205,29 @@ test("toBase64 encodes every padding case", () => {
   assert.equal(toBase64(new Uint8Array([0, 255, 128])), "AP+A");
 });
 
+test("toBase64 matches native encoding for binary data across all tail lengths", () => {
+  for (const length of [0, 1, 2, 3, 4, 5, 255, 256, 257, 65_535, 65_536, 65_537]) {
+    const bytes = Uint8Array.from({ length }, (_, i) => i & 255);
+    const encoded = toBase64(bytes);
+    assert.equal(encoded, Buffer.from(bytes).toString("base64"), `length ${length}`);
+    assert.deepEqual(new Uint8Array(Buffer.from(encoded, "base64")), bytes);
+  }
+});
+
+test("toBase64 encodes only Uint8Array and Buffer views without modifying backing bytes", () => {
+  const backing = Uint8Array.from({ length: 300 }, (_, i) => (i * 73 + 19) & 255);
+  const original = backing.slice();
+  const buffer = Buffer.from(backing);
+  for (const length of [0, 1, 2, 3, 4, 5, 255, 256, 257]) {
+    const end = 17 + length;
+    const expected = Buffer.from(original.slice(17, end)).toString("base64");
+    assert.equal(toBase64(backing.subarray(17, end)), expected, `Uint8Array view ${length}`);
+    assert.equal(toBase64(buffer.subarray(17, end)), expected, `Buffer view ${length}`);
+  }
+  assert.deepEqual(backing, original);
+  assert.deepEqual(new Uint8Array(buffer), original);
+});
+
 const IMAGE_CONFIG = loadTwitterConfig({
   twitter: { enableImageUnderstanding: true, enableVideoUnderstanding: true, imageInputBounds: { "anthropic/vision": TEST_IMAGE_BOUNDS } },
 });

@@ -1,5 +1,6 @@
 import type { TwitterConfig } from "../config.js";
 import { formatTwitterResults } from "../format.js";
+import { boundEvidenceNotes, EVIDENCE_POLICY } from "../evidence.js";
 import type { TwitterSearchDetails } from "../types.js";
 import {
   synthesizeAnswer,
@@ -90,6 +91,7 @@ function mediaDeps(
   options: TwitterApiSynthesisOptions,
 ): SynthesisDeps {
   return {
+    output: options.output,
     progress: options.progress,
     telemetry: backend.telemetry,
     signal: options.signal,
@@ -98,6 +100,7 @@ function mediaDeps(
     fetchMedia: createFetchMedia(backend.mediaFetcher, options.signal),
     processVideo: options.config.enableVideoProcessing
       ? createProcessVideo({
+          cacheAgentDir: options.agentDir,
           fetcher: backend.mediaFetcher,
           nativeFetcher: backend.nativeVideoFetcher,
           sttFetcher: backend.sttFetcher,
@@ -115,6 +118,13 @@ function mediaDeps(
 function appendConfigNotes(options: TwitterApiSynthesisOptions, details: TwitterSearchDetails): void {
   if (options.config.configNotes.length > 0) {
     details.notes = [...(details.notes ?? []), ...options.config.configNotes];
+  }
+  if (options.output === "posts") {
+    details.output = "posts";
+    details.model = "none";
+    if (!details.notes?.includes(EVIDENCE_POLICY)) details.notes = [EVIDENCE_POLICY, ...(details.notes ?? [])];
+    details.notes = details.notes?.map(note => note.replace(/^Answered from /, "Retrieved from "));
+    boundEvidenceNotes(details, options.config.maxSynthesisChars);
   }
 }
 
@@ -222,7 +232,7 @@ export async function runTwitterApiUserSearch(
     model: toSynthesisModel(model),
     signal: options.signal,
     incomplete,
-    deps: { complete, inputBudget: backend.budget, telemetry: backend.telemetry },
+    deps: { output: options.output, signal: options.signal, complete, inputBudget: backend.budget, telemetry: backend.telemetry },
   });
   if (incomplete) {
     details.notes = [
@@ -441,7 +451,7 @@ export async function runTwitterApiTrends(
     trends,
     model: toSynthesisModel(backend.model),
     signal: options.signal,
-    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
+    deps: { output: options.output, signal: options.signal, complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
   });
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
@@ -464,7 +474,7 @@ async function completeUserAnswer(
     model: toSynthesisModel(backend.model),
     signal: options.signal,
     incomplete: input.incomplete,
-    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
+    deps: { output: options.output, signal: options.signal, complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
   });
   details.notes = [...(details.notes ?? []), ...input.notes];
   applyFallbackNote(backend, details);
@@ -625,7 +635,7 @@ export async function runTwitterApiAbout(
     citations: [about.profileUrl],
     model: toSynthesisModel(backend.model),
     signal: options.signal,
-    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
+    deps: { output: options.output, signal: options.signal, complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
     notes,
   });
   applyFallbackNote(backend, details);
@@ -757,7 +767,7 @@ export async function runTwitterApiSpace(
     citations: [`https://x.com/i/spaces/${space.id}`],
     model: toSynthesisModel(backend.model),
     signal: options.signal,
-    deps: { complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
+    deps: { output: options.output, signal: options.signal, complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
     notes,
   });
   applyFallbackNote(backend, details);

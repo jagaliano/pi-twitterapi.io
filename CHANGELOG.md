@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `output: "posts"` returns bounded, sanitized untrusted text evidence in tool
+  content across all 17 read modes, with validated source identities, nested
+  attribution and omissions. The default `output: "answer"` is unchanged.
+- Evidence output skips synthesis-model resolution and SDK completion entirely;
+  text-only v1 omits image downloads and frame extraction regardless of caller
+  capability. Existing opt-in native-video/STT text processing remains available
+  and separately counted—zero synthesis calls does not imply zero provider cost.
+- Model-independent evidence selection and final text/disclosure bounds reuse
+  `maxSynthesisChars`; source bundles and video evidence are admitted before media
+  billing.
+- User-only `evidenceCache` modes (`off` by default, `read`, `write`, `read-write`)
+  opt into persistent non-empty video text evidence, detached from attribution
+  and rebound to current sources. Versioned media/provider/config/local-file
+  identities, 7-day reuse TTL, 20 MiB/1,000-entry bounds, private atomic writes and
+  schema validation prevent incompatible or unsafe hits. Frames and credentials
+  are never stored; hits disclose original analysis time/method and missing images.
+- `/twitter-cache clear` explicitly confirms deletion (`clear --yes` for headless
+  use), serializes with writers and invalidates in-flight generations. Disabling
+  caching leaves existing files; expired entries are pruned on writes, not by a
+  background retention timer. Retrieval remains fresh and cache failures do not
+  retry or fail normal provider work.
+
+### Changed
+
+- The exported `toBase64(bytes)` helper now uses Node's native Buffer encoder
+  instead of a hand-rolled loop, preserving its signature and byte-view behavior.
+- Successful ffmpeg availability probes are memoized in-process by resolved
+  executable/file fingerprint, with at most 128 paths per executor. File/path
+  changes invalidate hits; concurrent misses keep independent cancellation and
+  deadlines. Checks retain the five-second/remaining-budget deadline, rechecked
+  at final delivery before committing a new positive. Symlink/`..` paths preserve
+  actual filesystem traversal rather than lexical normalization.
+  Failed, timed-out or cancelled probes no longer count as availability successes
+  and are never cached. No new whisper.cpp probe or persistent binary cache.
+- Video processing slots now use the final deduplicated own/quoted/reposted
+  inventory: duration bands (within `maxVideoSeconds`, longer, unknown), then
+  original-source views and likes descending, with stable result/media-order
+  ties. Missing/invalid counts rank below known zero; mirrored wrapper counts
+  cannot inflate an original. Ranking is resource allocation, not relevance.
+- Whole source text is retained in retrieval order before optional media is
+  reserved. Input reservations and processing use the same ranking; an asset
+  whose worst-case evidence does not fit lets the next candidate try the slot.
+  Source attribution, photo-first downloads, shared caps/deadlines and
+  cancellation remain intact. Video-cap and complete-input-budget skips are
+  disclosed separately; poster-only mode keeps source order.
+
 ## [0.4.0] - 2026-10-09
 
 ### Fixed

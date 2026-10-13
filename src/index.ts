@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerTwitterTool } from "./tool.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { TextEvidenceCache } from "./backend/evidence-cache.js";
 
 /**
  * pi-twitterapi.io — a twitterapi.io-backed X/Twitter search extension for the
@@ -12,6 +14,25 @@ import { registerTwitterTool } from "./tool.js";
  */
 export default function (pi: ExtensionAPI) {
   registerTwitterTool(pi);
+  registerCacheCommand(pi);
+}
+
+/** Deletion is explicit; disabling persistence never deletes existing transcripts. */
+export function registerCacheCommand(pi: ExtensionAPI, agentDir?: string): void {
+  pi.registerCommand("twitter-cache", {
+    description: "Clear this extension's private video text evidence cache: clear [--yes]",
+    handler: async (args, ctx) => {
+      const argument = args.trim();
+      if (argument !== "clear" && argument !== "clear --yes") throw new Error("Usage: /twitter-cache clear [--yes]");
+      if (argument !== "clear --yes") {
+        if (!ctx.hasUI) throw new Error("Cache deletion requires confirmation; use /twitter-cache clear --yes in headless mode.");
+        if (!await ctx.ui.confirm("Delete cached Twitter evidence?", "This deletes cached transcripts and video descriptions from this Pi agent directory. It does not erase provider uploads or existing session transcripts.")) return;
+      }
+      await ctx.waitForIdle();
+      const count = await new TextEvidenceCache(agentDir ?? getAgentDir()).clear();
+      ctx.ui.notify(`Cleared ${count} cached Twitter text evidence entry/entries.`, "info");
+    },
+  });
 }
 
 export { registerTwitterTool, type TwitterToolOptions } from "./tool.js";

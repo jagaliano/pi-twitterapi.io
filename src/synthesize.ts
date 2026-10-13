@@ -11,7 +11,8 @@ import type { RunTelemetry } from "./telemetry.js";
  */
 import { reportProgress, type ProgressCallback } from "./progress.js";
 import type { TwitterSearchDetails } from "./types.js";
-import { InputBudget } from "./input-budget.js";
+import { InputBudget, type InputAllowance } from "./input-budget.js";
+import { EvidenceBudget, evidenceDetails } from "./evidence.js";
 import type { TwitterConfig } from "./config.js";
 import type { BoundProcessVideo } from "./backend/video.js";
 import { metadataUrl, statusIdFromUrl } from "./twitterapi.js";
@@ -50,15 +51,17 @@ export interface SynthesisRequest {
 interface MediaInputPlan {
   imageSlots: number;
   videoAssets: ReadonlySet<TweetMedia>;
-  budget: InputBudget;
+  budget: InputAllowance;
 }
 
 export interface SynthesisDeps {
+  /** Return bounded text evidence without calling complete. */
+  output?: "answer" | "posts";
   telemetry?: RunTelemetry;
   progress?: ProgressCallback;
   signal?: AbortSignal;
   /** Resolved complete answering/fallback chain, before retrieval. */
-  inputBudget?: InputBudget;
+  inputBudget?: InputAllowance;
   /** Collector admission reserved before processing; never allocated per source. */
   mediaInputPlan?: MediaInputPlan;
   /** Run one completion and return the assistant text. */
@@ -77,22 +80,9 @@ export interface SynthesisDeps {
   processVideo?: BoundProcessVideo;
 }
 
-const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/** Standard base64 over bytes; avoids depending on Buffer. */
+/** Standard base64 over the supplied byte view; retained for API compatibility. */
 export function toBase64(bytes: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i];
-    const b1 = bytes[i + 1];
-    const b2 = bytes[i + 2];
-    const triplet = (b0 << 16) | ((b1 ?? 0) << 8) | (b2 ?? 0);
-    out += BASE64_ALPHABET[(triplet >> 18) & 63];
-    out += BASE64_ALPHABET[(triplet >> 12) & 63];
-    out += b1 === undefined ? "=" : BASE64_ALPHABET[(triplet >> 6) & 63];
-    out += b2 === undefined ? "=" : BASE64_ALPHABET[triplet & 63];
-  }
-  return out;
+  return Buffer.from(bytes).toString("base64");
 }
 
 export const SYNTHESIS_SYSTEM_PROMPT = [
@@ -777,6 +767,48 @@ function mediaCandidates(tweets: Tweet[]): { candidates: MediaCandidate[]; avail
   return { candidates, available, duplicates, assets };
 }
 
+/** Resource priority only: never reorder posts or derive relevance from counts. */
+function rankVideoCandidates(tweets: Tweet[], inventory: ReturnType<typeof mediaCandidates>, maxVideoSeconds: number): MediaCandidate[] {
+  const videos = inventory.candidates.filter(candidate => isVideoMedia(candidate.media));
+  if (videos.length < 2) return videos;
+  const byMedia = new Map(videos.map(candidate => [candidate.media, candidate]));
+  const counts = new Map(videos.map(candidate => [candidate, { views: -1, likes: -1 }]));
+  const reportedCount = (value: number | undefined) => Number.isSafeInteger(value) && value! >= 0 ? value! : -1;
+  // A partial wrapper can precede a compatible envelope establishing nested
+  // ownership. Index all canonical nested bindings before reading own counts;
+  // duplicates are already coalesced, avoiding repeated-envelope quadratic work.
+  const nestedIndexes = new Map(videos.map(candidate => [candidate,
+    indexByEnclosing(candidate.bindings.filter(binding => binding.context).map(binding => ({ binding }))),
+  ]));
+  // Only actual owners contribute. Repeated fetched envelopes supply each
+  // original metric's maximum; rendered counts/evidence bindings are unchanged.
+  for (const enclosing of tweets) {
+    for (const [context, source] of [[undefined, enclosing], ["quoted", enclosing.quoted], ["reposted", enclosing.retweetOf]] as const) {
+      if (!source) continue;
+      for (const media of source.media ?? []) {
+        if (!isVideoMedia(media)) continue;
+        const candidate = inventory.assets.get(mediaKeys(media)[0]) ?? byMedia.get(media);
+        if (!candidate || !hasMediaBinding(candidate, bindMedia(enclosing, source, context))) continue;
+        if (!context && itemsForEnclosing(nestedIndexes.get(candidate)!, enclosing).some(({ binding }) =>
+          matchesBoundPost(enclosing, binding.enclosingPostId, binding.enclosingPostUrl, binding.enclosingPost))) continue;
+        const metric = counts.get(candidate)!;
+        metric.views = Math.max(metric.views, reportedCount(source.viewCount));
+        metric.likes = Math.max(metric.likes, reportedCount(source.likeCount));
+      }
+    }
+  }
+  const durationBand = (candidate: MediaCandidate): number => {
+    const millis = candidate.media.durationMillis;
+    return !Number.isFinite(millis) || millis! <= 0 ? 2 : millis! <= maxVideoSeconds * 1_000 ? 0 : 1;
+  };
+  return videos.sort((a, b) => durationBand(a) - durationBand(b) ||
+    counts.get(b)!.views - counts.get(a)!.views || counts.get(b)!.likes - counts.get(a)!.likes || a.order - b.order);
+}
+
+function videoCapNote(count: number, cap: number): string {
+  return `${count} video(s) skipped processing: per-search video cap is ${cap}; posters only if image input and the shared attachment budget permit.`;
+}
+
 function mediaLabel(candidate: MediaCandidate): string {
   return untrustedInline(candidate.bindings.map((binding) => {
     const source = sourceUrl(binding.sourcePostUrl, "post") ?? NO_PERMALINK;
@@ -803,7 +835,8 @@ export async function collectMedia(
   const labels: string[] = [];
   const evidence: VideoEvidenceBlock[] = [];
   const references: MediaReference[] = [];
-  const { candidates, available, duplicates } = mediaCandidates(tweets);
+  const inventory = mediaCandidates(tweets);
+  const { candidates, available, duplicates } = inventory;
   const wanted = config.enableImageUnderstanding || config.enableVideoUnderstanding;
   if (!wanted || !candidates.length) return { images, labels, notes, available, evidence, references };
   if (duplicates) notes.push(`${duplicates} repeated media reference(s) share one download/processing attempt.`);
@@ -838,7 +871,7 @@ export async function collectMedia(
   let videoPosters = 0;
   const hasVideo = candidates.some((candidate) => isVideoMedia(candidate.media));
   const hasPhoto = candidates.some((candidate) => !isVideoMedia(candidate.media));
-  if (!model.supportsImage && ((hasPhoto && config.enableImageUnderstanding) || (hasVideo && !processVideo))) {
+  if (deps.output !== "posts" && !model.supportsImage && ((hasPhoto && config.enableImageUnderstanding) || (hasVideo && !processVideo))) {
     notes.push(
       `Media understanding was requested but ${model.provider}/${model.id} does not accept image input, ` +
         `so ${available} post source(s) with media were analysed from text only.`,
@@ -913,7 +946,13 @@ export async function collectMedia(
   let videosStarted = 0;
   let videosOverCap = 0;
   let videosOverBudget = 0;
-  for (const candidate of candidates.filter((item) => isVideoMedia(item.media))) {
+  const videos = processVideo ? rankVideoCandidates(tweets, inventory, config.maxVideoSeconds)
+    : candidates.filter(candidate => isVideoMedia(candidate.media));
+  if (processVideo && videos.length > 1) notes.push(
+    `Video processing priority uses duration bands (within ${config.maxVideoSeconds}s, longer, unknown), then original-source views and likes ` +
+    "(known counts before missing); equal tuples retain result order. This allocates processing slots, not relevance.",
+  );
+  for (const candidate of videos) {
     deps.signal?.throwIfAborted();
     const displayUrl = sourceUrl(candidate.bindings[0].sourcePostUrl, "post") ?? NO_PERMALINK;
     if (processVideo && inputPlan && !inputPlan.videoAssets.has(candidate.media)) {
@@ -929,6 +968,7 @@ export async function collectMedia(
           postUrl: displayUrl, media: candidate.media, config,
           deadline: videoPhaseDeadline, modelSupportsImage: model.supportsImage,
           allowFrames: admitsImage() && (!inputPlan || inputPlan.imageSlots > 0),
+          frameOmissionReason: deps.output === "posts" ? "evidence output is text-only" : undefined,
         });
         deps.signal?.throwIfAborted();
         const frames = model.supportsImage ? result.frames.slice(0, config.maxFrames) : [];
@@ -954,6 +994,8 @@ export async function collectMedia(
         } else if (model.supportsImage) {
           notes.push(`Video processing produced no evidence for ${displayUrl}; falling back to its poster frame.`);
           await fetchPoster(candidate);
+        } else if (deps.output === "posts") {
+          notes.push(`Video processing produced no text evidence for ${displayUrl}; poster frames are omitted by the text-only evidence policy.`);
         } else {
           notes.push(
             `Video processing produced no evidence for ${displayUrl}, and ${model.provider}/${model.id} does not ` +
@@ -974,7 +1016,7 @@ export async function collectMedia(
     await fetchPoster(candidate);
   }
 
-  if (videosOverCap) notes.push(`${videosOverCap} video(s) skipped processing: per-search video cap is ${config.maxVideosPerSearch}; posters only if image input and the shared attachment budget permit.`);
+  if (videosOverCap) notes.push(videoCapNote(videosOverCap, config.maxVideosPerSearch));
   if (videosOverBudget) notes.push(`${videosOverBudget} video(s) skipped processing: shared video deadline exhausted; posters only if image input and the shared attachment budget permit.`);
   if (videoPosters > 0) {
     notes.push(
@@ -994,8 +1036,10 @@ export async function collectMedia(
   return { images, labels, notes, available, evidence, references };
 }
 
-function synthesisBudget(model: SynthesisModel, deps: SynthesisDeps, config?: TwitterConfig): InputBudget {
-  return deps.inputBudget ?? new InputBudget([model], config?.maxSynthesisChars, config?.imageInputBounds);
+function synthesisBudget(model: SynthesisModel, deps: SynthesisDeps, config?: TwitterConfig): InputAllowance {
+  return deps.inputBudget ?? (deps.output === "posts"
+    ? new EvidenceBudget(config?.maxSynthesisChars)
+    : new InputBudget([model], config?.maxSynthesisChars, config?.imageInputBounds));
 }
 
 function localOmissionNotes(omitted: number, kind: string): string[] {
@@ -1003,7 +1047,7 @@ function localOmissionNotes(omitted: number, kind: string): string[] {
 }
 
 /** Never truncate the trusted question or split a source into an uncitable fragment. */
-function retainBundles<T>(items: T[], render: (items: T[]) => string, system: string, budget: InputBudget): T[] {
+function retainBundles<T>(items: T[], render: (items: T[]) => string, system: string, budget: InputAllowance): T[] {
   if (!budget.fits({ system, prompt: render([]), images: [] })) throw new Error("twitter input budget: question/system scaffold does not fit.");
   const retained: T[] = [];
   for (const item of items) if (budget.fits({ system, prompt: render([...retained, item]), images: [] })) retained.push(item);
@@ -1012,7 +1056,7 @@ function retainBundles<T>(items: T[], render: (items: T[]) => string, system: st
 }
 
 /** Reserve renderer-worst-case evidence BEFORE any paid video/model work. */
-async function preparePostInput(query: string, input: Tweet[], config: TwitterConfig, model: SynthesisModel, deps: SynthesisDeps, budget: InputBudget, now: () => number, signal: AbortSignal | undefined = deps.signal): Promise<{ tweets: Tweet[]; plan: MediaInputPlan; notes: string[] }> {
+async function preparePostInput(query: string, input: Tweet[], config: TwitterConfig, model: SynthesisModel, deps: SynthesisDeps, budget: InputAllowance, now: () => number, signal: AbortSignal | undefined = deps.signal): Promise<{ tweets: Tweet[]; plan: MediaInputPlan; notes: string[] }> {
   signal?.throwIfAborted();
   const system = SYNTHESIS_SYSTEM_PROMPT;
   // Root-only metadata cannot have mirrored nested ownership. When attachment
@@ -1043,31 +1087,38 @@ async function preparePostInput(query: string, input: Tweet[], config: TwitterCo
     // Let caller cancellation run during large synchronous selection batches.
     if (index && index % 32 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     signal?.throwIfAborted();
-    const next = [...tweets, tweet], nextInventory = needsInventory ? mediaCandidates(next) : inventory, candidates = nextInventory.candidates;
-    const retainedVideos = new Set(candidates.filter(candidate => videos.has(candidate.media)).map(candidate => candidate.media));
-    if (!budget.fits(forecast(next, retainedVideos, slots, nextInventory), slots)) continue;
-    tweets = next; videos = retainedVideos; inventory = nextInventory;
-    if (config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo) {
-      for (const candidate of candidates.filter(candidate => isVideoMedia(candidate.media))) {
-        if (videos.has(candidate.media) || videos.size >= config.maxVideosPerSearch) continue;
-        const proposed = new Set([...videos, candidate.media]);
-        if (budget.fits(forecast(tweets, proposed, slots, inventory), slots)) videos = proposed;
-      }
-    }
-    if (model.supportsImage && budget.imageBounds) {
-      const photos = candidates.filter(candidate => !isVideoMedia(candidate.media)).length;
-      const videoCount = candidates.filter(candidate => isVideoMedia(candidate.media)).length;
-      const potential = Math.min(budget.imageBounds.maxImages, Math.min(config.maxMediaPerSearch, (config.enableImageUnderstanding ? photos : 0) + (config.enableVideoUnderstanding ? videoCount : 0)) + videos.size * config.maxFrames);
-      while (slots < potential && budget.fits(forecast(tweets, videos, slots + 1, inventory), slots + 1)) slots++;
-    }
+    const next = [...tweets, tweet], nextInventory = needsInventory ? mediaCandidates(next) : inventory;
+    if (!budget.fits(forecast(next, videos, slots, nextInventory), slots)) continue;
+    tweets = next; inventory = nextInventory;
   }
   if (input.length && !tweets.length) throw new Error("twitter input budget: no whole retrieved post bundle fits; reduce the question or use a larger context.");
   const notes = localOmissionNotes(input.length - tweets.length, "post bundle(s)");
   const candidates = inventory.candidates;
+  // Retain whole text bundles in retrieval order first, then allocate optional
+  // media across the FINAL deduplicated inventory. Prefix reservations would
+  // let the first result take a slot before a later higher-ranked source exists.
+  let videoCapSkips = 0, videoBudgetSkips = 0;
+  if (config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo) {
+    const ranked = rankVideoCandidates(tweets, inventory, config.maxVideoSeconds);
+    for (const [index, candidate] of ranked.entries()) {
+      if (index && index % 32 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      signal?.throwIfAborted();
+      if (videos.size >= config.maxVideosPerSearch) { videoCapSkips++; continue; }
+      const proposed = new Set([...videos, candidate.media]);
+      if (budget.fits(forecast(tweets, proposed, slots, inventory), slots)) videos = proposed;
+      else videoBudgetSkips++;
+    }
+  }
+  if (model.supportsImage && budget.imageBounds) {
+    const photos = candidates.filter(candidate => !isVideoMedia(candidate.media)).length;
+    const videoCount = candidates.filter(candidate => isVideoMedia(candidate.media)).length;
+    const potential = Math.min(budget.imageBounds.maxImages, Math.min(config.maxMediaPerSearch, (config.enableImageUnderstanding ? photos : 0) + (config.enableVideoUnderstanding ? videoCount : 0)) + videos.size * config.maxFrames);
+    while (slots < potential && budget.fits(forecast(tweets, videos, slots + 1, inventory), slots + 1)) slots++;
+  }
+  if (videoCapSkips) notes.push(videoCapNote(videoCapSkips, config.maxVideosPerSearch));
   const requested = config.enableImageUnderstanding || config.enableVideoUnderstanding;
-  if (requested && candidates.length && (!budget.imageBounds || !slots)) notes.push("Complete-input budget omitted image attachments: no space or no explicit imageInputBounds for the configured model. Text/native-video speech and visual evidence remain eligible.");
-  const skippedVideos = config.enableVideoUnderstanding && config.enableVideoProcessing && deps.processVideo ? candidates.filter(candidate => isVideoMedia(candidate.media) && !videos.has(candidate.media)).length : 0;
-  if (skippedVideos) notes.push(`Complete-input budget did not reserve preprocessing for ${skippedVideos} video asset(s); no video/STT provider call was made for those assets.`);
+  if (deps.output !== "posts" && requested && candidates.length && (!budget.imageBounds || !slots)) notes.push("Complete-input budget omitted image attachments: no space or no explicit imageInputBounds for the configured model. Text/native-video speech and visual evidence remain eligible.");
+  if (videoBudgetSkips) notes.push(`Complete-input budget did not reserve preprocessing for ${videoBudgetSkips} video asset(s); no video/STT provider call was made for those assets.`);
   return { tweets, plan: { imageSlots: slots, videoAssets: videos, budget }, notes };
 }
 
@@ -1100,9 +1151,12 @@ export interface SynthesizeOptions {
 export async function synthesizeAnswer(options: SynthesizeOptions): Promise<TwitterSearchDetails> {
   const { query, tweets: retrievedTweets, config, model, deps, signal: requestedSignal, incomplete } = options;
   const signal = requestedSignal ?? deps.signal;
+  signal?.throwIfAborted();
   deps.telemetry?.phase("preprocessingMs");
   let tweets = retrievedTweets;
   if (tweets.length === 0) {
+    if (deps.output === "posts") return evidenceDetails(query,
+      incomplete ? `No posts were returned, but retrieval stopped early (${incomplete}), so more posts may exist.` : "No posts were returned for this query.", []);
     return {
       query,
       model: `${model.provider}/${model.id}`,
@@ -1141,6 +1195,12 @@ export async function synthesizeAnswer(options: SynthesizeOptions): Promise<Twit
   };
   budget.assert(request);
   signal?.throwIfAborted(); // A media await must not advance cancelled work into synthesis.
+  if (deps.output === "posts") {
+    const sources = contextPosts(tweets);
+    const valid = sources.map(tweet => sourceUrl(tweet.url, "post")).filter((url): url is string => Boolean(url));
+    const rejected = sources.filter(tweet => tweet.url && !sourceUrl(tweet.url, "post")).length;
+    return evidenceDetails(query, request.prompt, valid, [...selection.notes, ...media.notes, ...omittedSourceNote(rejected)]);
+  }
   const text = await deps.complete(request);
 
   const { citations: citedInline, fabricated } = deriveCitations(text, tweets);
@@ -1290,7 +1350,7 @@ export const TREND_SYNTHESIS_SYSTEM_PROMPT = [
 export function buildTrendCandidatePrompt(
   query: string,
   trends: Trend[],
-  options: { now?: () => number } = {},
+  options: { now?: () => number; evidence?: boolean } = {},
 ): string {
   const lines = [
     currentTimeHeader(options.now ?? Date.now),
@@ -1310,6 +1370,7 @@ export function buildTrendCandidatePrompt(
     lines.push(
       `[${index + 1}] ${untrustedInline(trend.name)}${trend.rank !== undefined ? ` (rank ${trend.rank})` : ""}${bits ? ` — ${bits}` : ""}`,
     );
+    if (options.evidence && trend.query) lines.push(`search source (not a post permalink): https://x.com/search?q=${encodeURIComponent(trend.query)}`);
   });
   return lines.join("\n").trimEnd();
 }
@@ -1325,9 +1386,11 @@ export interface SynthesizeTrendsOptions {
 /** Synthesis hop for a trends lookup; mirrors the post/account contract. */
 export async function synthesizeTrends(options: SynthesizeTrendsOptions): Promise<TwitterSearchDetails> {
   const { query, trends: retrievedTrends, model, deps, signal } = options;
+  signal?.throwIfAborted();
   deps.telemetry?.phase("preprocessingMs");
   let trends = retrievedTrends;
   if (trends.length === 0) {
+    if (deps.output === "posts") return evidenceDetails(query, "No trends were returned for this location.", []);
     return {
       query,
       model: `${model.provider}/${model.id}`,
@@ -1340,10 +1403,15 @@ export async function synthesizeTrends(options: SynthesizeTrendsOptions): Promis
 
   const budget = synthesisBudget(model, deps);
   const timestamp = (deps.now ?? Date.now)(), now = () => timestamp;
-  trends = retainBundles(trends, items => buildTrendCandidatePrompt(query, items, { now }), TREND_SYNTHESIS_SYSTEM_PROMPT, budget);
+  const render = (items: Trend[]) => buildTrendCandidatePrompt(query, items, { now, evidence: deps.output === "posts" });
+  trends = retainBundles(trends, render, TREND_SYNTHESIS_SYSTEM_PROMPT, budget);
   if (deps.telemetry) deps.telemetry.usage.trendsRetained = trends.length;
-  const request: SynthesisRequest = { model, system: TREND_SYNTHESIS_SYSTEM_PROMPT, prompt: buildTrendCandidatePrompt(query, trends, { now }), images: [], signal, maxTokens: budget.outputTokens };
+  const request: SynthesisRequest = { model, system: TREND_SYNTHESIS_SYSTEM_PROMPT, prompt: render(trends), images: [], signal, maxTokens: budget.outputTokens };
   budget.assert(request);
+  signal?.throwIfAborted();
+  if (deps.output === "posts") return evidenceDetails(query, request.prompt,
+    trends.filter(trend => trend.query).map(trend => `https://x.com/search?q=${encodeURIComponent(trend.query!)}`),
+    [...localOmissionNotes(retrievedTrends.length - trends.length, "trend(s)"), "Trend sources are search URLs, not post permalinks or independent verification of a trend's meaning."]);
   const text = await deps.complete(request);
 
   // Trends carry no permalink, so the closest verifiable source is X's own
@@ -1402,11 +1470,13 @@ export interface SynthesizeDocumentOptions {
 /** Synthesis hop for a single retrieved object (for example an X Space). */
 export async function synthesizeDocument(options: SynthesizeDocumentOptions): Promise<TwitterSearchDetails> {
   const { query, body, model, deps, signal } = options;
+  signal?.throwIfAborted();
   deps.telemetry?.phase("preprocessingMs");
   const title = untrustedInline(options.title, 200);
   const validSources = [...new Set(options.citations.map((url) => sourceUrl(url, "document")).filter((url): url is string => Boolean(url)))];
   const rejectedSources = options.citations.filter(url => !sourceUrl(url, "document")).length;
   if (!body.trim()) {
+    if (deps.output === "posts") return evidenceDetails(query, `No details were returned for ${title}.`, [], options.notes);
     return {
       query,
       model: `${model.provider}/${model.id}`,
@@ -1427,6 +1497,9 @@ export async function synthesizeDocument(options: SynthesizeDocumentOptions): Pr
   const retained = retainBundles(fields, render, DOCUMENT_SYNTHESIS_SYSTEM_PROMPT, budget);
   const request: SynthesisRequest = { model, system: DOCUMENT_SYNTHESIS_SYSTEM_PROMPT, prompt: render(retained), images: [], signal, maxTokens: budget.outputTokens };
   budget.assert(request);
+  signal?.throwIfAborted();
+  if (deps.output === "posts") return evidenceDetails(query, request.prompt, validSources,
+    [...(options.notes ?? []), ...omittedSourceNote(rejectedSources), ...localOmissionNotes(fields.length - retained.length, "metadata field(s)")]);
   const text = await deps.complete(request);
 
   const notes = [...(options.notes ?? []), ...omittedSourceNote(rejectedSources), ...localOmissionNotes(fields.length - retained.length, "metadata field(s)")];
@@ -1461,9 +1534,12 @@ export interface SynthesizeUserOptions {
 /** Synthesis hop for an account search; mirrors `synthesizeAnswer`'s contract. */
 export async function synthesizeUserAnswer(options: SynthesizeUserOptions): Promise<TwitterSearchDetails> {
   const { query, users: retrievedUsers, model, deps, signal, incomplete } = options;
+  signal?.throwIfAborted();
   deps.telemetry?.phase("preprocessingMs");
   let users = retrievedUsers;
   if (users.length === 0) {
+    if (deps.output === "posts") return evidenceDetails(query,
+      incomplete ? `No accounts were returned, but retrieval stopped early (${incomplete}), so more may exist.` : "No accounts were returned for this query.", []);
     return {
       query,
       model: `${model.provider}/${model.id}`,
@@ -1486,6 +1562,14 @@ export async function synthesizeUserAnswer(options: SynthesizeUserOptions): Prom
   if (deps.telemetry) deps.telemetry.usage.accountsRetained = users.length;
   const request: SynthesisRequest = { model, system: USER_SYNTHESIS_SYSTEM_PROMPT, prompt: buildUserCandidatePrompt(query, users, { now }), images: [], signal, maxTokens: budget.outputTokens };
   budget.assert(request);
+  signal?.throwIfAborted();
+  if (deps.output === "posts") return evidenceDetails(query, request.prompt,
+    users.map(user => sourceUrl(user.profileUrl, "profile")).filter((url): url is string => Boolean(url)), [
+      ...localOmissionNotes(retrievedUsers.length - users.length, "account(s)"),
+      ...omittedSourceNote(users.filter(user => !sourceUrl(user.profileUrl, "profile")).length),
+      ...(users.some(user => (user.bio?.length ?? 0) > MAX_TEXT_CHARS) ? [`Account bios retain the existing ${MAX_TEXT_CHARS}-character truncation cap.`] : []),
+      ...(users.some(user => user.pinnedTweetIds?.some(id => /^\d{1,25}$/.test(id))) ? ["Pinned post ids are profile metadata only; their content was not fetched."] : []),
+    ]);
   const text = await deps.complete(request);
 
   const { citations: citedInline, fabricated } = deriveUserCitations(text, users);

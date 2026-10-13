@@ -28,6 +28,10 @@ export interface ModelLike extends BudgetModel {
 }
 /** Options shared by every twitterapi.io run path. */
 export interface BackendOptions {
+  /** Trusted Pi agent directory (settings/cache); never inferred from project settings. */
+  agentDir?: string;
+  /** Evidence output skips model resolution/completion; text-only v1. */
+  output?: "answer" | "posts";
   progress?: ProgressCallback;
   env?: Record<string, string | undefined>;
   fetcher?: typeof fetch;

@@ -75,10 +75,19 @@ export function imageDimensions(image: ImageAttachment, maxBytes: number): { wid
   return undefined; // Unknown raster/animation encodings aren't guessed.
 }
 
-type BudgetForecast = Pick<SynthesisRequest, "system" | "prompt" | "images" | "mediaManifest" | "textOnlyPrompt"> & {
+export type BudgetForecast = Pick<SynthesisRequest, "system" | "prompt" | "images" | "mediaManifest" | "textOnlyPrompt"> & {
   /** Separate rendered JSON worst case; UTF-8/token accounting uses the main prompt. */
   jsonForecast?: { prompt: string; textOnlyPrompt: string; mediaManifest?: string };
 };
+
+/** Shared source/media admission contract; evidence output has no model context. */
+export interface InputAllowance {
+  readonly outputTokens: number;
+  readonly imageBounds?: ImageInputBounds;
+  fits(request: BudgetForecast, imageCount?: number): boolean;
+  acceptsImage(image: ImageAttachment): boolean;
+  assert(request: SynthesisRequest): void;
+}
 
 /** Conservative byte-token accounting, not an exact provider tokenizer. */
 export class InputBudget {

@@ -1,6 +1,8 @@
 import type { TwitterSearchDetails } from "./types.js";
+import { formatEvidence } from "./evidence.js";
 
 export function formatTwitterResults(details: TwitterSearchDetails): string {
+  if (details.output === "posts") return formatEvidence(details);
   const lines = [
     `Query: ${details.query}`,
     `Model: ${details.model}`,

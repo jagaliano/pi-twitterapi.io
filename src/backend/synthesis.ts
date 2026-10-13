@@ -2,7 +2,8 @@ import { RunTelemetry } from "../telemetry.js";
 import { reportProgress, type ProgressCallback } from "../progress.js";
 import type { TwitterSearchDetails } from "../types.js";
 import { SYNTHESIS_SYSTEM_PROMPT, type SynthesisRequest } from "../synthesize.js";
-import { InputBudget, renderedPrompt, withoutImages } from "../input-budget.js";
+import { EvidenceBudget } from "../evidence.js";
+import { InputBudget, renderedPrompt, withoutImages, type InputAllowance } from "../input-budget.js";
 import {
   assistantText,
   availableModels,
@@ -143,7 +144,7 @@ export interface SynthesisBackend {
   telemetry: RunTelemetry;
   apiKey: string;
   model: ModelLike;
-  budget: InputBudget;
+  budget: InputAllowance;
   /** Ready-to-use synthesis completion, with fallback and failure handling applied. */
   complete: (request: SynthesisRequest) => Promise<string>;
   /** Model that served the most recent completion after the primary failed. */
@@ -273,8 +274,9 @@ export function applyFallbackNote(backend: SynthesisBackend, details: TwitterSea
 }
 
 /**
- * Shared preflight: credentials, the synthesis model, and its completion. Runs
- * before any network work so a misconfiguration fails immediately and says why.
+ * Shared run preflight before network work. Evidence output resolves only
+ * credentials and a model-independent text ceiling; answer output additionally
+ * resolves the synthesis/fallback chain and its completion.
  */
 export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, query?: string): SynthesisBackend {
   const telemetry = new RunTelemetry(options.telemetryNow);
@@ -282,6 +284,25 @@ export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, que
   const apiKey = options.env?.TWITTERAPI_IO_API_KEY;
   if (!apiKey) {
     throw new Error("TWITTERAPI_IO_API_KEY must be configured to use the twitterapi.io backend.");
+  }
+  if (options.output !== undefined && options.output !== "answer" && options.output !== "posts") {
+    throw new Error('twitter output must be "answer" or "posts"');
+  }
+  if (options.output === "posts") {
+    const budget = new EvidenceBudget(options.config.maxSynthesisChars);
+    if (query !== undefined) budget.preflight(query, SYNTHESIS_SYSTEM_PROMPT);
+    return {
+      fetcher: telemetry.fetcher(fetcher, "upstream"),
+      mediaFetcher: telemetry.fetcher(fetcher, "media"),
+      nativeVideoFetcher: telemetry.fetcher(fetcher, "nativeVideo"),
+      sttFetcher: telemetry.fetcher(fetcher, "stt"),
+      telemetry, apiKey, budget,
+      // Pipeline capability descriptor only: never looked up or completed.
+      model: { provider: "twitterapi.io", id: "text-evidence", input: [] },
+      complete: async () => { throw new Error("evidence output must never call synthesis"); },
+      isFallbackUsed: () => false,
+      imagesDropped: () => false,
+    };
   }
   const registry = options.registry;
   if (!registry) {

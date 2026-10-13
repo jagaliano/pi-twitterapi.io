@@ -25,6 +25,8 @@ import type { TwitterConfig } from "../config.js";
 import type { ImageAttachment } from "../synthesize.js";
 import type { TweetMedia } from "../twitterapi.js";
 import { isAllowedMediaUrl, readCapped } from "./media.js";
+import { withEvidenceCache } from "./evidence-cache.js";
+import { cachedCheckBinary } from "./binary-cache.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +38,8 @@ export type ExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface VideoDeps {
+  /** Trusted agent directory override for cache isolation; never project-configured. */
+  cacheAgentDir?: string;
   telemetry?: RunTelemetry;
   /** Classified fetch boundaries; default to fetcher for existing direct callers. */
   nativeFetcher?: typeof fetch;
@@ -76,6 +80,8 @@ export interface VideoFrame extends ImageAttachment {
 }
 
 export interface VideoEvidence {
+  /** False for incomplete upload cleanup; do not persist/replay it as a clean success. */
+  cacheable?: boolean;
   postUrl: string;
   method: VideoMethod;
   transcript?: string;
@@ -95,6 +101,8 @@ export interface ProcessVideoInput {
   modelSupportsImage: boolean;
   /** Caller reserved attachment space; false skips frame extraction, not native/STT. */
   allowFrames?: boolean;
+  /** Explicit non-model output policy (e.g. text-only evidence), for honest disclosure. */
+  frameOmissionReason?: string;
 }
 
 /** HEAD probes are cheap (~0.1 s), but one hanging request must not eat the phase. */
@@ -149,22 +157,8 @@ function defaultExec(): ExecFn {
   };
 }
 
-async function defaultCheckBinary(
-  exec: ExecFn,
-  bin: string,
-  options: { signal?: AbortSignal; timeoutMs: number },
-): Promise<boolean> {
-  try {
-    await exec(bin, ["-version"], {
-      timeout: Math.max(1, Math.min(5_000, options.timeoutMs)),
-      signal: options.signal,
-    });
-    return true;
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    return err?.code !== "ENOENT";
-  }
-}
+// Stable identity lets the process-local detection cache span video calls.
+const DEFAULT_VIDEO_EXEC = defaultExec();
 
 function remaining(deadline: number, now: () => number): number {
   return Math.max(1, deadline - now());
@@ -1188,17 +1182,17 @@ async function whisperCpp(
 export async function processVideo(input: ProcessVideoInput): Promise<VideoEvidence> {
   const telemetry = input.deps.telemetry;
   const start = telemetry?.now();
-  try { return await processVideoImpl(input); }
+  try { return await withEvidenceCache(input, () => processVideoImpl(input)); }
   finally { if (start !== undefined) telemetry?.addVideoTime(start); }
 }
 
 async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence> {
   const { media, config, deps, deadline, modelSupportsImage } = input;
   const now = deps.now ?? Date.now;
-  const exec = deps.exec ?? defaultExec();
+  const exec = deps.exec ?? DEFAULT_VIDEO_EXEC;
   const checkBinary =
     deps.checkBinary ??
-    ((bin: string, options: { signal?: AbortSignal; timeoutMs: number }) => defaultCheckBinary(exec, bin, options));
+    ((bin: string, options: { signal?: AbortSignal; timeoutMs: number }) => cachedCheckBinary(exec, bin, options));
   const mktemp = deps.mktemp ?? (() => mkdtemp(join(tmpdir(), "pi-twitter-video-")));
   const rmTemp = deps.rmTemp ?? ((dir: string) => rm(dir, { recursive: true, force: true }));
   const env = deps.env ?? {};
@@ -1390,6 +1384,7 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
           // Retention is a property of the upload, not of a successful generation
           // (P2-6): a failed, empty or cancelled run can still leave a file behind.
           if (result.uploaded && result.deleted === false) {
+            evidence.cacheable = false;
             evidence.notes.push("The uploaded video file could not be deleted from the endpoint and may be retained.");
           }
         } else {
@@ -1496,12 +1491,11 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
     // claiming otherwise would be the kind of false disclosure this pipeline bans.
     // Stays quiet when nativeMethod is set, since native already supplied text.
     if (!nativeMethod && !modelSupportsImage) {
+      const reason = input.frameOmissionReason ?? "the configured synthesis model does not accept image input";
       evidence.notes.push(
         transcript
-          ? "Frames were not extracted: the configured synthesis model does not accept image input, so only " +
-              "transcript evidence was produced."
-          : "Frames were not extracted: the configured synthesis model does not accept image input, and no " +
-              "transcript was produced either.",
+          ? `Frames were not extracted: ${reason}, so only transcript evidence was produced.`
+          : `Frames were not extracted: ${reason}, and no transcript was produced either.`,
       );
     }
 

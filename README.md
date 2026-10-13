@@ -3,8 +3,9 @@
 A [twitterapi.io](https://twitterapi.io)-backed X/Twitter extension for the
 [pi coding agent](https://pi.dev). It registers a `twitter` tool that reads
 posts, accounts, threads, timelines, trends, conversations and more through
-twitterapi.io, then synthesizes an answer with citation URLs using a model from
-pi's own registry.
+twitterapi.io. By default it synthesizes an answer with citation URLs using a
+model from pi's registry; `output: "posts"` returns bounded untrusted text
+evidence directly to your main agent without a synthesis-model call.
 
 This extension is self-contained: twitterapi.io is the only retrieval source and
 pi's model registry performs the synthesis. It is designed to cover the same
@@ -26,7 +27,8 @@ pi -e ./src/index.ts
 
 ## Configure
 
-Set the twitterapi.io API key. Synthesis uses `twitter.synthesisModel` when set, and otherwise falls back to the model running the current pi session, so a key-only setup already works:
+Set the twitterapi.io API key. Evidence output needs only this retrieval key.
+For the default answer output, synthesis uses `twitter.synthesisModel` when set, and otherwise falls back to the model running the current pi session, so a key-only setup already works:
 
 ```bash
 export TWITTERAPI_IO_API_KEY="your-twitterapi.io-key"
@@ -60,13 +62,14 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 | `enableImageUnderstanding` | no | Attach post images when the model accepts images **and** has explicit `imageInputBounds` and reserved input space. |
 | `enableVideoUnderstanding` | no | Attach video poster frames (pi's synthesis interface takes images, not video). |
 | `maxMediaPerSearch` | no | Upper bound on media attachments per search (max 20, default 4); complete-input limits can reduce delivery. |
-| `maxSynthesisChars` | no | Full rendered system/evidence/manifest character backstop (default 60,000, range 1,000–120,000). Separate context/output checks still apply. |
+| `maxSynthesisChars` | no | Full rendered system/evidence/manifest character backstop (default 60,000, range 1,000–120,000). Answer output also checks model context/output limits. Evidence output uses this as its final text ceiling, including disclosures, without a model-context guarantee. |
 | `imageInputBounds` | no | User-only exact `provider/model` declarations: positive integer `tokensPerImage`, `maxWidth`, `maxHeight`, `maxImages`; optional raw `maxBytes` (default 10 MiB). Missing bounds omit images with disclosure; no provider accounting is guessed. |
 | `maxPages` | no | Base page budget per search (default 5). |
 | `maxPagesCeiling` | no | Hard cap that `maxPages` is clamped to (default 20). |
 | `minRequestIntervalMs` | no | Minimum spacing between actual twitterapi.io dispatches (default 5000), shared per credential across concurrent endpoints, pagination and retries in this process. Raise it when throttled; lower it for a higher-QPS tier. Zero cannot bypass another active caller's interval or the previous dispatch's cooldown. |
 | `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). Retries honor both backoff/`Retry-After` and shared request spacing; zero backoff does not bypass pacing. |
 | `enableVideoProcessing` | no | Run **real** video processing (native video and/or frames + transcript). Requires `enableVideoUnderstanding`. Off by default. |
+| `evidenceCache` | no | User-only text evidence persistence: `off` (default), `read`, `write`, or `read-write`. See privacy and deletion below. |
 | `videoEndpointType` | no | Native-video wire format: `gemini-files` (default, Google) or `openai-compatible` (video-capable chat-completions endpoints that accept this `video_url` shape; verified with OpenRouter). An unrecognised string disables native video — frames and STT still run — and is reported in the answer rather than silently changing provider. |
 | `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
 | `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var (default `STT_API_KEY`). No hidden default provider. |
@@ -157,6 +160,19 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 > [ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp), then point
 > `ffmpegPath` and `whisperCppBinary` at the binaries you installed.
 >
+> Successful `ffmpeg -version` availability checks are reused in memory within
+> the Pi process (up to 128 resolved executable paths per executor). Each lookup
+> rechecks the resolved path, file identity, size, permissions and modification
+> timestamps; replacement, edits, symlink retargeting and `PATH`/override changes
+> invalidate the hit. No failures, timeouts or cancellations are cached. Concurrent
+> misses probe independently with their own signals/budgets; a cancelled caller
+> cannot poison another. Checks use the remaining phase budget, capped at five
+> seconds; late settlement cannot report or store a new success after the deadline.
+> Path traversal preserves filesystem semantics, including symlink/`..` paths.
+> Restarting Pi drops this cache; it stores no evidence
+> on disk. Custom detection overrides bypass it. whisper.cpp currently has no
+> separate availability probe, so its actual transcription still runs each time.
+>
 > **Cost.** Native video is billed by whichever endpoint you configure, and video is
 > tokenised by **duration** rather than file size. In one measurement on
 > 2026-10-05, `google/gemini-2.5-flash-lite` counted 258 video tokens per second of
@@ -178,6 +194,34 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 > for most hosted Whisper APIs, with the audio re-sent — up to three attempts — when
 > an endpoint rejects the requested response format), and local `ffmpeg` plus
 > whisper.cpp cost nothing beyond the model files you download.
+
+### Video processing priority
+
+When video processing is enabled, deduplicated own/quoted/reposted video assets
+are ranked **after** whole text bundles are retained, before reserving or spending
+processing slots:
+
+1. Known positive duration within `maxVideoSeconds` (inclusive), then known longer
+   duration, then missing/invalid duration.
+2. Within each band, original-source views descending, then likes descending.
+   Known zero beats missing counts; non-finite, negative, fractional or unsafe
+   counts are treated as missing. Exact duration does not break ties within a band.
+3. Equal tuples retain original result/media order.
+
+Only actual media owners contribute counts—not enclosing quote/repost commentary
+or mirrored wrappers. Repeated fetched originals use the highest reported value
+for each count; their rendered metadata is unchanged. Deduplication and ownership
+reconciliation happen before ranking, so a repeated asset consumes one slot and
+its evidence keeps every original source binding.
+
+This is **resource allocation, not a relevance claim**. Retrieved post order is
+unchanged; shorter clips can win over popular long clips. A ranked asset whose
+worst-case evidence does not fit the complete-input budget is skipped before
+processing, letting the next ranked asset try the slot. Video-cap, input-budget
+and shared-deadline skips are disclosed separately. Photos still download first,
+existing caps/deadlines remain shared, and poster-only mode keeps source order.
+No extra retrieval calls or persistence are introduced. This applies to both
+answer and text-only evidence output; evidence output still omits all images.
 
 For native video through OpenRouter instead of Google:
 
@@ -203,6 +247,58 @@ For native video through OpenRouter instead of Google:
 > against. `pi-tui` and `typebox` stay at `"*"` because pi supplies them at
 > runtime. Synthesis is a real model call, so it consumes tokens on the configured
 > model.
+
+### Private video text evidence cache
+
+Persistence is **off by default**. To opt in, add `"evidenceCache": "read-write"`
+to the `twitter` block in **user** settings. Project settings cannot enable or
+change this policy. Existing video opt-ins, source admission, ranked slots and
+input budgets still apply; cached text is not a way around them.
+
+- Only successful non-empty transcripts and/or visual descriptions are saved.
+  Failed, empty and frames-only results are not successful hits; failed Gemini
+  upload cleanup also prevents caching. Successful fallback STT can be saved.
+- Storage: `<agent-dir>/twitter-evidence-cache-v1` (normally under `~/.pi/agent/`,
+  honouring `PI_CODING_AGENT_DIR`), private `0700` directory / `0600` files on
+  POSIX systems. Entries are bounded to **20 MiB / 1,000 files**, with a 128 kB
+  single-entry cap. Frames, attribution fields, question/answer text, operational
+  errors and credential fields are not stored; known runtime credential echoes
+  are excluded from reuse/storage. Transcripts/descriptions themselves can
+  contain sensitive content: **this is plaintext local storage, not encryption**.
+- A versioned digest identifies the complete playable variant ladder and order,
+  media identity/duration, provider/endpoint/models, clip/processing/filter policy,
+  language, credential availability (never values), and local binary/model file
+  identity. Changes miss rather than silently replay different analysis. Signed
+  media URLs and credential-bearing endpoint URLs bypass persistence.
+- A valid hit skips video downloads, binary execution and native-video/STT calls.
+  Text is rebound to the **current** source; notes report original analysis time,
+  method and clip limit. **No frames/images are restored** and original operational
+  notes are not replayed. Posts are always retrieved fresh; answer output still
+  makes its usual synthesis call. Cached evidence remains untrusted third-party text.
+- The **7-day TTL limits reuse**, not a background deletion guarantee. Expired or
+  corrupt entries are pruned on writes; oldest analysis is evicted when capacity
+  is reached. Atomic private writes and a writer/clear lock protect concurrent
+  processes. A busy or abandoned writer lock safely skips storage; valid reads
+  need not wait for it. Locks are never stolen.
+
+`read` permits hits but no storage/eviction; `write` stores new analysis but never
+reads a text hit. `off` stops cache reads/writes **without deleting existing files**.
+Settings changes apply on the next call. To delete entries explicitly:
+
+```text
+/twitter-cache clear
+```
+
+Confirm the dialog, or use `/twitter-cache clear --yes` in headless mode. Clear
+waits for this session's work to settle, serializes with writers, invalidates
+already-processing cache generations, and removes only recognized cache entries
+and temporary files. Unrelated files are untouched. The private directory and
+an opaque generation marker remain. It **does not erase provider uploads,
+existing Pi session transcripts, backups or copies outside this directory**.
+Unsafe directories or busy locks cause a reported refusal rather than unsafe
+recursive deletion. After a process crash, close other Pi processes before
+manually removing an abandoned `.lock` directory and retrying clear; the extension
+never removes it automatically.
 
 ### Progress
 
@@ -244,7 +340,46 @@ synthesis includes its full fallback/repair/backoff chain. `videoMs` is explicit
 settings reload and UI/markdown formatting. Calls that fail entirely still throw
 as before; these details cover completed answers, including recovered failures.
 
-### Complete-input budget
+### Evidence output (3.1)
+
+Pass `output: "posts"` with **any of the 17 read modes**. The name selects the
+output contract, not the retrieval mode: accounts, trends and documents return
+their appropriate evidence too. For example:
+
+```json
+{ "query": "What does this post say?", "mode": "tweets", "ids": ["2107226494934061502"], "output": "posts" }
+```
+
+The model-visible tool `content` contains sanitized, **untrusted third-party text**
+with source identities, quoted/reposted attribution, metadata and disclosures—not
+raw API JSON and not an extension-generated answer. Posts/accounts carry their
+validated source URLs; trends carry search URLs (not post permalinks); documents
+carry their allowed source URLs. Treat the content as evidence, never instructions.
+`output: "answer"` remains the default for a separately synthesized answer.
+
+Evidence output never resolves a synthesis model or calls `ModelRegistry.complete`.
+It works without a registry, ignores `synthesisModel`/fallback selection, and reports
+`details.output: "posts"`, `model: "none"`, `synthesisCalls: 0` and zero SDK synthesis
+attempts/time. **This is not a promise of zero provider cost:** retrieval is still
+paid. With the existing video opt-ins and separately configured credentials, native
+video analysis and STT can still run and return bounded speech/visual text; their
+physical requests remain visible in telemetry. Local STT remains eligible too.
+
+**Text-only v1, regardless of the main agent's image capability.** No photos,
+poster images or extracted frames are returned; photo/poster downloads and frame
+extraction are skipped. Image omissions are disclosed. No new persistence or
+cache is introduced.
+
+Whole source bundles/metadata fields are selected under `maxSynthesisChars`,
+reserving possible video evidence **before** processing. Oversized questions fail
+before retrieval; omitted bundles/videos incur no media/provider work. Long text
+is retained when the whole bundle fits. Final content, including disclosures,
+stays within the character ceiling; excessive disclosures are sanitized, shortened
+and omitted with an explicit note rather than cutting source text. This is a
+bounded tool result, **not** a fit guarantee for the main agent's remaining context.
+Use smaller retrieval counts/limits or `maxSynthesisChars` when appropriate.
+
+### Complete-input budget (answer output)
 
 Before retrieval, the primary and fallback catalogue entries must expose valid
 `contextWindow` and `maxTokens`. A question that cannot fit the system/scaffold is

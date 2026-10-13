@@ -75,9 +75,14 @@ export const USER_ONLY_CONFIG_KEYS = [
   "whisperThreads",
   "whisperRealtimeFactor",
   "imageInputBounds",
+  "evidenceCache",
 ] as const;
 
+export type EvidenceCacheMode = "off" | "read" | "write" | "read-write";
+
 export interface TwitterConfig {
+  /** User-only text persistence; off by default. Off does not delete existing entries. */
+  evidenceCache?: EvidenceCacheMode;
   /**
    * pi model id ("provider/model") that synthesizes the answer from posts
    * retrieved via twitterapi.io. Resolved through pi's model catalogue. There is
@@ -302,7 +307,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
   const ignored = USER_ONLY_CONFIG_KEYS.filter((key) => project[key] !== undefined);
   if (ignored.length > 0) {
     configNotes.push(
-      `twitter.${ignored.join(", twitter.")} from project settings was ignored: executable paths, endpoints, image bounds and ` +
+      `twitter.${ignored.join(", twitter.")} from project settings was ignored: executable paths, endpoints, image bounds, cache policy and ` +
         "credentials are read from user settings only.",
     );
   }
@@ -356,7 +361,15 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     videoEndpoint = undefined;
   }
 
+  const cacheMode = user.evidenceCache;
+  const validCacheMode = typeof cacheMode === "string" && ["off", "read", "write", "read-write"].includes(cacheMode);
+  const evidenceCache: EvidenceCacheMode = validCacheMode ? cacheMode as EvidenceCacheMode : "off";
+  if (cacheMode !== undefined && !validCacheMode) {
+    configNotes.push("twitter.evidenceCache is not a supported mode (off/read/write/read-write); cache reads and writes are disabled.");
+  }
+
   return {
+    evidenceCache,
     synthesisModel,
     maxSynthesisChars: intInRange(config.maxSynthesisChars, DEFAULT_MAX_SYNTHESIS_CHARS, 1_000, 120_000, "maxSynthesisChars", configNotes),
     imageInputBounds: imageInputBounds(user.imageInputBounds, configNotes),

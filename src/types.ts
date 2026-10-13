@@ -6,6 +6,9 @@
  */
 export interface TwitterSearchDetails {
   query: string;
+  /** "posts" returns bounded untrusted evidence for all read modes, not a generated answer. */
+  output?: "answer" | "posts";
+  /** "none" for evidence output; no synthesis model was resolved. */
   model: string;
   text: string;
   citations: string[];
@@ -26,7 +29,7 @@ export interface TwitterUsage {
   successfulPages: number;
   /** Raw root-array entries (including duplicates/stubs) and timeline pin objects. */
   postsReturned: number;
-  /** Root bundles actually delivered to synthesis, excluding nested context duplicates. */
+  /** Root bundles actually delivered to synthesis or evidence output, excluding nested context duplicates. */
   postsRetained: number;
   accountsReturned: number;
   accountsRetained: number;

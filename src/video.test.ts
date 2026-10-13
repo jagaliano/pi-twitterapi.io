@@ -696,6 +696,7 @@ test("processVideo discloses a failed Gemini delete", async () => {
       modelSupportsImage: true,
     });
     assert.ok(result.notes.some((note) => /could not be deleted/.test(note)));
+    assert.equal(result.cacheable, false, "failed upload cleanup must not be replayed as a clean cached success");
   });
 });
 
