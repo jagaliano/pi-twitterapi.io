@@ -648,7 +648,8 @@ There is no build step. Pi loads the TypeScript sources in `src/` directly
 through [jiti](https://github.com/unjs/jiti), and the published package ships
 those sources, so `pi install npm:pi-twitterapi.io` and
 `pi install git:github.com/jagaliano/pi-twitterapi.io` both work without a
-compile step. `src/*.test.ts` files are excluded from the npm tarball.
+compile step. Tests live in `tests/`, with fixtures in `tests/fixtures/`; both
+are typechecked and excluded from the npm tarball.
 
 The dev dependencies are version ranges (pi 1.0.2, typebox 1.3.x) resolved by
 [`pnpm-lock.yaml`](pnpm-lock.yaml); CI installs them with `--frozen-lockfile`,

@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { DEFAULT_WHISPER_THREADS, loadTwitterConfig } from "./config.js";
+import { DEFAULT_WHISPER_THREADS, loadTwitterConfig } from "../src/config.js";
 import {
   createProcessVideo,
   estimateVariantBytes,
@@ -18,8 +18,8 @@ import {
   selectVariant,
   type ExecFn,
   type VideoDeps,
-} from "./backend/video.js";
-import type { TweetMedia } from "./twitterapi.js";
+} from "../src/backend/video.js";
+import type { TweetMedia } from "../src/twitterapi.js";
 
 // --------------------------------------------------------------------- config
 

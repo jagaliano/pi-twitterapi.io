@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-13
+
+### Changed
+
+- Tests and fixtures now live in `tests/` and `tests/fixtures/` instead of `src/`.
+  Test discovery and typechecking include the relocated suite; tests and fixtures
+  remain excluded from npm. No runtime changes.
+- The cache cancellation-cleanup test now aborts at the temporary-file sync
+  boundary instead of relying on filesystem notification timing.
+
 ## [0.5.0] - 2026-10-13
 
 ### Fixed
@@ -553,7 +563,8 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.5...v0.4.0
 [0.3.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.0...v0.3.1

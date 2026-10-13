@@ -16,8 +16,8 @@ import {
   synthesisRetryDelayMs,
   toSynthesisModel,
   type RegistryLike,
-} from "./backend.js";
-import { loadTwitterConfig } from "./config.js";
+} from "../src/backend.js";
+import { loadTwitterConfig } from "../src/config.js";
 
 // Independent mocks must not share a process-scoped credential cooldown.
 let fixture = 0;

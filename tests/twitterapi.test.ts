@@ -33,7 +33,7 @@ import {
   isRetryableStatus,
   upstreamStartDateString,
   type FetchLike,
-} from "./twitterapi.js";
+} from "../src/twitterapi.js";
 
 // Independent mocks must not share a process-scoped credential cooldown.
 let fixture = 0;
@@ -329,7 +329,7 @@ test("host-zone midnight stays correct across DST transitions (deterministic, ch
   // Node latches TZ per process, so each zone/date runs in its own child. Import
   // the pure window module directly: its only imports are type-only, so the
   // child (plain Node, no TS loader) does not need to resolve sibling modules.
-  const moduleUrl = new URL("./twitterapi/window.ts", import.meta.url).href;
+  const moduleUrl = new URL("../src/twitterapi/window.ts", import.meta.url).href;
   const midnight = (tz: string, date: string): string => {
     const script = `
       import { resolveLocalWindow } from ${JSON.stringify(moduleUrl)};

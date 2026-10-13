@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { Value } from "typebox/value";
 
-import { registerTwitterTool } from "./tool.js";
+import { registerTwitterTool } from "../src/tool.js";
 
 // Independent mocks must not share a process-scoped credential cooldown.
 let fixture = 0;

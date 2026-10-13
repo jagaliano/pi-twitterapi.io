@@ -18,7 +18,7 @@ omission, documented below rather than treated as a universal search schema.
 Raw captures are temporary under `/tmp/twitter-phase2-raw/`. The local consumed-field
 projection script is `/tmp/twitter-phase2-project.mjs`. These temporary artifacts
 are available for the current review, not durable prerequisites for the tests.
-`src/fixtures/upstream-context.json` records capture time and per-example source
+`tests/fixtures/upstream-context.json` records capture time and per-example source
 case/index/path. Values are synthetic; the fixture does not contain original post
 prose, names, handles, post/account ids, post timestamps or shortlink tokens.
 Public media hosts and numeric video durations/bitrates are retained where needed
@@ -74,7 +74,7 @@ The by-id legacy wrapper is measured, not an inferred alternate map.
 
 ## Acceptance and follow-up
 
-`src/upstream-fixtures.test.ts` checks source/author consistency, parser acceptance,
+`tests/upstream-fixtures.test.ts` checks source/author consistency, parser acceptance,
 quote/repost/reply coverage, RT-prefix and longer-original behavior, actual card
 array shape and link correspondence, >700-character text, preview-only article,
 alt text, profile/timeline relationship, synthetic labels and package exclusions.

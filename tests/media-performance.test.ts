@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { buildCandidatePrompt, synthesizeAnswer } from "./synthesize.js";
-import type { Tweet } from "./twitterapi.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { buildCandidatePrompt, synthesizeAnswer } from "../src/synthesize.js";
+import type { Tweet } from "../src/twitterapi.js";
 
 const roots = (): Tweet[] => Array.from({ length: 1_000 }, (_, i) => ({
   id: String(i + 1), url: `https://x.com/a/status/${i + 1}`, author: { userName: "a" }, text: "x",

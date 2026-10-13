@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { EvidenceBudget } from "./evidence.js";
-import { InputBudget } from "./input-budget.js";
-import { collectMedia, buildCandidatePrompt, synthesizeAnswer, type SynthesisDeps } from "./synthesize.js";
-import type { Tweet, TweetMedia } from "./twitterapi.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { EvidenceBudget } from "../src/evidence.js";
+import { InputBudget } from "../src/input-budget.js";
+import { collectMedia, buildCandidatePrompt, synthesizeAnswer, type SynthesisDeps } from "../src/synthesize.js";
+import type { Tweet, TweetMedia } from "../src/twitterapi.js";
 
 const model = { provider: "test", id: "ranking", supportsImage: false, contextWindow: 1_000_000, maxTokens: 8_192 };
 const config = (extra = {}) => loadTwitterConfig({ twitter: { enableVideoUnderstanding: true, enableVideoProcessing: true, maxVideosPerSearch: 1, ...extra } });

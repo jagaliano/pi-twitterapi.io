@@ -3,10 +3,10 @@ import { test } from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadTwitterConfig } from "./config.js";
-import { runTwitterApiTweetsByIds } from "./backend.js";
-import { registerCacheCommand } from "./index.js";
-import { cacheDirectory, TextEvidenceCache } from "./backend/evidence-cache.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { runTwitterApiTweetsByIds } from "../src/backend.js";
+import { registerCacheCommand } from "../src/index.js";
+import { cacheDirectory, TextEvidenceCache } from "../src/backend/evidence-cache.js";
 
 const media = { id_str: "10", type: "video", media_url_https: "https://pbs.twimg.com/poster.jpg", video_info: { duration_millis: 1_000, variants: [{ content_type: "video/mp4", url: "https://video.twimg.com/clip.mp4", bitrate: 256_000 }] } };
 const post = (id: string, ownMedia = false) => ({ id, url: `https://x.com/user/status/${id}`, text: `post ${id}`, extended_entities: { media: ownMedia ? [media] : [] } });

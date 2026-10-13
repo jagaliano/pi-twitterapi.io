@@ -2,10 +2,10 @@ import { TEST_LIMITS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { asTweet, asUser, fetchUserTweets, metadataUrl, type Tweet } from "./twitterapi.js";
-import { buildCandidatePrompt, buildUserCandidatePrompt, deriveCitations, synthesizeAnswer, synthesizeUserAnswer } from "./synthesize.js";
-import { loadTwitterConfig } from "./config.js";
-import { runTwitterApiUserTimeline } from "./backend.js";
+import { asTweet, asUser, fetchUserTweets, metadataUrl, type Tweet } from "../src/twitterapi.js";
+import { buildCandidatePrompt, buildUserCandidatePrompt, deriveCitations, synthesizeAnswer, synthesizeUserAnswer } from "../src/synthesize.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { runTwitterApiUserTimeline } from "../src/backend.js";
 
 const fixture = JSON.parse(readFileSync(new globalThis.URL("./fixtures/upstream-context.json", import.meta.url), "utf8"));
 const URL = "https://x.com/example/status/100";

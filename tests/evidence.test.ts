@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { registerTwitterTool } from "./tool.js";
-import { runTwitterApiTweetsByIds } from "./backend.js";
-import { loadTwitterConfig } from "./config.js";
+import { registerTwitterTool } from "../src/tool.js";
+import { runTwitterApiTweetsByIds } from "../src/backend.js";
+import { loadTwitterConfig } from "../src/config.js";
 
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const post = (id = "1", text = "measured post") => ({ id, url: `https://x.com/a/status/${id}`, text });

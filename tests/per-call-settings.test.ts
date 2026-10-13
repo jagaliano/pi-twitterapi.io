@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerTwitterTool, type TwitterToolOptions } from "./tool.js";
+import { registerTwitterTool, type TwitterToolOptions } from "../src/tool.js";
 import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js";
 
 let fixture = 0;

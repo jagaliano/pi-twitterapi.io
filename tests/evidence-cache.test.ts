@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { watch } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readdir, readFile, writeFile, chmod, stat, symlink, unlink, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile, chmod, stat, symlink, unlink, mkdir, rm, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadTwitterConfig } from "./config.js";
-import { TextEvidenceCache, cacheDirectory, cacheKey, withEvidenceCache, CACHE_TTL_MS } from "./backend/evidence-cache.js";
-import type { ProcessVideoInput, VideoEvidence } from "./backend/video.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { TextEvidenceCache, cacheDirectory, cacheKey, withEvidenceCache, CACHE_TTL_MS } from "../src/backend/evidence-cache.js";
+import type { ProcessVideoInput, VideoEvidence } from "../src/backend/video.js";
 
 const cfg = (extra: object = {}) => loadTwitterConfig({ twitter: { evidenceCache: "read-write", enableVideoUnderstanding: true, enableVideoProcessing: true, sttEndpoint: "https://stt.example/v1", sttModel: "whisper", sttApiKeyEnv: "TEST_STT", ...extra } });
 const media = { type: "video", durationMillis: 10_000, url: "https://pbs.twimg.com/poster.jpg", videoVariants: ["https://video.twimg.com/clip.mp4?tag=12"], videoVariantsDetailed: [{ url: "https://video.twimg.com/clip.mp4?tag=12", bitrate: 256_000 }] };
@@ -213,9 +212,17 @@ test("clear read barrier prevents an old generation from returning text", async 
 test("partial atomic writes clean up temporary text on cancellation", async t => {
   const dir = await temp(t), controller = new AbortController();
   const cache = new TextEvidenceCache(dir, { signal: controller.signal }), epoch = await cache.prepare(true);
-  const watcher = watch(cacheDirectory(dir), (_, name) => { if (String(name).startsWith(".tmp-")) controller.abort(); });
-  t.after(() => { watcher.close(); });
+  // Filesystem notifications can arrive after put finishes. Abort at the real
+  // temporary-file sync boundary instead, before the entry can be committed.
+  const handle = await open(join(dir, "handle-prototype"), "w", 0o600);
+  const prototype = Object.getPrototypeOf(handle) as typeof handle, sync = prototype.sync;
+  await handle.close();
+  let synced = false;
+  t.mock.method(prototype, "sync", async function (this: typeof handle) {
+    await sync.call(this); synced = true; controller.abort();
+  });
   await assert.rejects(cache.put("a".repeat(64), { ...result(), transcript: "speech ".repeat(10_000) }, epoch!, { clipSeconds: 10 }), /abort/i);
+  assert.ok(synced, "cancellation must occur after temporary data was written");
   assert.equal((await entries(dir)).length, 0); assert.ok(!(await readdir(cacheDirectory(dir))).some(name => name.startsWith(".tmp")));
 });
 

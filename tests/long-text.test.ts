@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { InputBudget } from "./input-budget.js";
-import { buildCandidatePrompt, buildUserCandidatePrompt, synthesizeAnswer, type SynthesisRequest } from "./synthesize.js";
-import type { Tweet } from "./twitterapi.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { InputBudget } from "../src/input-budget.js";
+import { buildCandidatePrompt, buildUserCandidatePrompt, synthesizeAnswer, type SynthesisRequest } from "../src/synthesize.js";
+import type { Tweet } from "../src/twitterapi.js";
 import { TEST_LIMITS } from "./fixtures/budget.js";
 
 const MODEL = { ...TEST_LIMITS, provider: "test", id: "long-text", supportsImage: false };

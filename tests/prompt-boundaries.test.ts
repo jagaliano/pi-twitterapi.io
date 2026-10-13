@@ -1,7 +1,7 @@
 import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
+import { loadTwitterConfig } from "../src/config.js";
 import {
   buildCandidatePrompt,
   buildUserCandidatePrompt,
@@ -11,8 +11,8 @@ import {
   synthesizeDocument,
   synthesizeUserAnswer,
   type SynthesisModel,
-} from "./synthesize.js";
-import { asTweet, asUser, type Tweet, type UserProfile } from "./twitterapi.js";
+} from "../src/synthesize.js";
+import { asTweet, asUser, type Tweet, type UserProfile } from "../src/twitterapi.js";
 
 const MODEL: SynthesisModel = { ...TEST_LIMITS, provider: "test", id: "local", supportsImage: false };
 const CONFIG = loadTwitterConfig({});

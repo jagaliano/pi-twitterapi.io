@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_MAX_MEDIA_PER_SEARCH, VIDEO_ENDPOINT_TYPES, loadTwitterConfig } from "./config.js";
+import { DEFAULT_MAX_MEDIA_PER_SEARCH, VIDEO_ENDPOINT_TYPES, loadTwitterConfig } from "../src/config.js";
 
 test("loadTwitterConfig defaults the media settings and leaves synthesisModel unset", () => {
   const config = loadTwitterConfig({});

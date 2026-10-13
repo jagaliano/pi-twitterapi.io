@@ -6,9 +6,9 @@ import { mkdtemp, writeFile, chmod, symlink, rm, rename, realpath, readFile, mkd
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
-import { cachedCheckBinary } from "./backend/binary-cache.js";
-import { processVideo, type ExecFn } from "./backend/video.js";
-import { loadTwitterConfig } from "./config.js";
+import { cachedCheckBinary } from "../src/backend/binary-cache.js";
+import { processVideo, type ExecFn } from "../src/backend/video.js";
+import { loadTwitterConfig } from "../src/config.js";
 
 const options = { timeoutMs: 10_000 };
 const success = { stdout: "test version", stderr: "" };

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { synthesizeAnswer } from "./synthesize.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { synthesizeAnswer } from "../src/synthesize.js";
 import { TEST_LIMITS, TEST_IMAGE_BOUNDS, TEST_IMAGE } from "./fixtures/budget.js";
-import type { Tweet } from "./twitterapi.js";
+import type { Tweet } from "../src/twitterapi.js";
 
 const model = { ...TEST_LIMITS, provider: "test", id: "large", supportsImage: true };
 const config = loadTwitterConfig({ twitter: { enableImageUnderstanding: true, imageInputBounds: { "test/large": TEST_IMAGE_BOUNDS } } });

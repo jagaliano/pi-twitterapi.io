@@ -1,9 +1,9 @@
 import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { collectMedia, buildCandidatePrompt, synthesizeAnswer, type SynthesisModel } from "./synthesize.js";
-import { asTweet, type Tweet, type TweetMedia } from "./twitterapi.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { collectMedia, buildCandidatePrompt, synthesizeAnswer, type SynthesisModel } from "../src/synthesize.js";
+import { asTweet, type Tweet, type TweetMedia } from "../src/twitterapi.js";
 
 const VISION: SynthesisModel = { ...TEST_LIMITS, provider: "test", id: "vision", supportsImage: true };
 const TEXT = { ...VISION, supportsImage: false };

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatTwitterResults } from "./format.js";
+import { formatTwitterResults } from "../src/format.js";
 
 test("formats the tool contract", () => {
   const markdown = formatTwitterResults({

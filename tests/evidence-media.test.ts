@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { writeFile } from "node:fs/promises";
-import { loadTwitterConfig } from "./config.js";
-import { runTwitterApiTweetsByIds } from "./backend.js";
-import { synthesizeAnswer } from "./synthesize.js";
-import { EvidenceBudget, boundEvidenceNotes, evidenceDetails, formatEvidence } from "./evidence.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { runTwitterApiTweetsByIds } from "../src/backend.js";
+import { synthesizeAnswer } from "../src/synthesize.js";
+import { EvidenceBudget, boundEvidenceNotes, evidenceDetails, formatEvidence } from "../src/evidence.js";
 
 const config = (extra: object = {}) => loadTwitterConfig({ twitter: { minRequestIntervalMs: 0, retryBaseDelayMs: 0, ...extra } });
 const response = (value: unknown) => new Response(JSON.stringify(value));

@@ -12,7 +12,7 @@ import {
 	readPiProjectSettingsResult,
 	readPiUserSettings,
 	readPiUserSettingsResult,
-} from "./settings.js";
+} from "../src/settings.js";
 
 function scratch(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "pi-twitterapi-settings-"));

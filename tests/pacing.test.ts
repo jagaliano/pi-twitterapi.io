@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate as tick, setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-import { fetchUserProfile, searchTweets, searchUsers, normalizeParams, type FetchLike } from "./twitterapi.js";
-import { requestWithRetry } from "./twitterapi/http.js";
+import { fetchUserProfile, searchTweets, searchUsers, normalizeParams, type FetchLike } from "../src/twitterapi.js";
+import { requestWithRetry } from "../src/twitterapi/http.js";
 
 const API = "https://api.twitterapi.io";
 const key = () => `pacer-fixture-${randomUUID()}`;

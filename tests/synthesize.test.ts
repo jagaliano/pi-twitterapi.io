@@ -2,7 +2,7 @@ import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadTwitterConfig } from "./config.js";
+import { loadTwitterConfig } from "../src/config.js";
 import {
   buildCandidatePrompt,
   buildTrendCandidatePrompt,
@@ -22,8 +22,8 @@ import {
   type ImageAttachment,
   type SynthesisDeps,
   type SynthesisModel,
-} from "./synthesize.js";
-import type { Tweet } from "./twitterapi.js";
+} from "../src/synthesize.js";
+import type { Tweet } from "../src/twitterapi.js";
 
 const CONFIG = loadTwitterConfig({});
 const MODEL: SynthesisModel = { ...TEST_LIMITS, provider: "anthropic", id: "claude-haiku", supportsImage: false };

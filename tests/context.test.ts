@@ -2,9 +2,9 @@ import { TEST_LIMITS } from "./fixtures/budget.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { asTweet, type Tweet } from "./twitterapi.js";
-import { buildCandidatePrompt, deriveCitations, synthesizeAnswer, type SynthesisModel } from "./synthesize.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { asTweet, type Tweet } from "../src/twitterapi.js";
+import { buildCandidatePrompt, deriveCitations, synthesizeAnswer, type SynthesisModel } from "../src/synthesize.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/upstream-context.json", import.meta.url), "utf8"));
 const CONFIG = loadTwitterConfig({});

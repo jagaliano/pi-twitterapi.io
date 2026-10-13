@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { asTweet, asUser, statusIdFromUrl } from "./twitterapi.js";
+import { asTweet, asUser, statusIdFromUrl } from "../src/twitterapi.js";
 
 // Deliberately a consumed-field projection, not a complete provider DTO.
 interface RawPost {
@@ -142,6 +142,7 @@ test("fixture prose and handles are synthetic in the consumed fields", () => {
 
 test("internal spike fixtures and inventory are excluded from the package", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.ok(pkg.files.includes("!src/fixtures"));
+  assert.ok(pkg.files.includes("src"));
+  assert.ok(pkg.files.every((entry: string) => !entry.startsWith("tests") && !entry.includes("*")));
   assert.ok(pkg.files.includes("!docs/upstream-shapes.md"));
 });

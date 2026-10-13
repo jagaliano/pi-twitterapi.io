@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadTwitterConfig } from "./config.js";
-import { InputBudget, imageDimensions, renderedPrompt, withoutImages } from "./input-budget.js";
-import { resolveSynthesisBackend, runTwitterApiProfile, runTwitterApiSearch, runTwitterApiUserSearch, runTwitterApiTrends, runTwitterApiAbout, type RegistryLike } from "./backend.js";
-import { synthesizeAnswer, synthesizeUserAnswer, synthesizeTrends, synthesizeDocument, type SynthesisModel, type SynthesisRequest } from "./synthesize.js";
-import type { Tweet, UserProfile } from "./twitterapi.js";
+import { loadTwitterConfig } from "../src/config.js";
+import { InputBudget, imageDimensions, renderedPrompt, withoutImages } from "../src/input-budget.js";
+import { resolveSynthesisBackend, runTwitterApiProfile, runTwitterApiSearch, runTwitterApiUserSearch, runTwitterApiTrends, runTwitterApiAbout, type RegistryLike } from "../src/backend.js";
+import { synthesizeAnswer, synthesizeUserAnswer, synthesizeTrends, synthesizeDocument, type SynthesisModel, type SynthesisRequest } from "../src/synthesize.js";
+import type { Tweet, UserProfile } from "../src/twitterapi.js";
 import { TEST_LIMITS, TEST_IMAGE, TEST_IMAGE_BOUNDS } from "./fixtures/budget.js";
 const MODEL: SynthesisModel = { ...TEST_LIMITS, provider: "test", id: "budget", supportsImage: true };
 const now = () => Date.UTC(2026, 9, 8, 12);
