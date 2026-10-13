@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-13
+
+### Fixed
+
+- Persistent evidence-cache identities preserve actual filesystem traversal through
+  symlink/`..` paths for executables and model files, including PATH lookups.
+  Replacing the file actually used invalidates cached text; absent executable
+  PATH bypasses persistence instead of guessing an identity.
+
 ### Added
 
 - `output: "posts"` returns bounded, sanitized untrusted text evidence in tool
@@ -544,7 +553,8 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.5...v0.4.0
 [0.3.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.2.0...v0.3.0
