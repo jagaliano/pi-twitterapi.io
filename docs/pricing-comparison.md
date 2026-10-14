@@ -134,12 +134,19 @@ leads with per-item rates and refuses to quote a single "total per search".
 
 Media behaves the same way on both sides: attached images are token costs, not
 per-item charges. This extension attaches post images, and video posts as their
-poster frame, only when the configured model accepts image input. With
+poster frame, only when the configured model accepts images, explicit
+[image input bounds](configuration.md#image-input-bounds) exist and budgets allow it. With
 `enableVideoProcessing` a video can instead be analysed properly — native video
 through a compatible Pi provider, direct `gemini-files` or an `openai-compatible`
 endpoint, and/or local frames plus STT — and those provider charges appear on their
 own bills, outside the
-retrieval and synthesis figures compared here.
+retrieval and synthesis figures compared here. See [video costs](video.md#cost)
+for dated single-clip measurements, retention and processing limits.
+
+With [`output: "posts"`](tool-reference.md#evidence-output), the extension skips
+its separate answer-synthesis call. Retrieval and configured native-video/STT
+still cost money, and your main agent can consume tokens when reading the result.
+No comparative latency/cost/quality benchmark is claimed here.
 
 ## What this comparison excludes
 

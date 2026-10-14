@@ -22,7 +22,9 @@ everything. It is only available on xAI models; there is no non-xAI fallback.
 to a twitterapi.io REST endpoint; the retrieved posts, accounts or metadata are
 then handed to a pi model (`twitter.synthesisModel`, else the session model) that
 writes the answer with citations. Retrieval and synthesis are two separate steps,
-which is why the two are priced differently.
+which is why the two are priced differently. Alternatively, `output: "posts"`
+returns bounded untrusted text evidence without a separate synthesis call; see the
+[tool reference](tool-reference.md#evidence-output).
 
 ## Capability comparison
 
@@ -51,11 +53,12 @@ which is why the two are priced differently.
 | Date range | ✅ `from_date` / `to_date` (`YYYY-MM-DD`) | ✅ same names, `mode=posts`; unix `sinceTime`/`untilTime` for `quotes`/`mentions` |
 | Result order | chosen by the model | ✅ `queryType` (`Latest`/`Top`), `replySort` (`Relevance`/`Latest`/`Likes`) |
 | Item-count control | ❌ | ✅ `count` (posts/users/trends), `limit` (many modes) |
-| Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached only when the model accepts images) |
-| Video understanding | ✅ `enable_video_understanding` | ✅ `enableVideoUnderstanding` (poster frames); ⚠️ opt-in `enableVideoProcessing` adds real analysis — native video via a compatible Pi provider, direct `gemini-files` or an `openai-compatible` endpoint, and/or local frames + STT |
+| Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (requires model image support, explicit `imageInputBounds` and budget) |
+| Video understanding | ✅ `enable_video_understanding` | ⚠️ opt-in poster frames require image bounds; `enableVideoProcessing` adds native video via a compatible Pi provider, direct `gemini-files` or an `openai-compatible` endpoint, and/or local frames + STT |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model, with runtime fallback |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Billing | xAI model tokens + per post/profile fetched | twitterapi.io credits + your synthesis model's tokens; opt-in video analysis and STT are billed by their own endpoints |
+| Evidence-only output | server-side answer flow | `output: "posts"` skips answer synthesis; retrieval and opted-in video/STT still cost money |
 | Tool shape | one `x_search` call | one `twitter` tool, 17 modes |
 | Availability | xAI models only | any pi session with a twitterapi.io key |
 
@@ -104,16 +107,21 @@ profile, about, fetch-by-id, retweeters, communities, lists and Spaces.
 authoritative from the aborted signal or `AbortError`, not from provider text;
 a message such as "connection aborted" is classified as a transport failure and
 routed like any other.
-- **Images respect the answering model.** Media is attached only for a model that
-accepts image input; if the primary fails and a text-only fallback answers, the
-images are dropped (and the answer discloses it) instead of being sent to a model
-that would reject them.
+- **Images respect the answering model.** Media requires image support, explicit
+[per-model bounds](configuration.md#image-input-bounds) and input space. If the
+primary fails and a text-only or undeclared-image fallback answers, images are
+dropped with disclosure instead of being sent to an incompatible model. Evidence
+output is always text-only.
 - **Date boundaries are 04:00 UTC as observed, with conservative padding.** The
 upstream resolves `since:` day boundaries at 04:00 UTC in the probed season; if
 that is really US-Eastern local midnight it shifts to 05:00 UTC in winter, so the
 start padding is one hour wider to avoid silently dropping the first hour of the
 local day. Far-west offsets can lose the tail of the requested day (disclosed),
 and far-east offsets can spend free pages on the newer trim band.
+
+Full [mode and parameter details](tool-reference.md), [setup recipes](setup.md),
+[video routing/privacy](video.md) and [dated cost comparison](pricing-comparison.md)
+are maintained separately; this page is the capability comparison.
 
 ## Sources
 

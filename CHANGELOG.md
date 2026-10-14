@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-14
+
+### Changed
+
+- Shortened the README into a quick-start entry point, with five complete setup
+  recipes and focused configuration, video/privacy and tool references under
+  `docs/`. Consolidated capability comparisons and moved contributor/release
+  instructions to `CONTRIBUTING.md`. No runtime or default changes.
+- Updated setup examples to `anthropic/claude-haiku-5-5`, keeping matching
+  image-bound keys and explicitly unverified illustrative image limits.
+- Clarified project settings' cost-affecting overrides, the current user-only
+  `sttLanguage` behavior, required image-bound fields and shared image/frame caps.
+  Added setup-success checks, model discovery, headless model requirements and
+  native-video limitations without ffmpeg.
+
 ## [0.5.3] - 2026-10-14
 
 ### Added
@@ -617,7 +632,8 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.0...v0.5.1
