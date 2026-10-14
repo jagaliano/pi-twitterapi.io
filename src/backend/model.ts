@@ -22,6 +22,8 @@ export interface RegistryLike {
 }
 
 export interface ModelLike extends BudgetModel {
+  /** Provider wire format; used only for native-video payload adaptation. */
+  api?: string;
   provider: string;
   id: string;
   input?: readonly string[];

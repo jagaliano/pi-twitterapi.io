@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-14
+
+### Added
+
+- User-only `twitterIoApiKeyEnv` selects the retrieval credential environment
+  variable; `TWITTERAPI_IO_API_KEY` remains the default. Project settings cannot
+  redirect credential selection, and echoed selected credentials are not cached.
+- Qualified `videoModel` references use Pi-managed native-video provider calls
+  with the default `gemini-files` type, without extracting provider credentials.
+  Native-video support depends on the provider extension's payload hook and
+  downstream service; unsupported/hook-less replies are disclosed and discarded.
+  The route is inline-only (12 MiB), bypasses persistent evidence caching with a
+  note, and reports SDK calls separately from direct HTTP and answer synthesis.
+  Bare-model direct Gemini and direct OpenAI-compatible configurations remain
+  available; no cross-provider credential or automatic Google fallback is used.
+- Consistent legal disclaimer in the README, changelog and comparison documents.
+
+### Fixed
+
+- Pi-provider video dispatch, payload attachment and evidence acceptance recheck
+  the absolute phase deadline instead of relying solely on timer delivery.
+  Expired native work cannot start frame/audio fallback. Retry hooks attach the
+  clip once per payload and reject calls after either success or failure settles.
+
+### Compatibility
+
+- A bounded cloud probe of `pi-antigravity@0.10.0` with
+  `antigravity/gemini-2.5-flash-lite` confirmed that its payload hook was not
+  invoked and no video reached the request. The text-only HTTP 200 reply was
+  discarded. This installed provider is not compatible with the new native-video
+  adapter; other provider extensions require their own compatibility verification.
+
 ## [0.5.2] - 2026-10-13
 
 ### Fixed
@@ -585,7 +617,9 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.3.5...v0.4.0
@@ -595,3 +629,13 @@ plus the fixes above; the entry is kept because the git tag exists.
 [0.1.2]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jagaliano/pi-twitterapi.io/releases/tag/v0.1.0
+
+## Legal disclaimer
+
+TwitterAPI.io is an independent third-party service operated by Prism Digital,
+LLC. It is not affiliated with X Corp. "Twitter" and "X" are trademarks of
+X Corp.
+
+pi-twitterapi.io is an independently developed extension that uses TwitterAPI.io.
+It is not affiliated with, endorsed by, or sponsored by X Corp. or Prism Digital,
+LLC.

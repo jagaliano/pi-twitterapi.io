@@ -27,6 +27,8 @@ import type { TweetMedia } from "../twitterapi.js";
 import { isAllowedMediaUrl, readCapped } from "./media.js";
 import { withEvidenceCache } from "./evidence-cache.js";
 import { cachedCheckBinary } from "./binary-cache.js";
+import { providerVideo, usesPiVideoModel } from "./provider-video.js";
+import type { RegistryLike } from "./model.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -38,6 +40,8 @@ export type ExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface VideoDeps {
+  /** Native-video provider calls stay inside Pi; credentials are never extracted. */
+  registry?: RegistryLike;
   /** Trusted agent directory override for cache isolation; never project-configured. */
   cacheAgentDir?: string;
   telemetry?: RunTelemetry;
@@ -69,6 +73,7 @@ export interface VideoDeps {
 export type VideoMethod =
   | "gemini-native"
   | "openai-compatible"
+  | "pi-provider"
   | "frames+stt"
   | "frames-only"
   | "stt-only"
@@ -1208,6 +1213,12 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
     evidence.notes.push("Video processing was cancelled before it started.");
     return evidence;
   }
+  const phaseExpired = (signal?: AbortSignal) => {
+    if (!signal?.aborted && now() < deadline) return false;
+    evidence.notes.push("The video phase deadline expired; no further native analysis or frame/audio fallback was started.");
+    return true;
+  };
+  if (phaseExpired()) return evidence;
 
   reportProgress(deps, "video: downloading");
   const isGif = media.type === "animated_gif";
@@ -1279,10 +1290,12 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
     const ffmpeg = config.ffmpegPath ?? "ffmpeg";
     // Detection shares the phase signal/deadline, so cancellation is not delayed
     // by a hanging `-version` probe (P1-3).
+    if (phaseExpired()) return evidence;
     const haveFfmpeg = await checkBinary(ffmpeg, {
       signal: opSignal(deps, deadline, now),
       timeoutMs: remaining(deadline, now),
     });
+    if (phaseExpired()) return evidence;
     const ctx: FfmpegContext = { exec, bin: ffmpeg, now, signal: deps.signal, deps, deadline };
 
     let durationMs = media.durationMillis;
@@ -1322,6 +1335,7 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
       );
     }
 
+    if (phaseExpired()) return evidence;
     let transcript: string | undefined;
     let visualNotes: string | undefined;
     let nativeMethod: VideoMethod | undefined;
@@ -1348,6 +1362,35 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
         "Native video was skipped: twitter.videoEndpointType is not recognised, so no video provider was " +
           "guessed. Any frame or audio fallback that applies will be attempted below.",
       );
+    } else if (nativeAllowed && usesPiVideoModel(config)) {
+      // Qualified references select Pi explicitly. Never strip a provider prefix
+      // and silently send that model/key to Google or a configured direct host.
+      if (config.videoEndpoint) {
+        evidence.notes.push("Native video was skipped: a Pi provider/model reference cannot be combined with twitter.videoEndpoint. Remove the endpoint override to let Pi manage the provider.");
+      } else {
+        const bytes = new Uint8Array(await readFile(mediaFile));
+        if (phaseExpired()) return evidence;
+        if (bytes.byteLength > Math.min(inlineThreshold, GEMINI_INLINE_RAW_BYTES)) {
+          evidence.notes.push("Native video was skipped: the Pi-provider path supports inline clips up to 12 MiB. Use a smaller clip or the direct Gemini configuration for the Files upload path.");
+        } else {
+          reportProgress(deps, "video: native analysis");
+          const nativeSignal = opSignal(deps, deadline, now);
+          const result = await providerVideo({ registry: deps.registry, model: config.videoModel!, bytes,
+            prompt: VIDEO_ANALYSIS_PROMPT, signal: nativeSignal, deadline, now, telemetry: deps.telemetry });
+          deps.signal?.throwIfAborted();
+          if (phaseExpired(nativeSignal)) return evidence;
+          if (result.text) {
+            const sections = parseGeminiResponse(result.text);
+            visualNotes = sections.visual;
+            transcript = sections.transcript;
+            nativeStructured = sections.structured === true;
+            nativeMethod = "pi-provider";
+            evidence.notes.push(`Video content was sent to the configured Pi provider/model (${config.videoModel}) for analysis; authentication and transport are managed by that provider.`);
+          } else {
+            evidence.notes.push(`Native video analysis failed: ${result.error ?? "The Pi provider returned no usable video evidence."}`);
+          }
+        }
+      }
     } else if (nativeAllowed && nativeConfigured) {
       const base = endpointType === "gemini-files" ? geminiBase(config) : (config.videoEndpoint ?? "");
       // P2-9: authorisation is re-checked at the adapter boundary, not only where
@@ -1418,6 +1461,8 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
       );
     }
 
+    if (phaseExpired()) return evidence;
+
     // Tier 2 — frames (only when the synthesis model accepts images). A trimmed
     // clip is bounded by construction, so it supplies the frame timing it needs.
     const frameDurationMs = durationKnown ? (durationMs as number) : trimmed ? maxSeconds * 1000 : undefined;
@@ -1453,6 +1498,8 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
       }
     }
 
+    if (phaseExpired()) return evidence;
+
     // Tier 2 — STT (skip gifs: no audio track).
     const localStt = Boolean(config.whisperCppBinary && config.whisperModelPath);
     const remoteSttConfigured = Boolean(config.sttEndpoint && config.sttModel && config.sttApiKeyEnv && env[config.sttApiKeyEnv]);
@@ -1464,6 +1511,7 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
       const audioFile = join(dir, localStt ? "audio.wav" : "audio.mp3");
       const haveAudio = await extractAudio(ctx, mediaFile, audioFile, localStt, maxSeconds, remaining(deadline, now));
       if (haveAudio) {
+        if (phaseExpired()) return evidence;
         const result = localStt
           ? await whisperCpp(
               audioFile,

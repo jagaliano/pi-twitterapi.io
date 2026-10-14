@@ -27,8 +27,9 @@ import {
   runTwitterApiUserTimeline,
 } from "./backend.js";
 import { tweetIdFromInput, type ReplySort, type TwitterApiSearchParams } from "./twitterapi.js";
-import { loadTwitterConfig } from "./config.js";
+import { DEFAULT_TWITTER_API_KEY_ENV, loadTwitterConfig } from "./config.js";
 import { reportProgress } from "./progress.js";
+import { usesPiVideoModel } from "./backend/provider-video.js";
 import type { TwitterSearchDetails } from "./types.js";
 
 export interface TwitterToolOptions {
@@ -278,9 +279,10 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         throw new Error('twitter mode "trends" needs `woeid` (an integer; 1=Worldwide, 23424977=USA).');
       }
 
-      if (!env.TWITTERAPI_IO_API_KEY) {
+      const twitterKeyEnv = config.twitterIoApiKeyEnv ?? DEFAULT_TWITTER_API_KEY_ENV;
+      if (typeof env[twitterKeyEnv] !== "string" || !env[twitterKeyEnv]) {
         throw new Error(
-          "twitter needs credentials: set TWITTERAPI_IO_API_KEY (twitterapi.io). The answer is synthesized by " +
+          `twitter needs credentials: set ${twitterKeyEnv} (twitterapi.io; selected by twitter.twitterIoApiKeyEnv). The answer is synthesized by ` +
             "twitter.synthesisModel, or by the model running this session when that setting is unset.",
         );
       }
@@ -302,7 +304,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         env,
         fetcher,
         signal,
-        registry: output === "answer" ? ctx?.modelRegistry : undefined,
+        registry: output === "answer" || (config.enableVideoProcessing && usesPiVideoModel(config)) ? ctx?.modelRegistry : undefined,
         fallbackModelIds,
         progress: (text: string) => reportProgress({ progress, signal }, text),
       } as const;
@@ -534,6 +536,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         const u = details.usage, t = details.timings;
         body += theme.fg("muted", `\nUsage: upstream ${u.upstreamAttempts} attempts (${u.upstreamHttpFailures} HTTP/fetch failures) · ${u.successfulPages} accepted pages/lookups · posts ${u.postsReturned} returned/${u.postsRetained} retained · accounts ${u.accountsReturned}/${u.accountsRetained} · trends ${u.trendsReturned}/${u.trendsRetained}`);
         body += theme.fg("muted", `\nRequests: media ${u.mediaAttempts} (${u.mediaHeadAttempts} HEAD, ${u.mediaHttpFailures} HTTP/fetch failures) · native video ${u.nativeVideoAttempts} (${u.nativeVideoHttpFailures} HTTP/fetch failures) · STT ${u.sttAttempts} (${u.sttHttpFailures} HTTP/fetch failures) · SDK synthesis ${u.synthesisAttempts} (${u.synthesisFailures} failures)`);
+        if (u.nativeVideoSdkAttempts) body += theme.fg("muted", `\nPi-provider native video: ${u.nativeVideoSdkAttempts} SDK calls (${u.nativeVideoSdkFailures ?? 0} failures; provider-internal HTTP is not observable)`);
         const tokens = u.synthesisTokens;
         const reported = tokens ? Object.entries(tokens).filter(([key]) => key !== "reportedCalls").map(([key, value]) => `${key} ${value}`).join(" · ") : "unknown";
         body += theme.fg("muted", `\nSynthesis tokens (${tokens?.reportedCalls ?? 0}/${u.synthesisAttempts} calls reported; fields may be partial): ${reported}`);

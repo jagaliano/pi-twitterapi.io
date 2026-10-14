@@ -1,4 +1,5 @@
 import { RunTelemetry } from "../telemetry.js";
+import { DEFAULT_TWITTER_API_KEY_ENV } from "../config.js";
 import { reportProgress, type ProgressCallback } from "../progress.js";
 import type { TwitterSearchDetails } from "../types.js";
 import { SYNTHESIS_SYSTEM_PROMPT, type SynthesisRequest } from "../synthesize.js";
@@ -281,9 +282,10 @@ export function applyFallbackNote(backend: SynthesisBackend, details: TwitterSea
 export function resolveSynthesisBackend(options: TwitterApiSynthesisOptions, query?: string): SynthesisBackend {
   const telemetry = new RunTelemetry(options.telemetryNow);
   const fetcher = options.fetcher ?? fetch;
-  const apiKey = options.env?.TWITTERAPI_IO_API_KEY;
-  if (!apiKey) {
-    throw new Error("TWITTERAPI_IO_API_KEY must be configured to use the twitterapi.io backend.");
+  const keyEnv = options.config.twitterIoApiKeyEnv ?? DEFAULT_TWITTER_API_KEY_ENV;
+  const apiKey = options.env?.[keyEnv];
+  if (typeof apiKey !== "string" || !apiKey) {
+    throw new Error(`${keyEnv} must be configured to use the twitterapi.io backend (twitter.twitterIoApiKeyEnv).`);
   }
   if (options.output !== undefined && options.output !== "answer" && options.output !== "posts") {
     throw new Error('twitter output must be "answer" or "posts"');

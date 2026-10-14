@@ -29,7 +29,7 @@ which is why the two are priced differently.
 | Capability | xAI `x_search` | `pi-twitterapi.io` |
 |---|---|---|
 | Retrieval source | xAI server-side X index | twitterapi.io REST API |
-| Credential | `XAI_API_KEY` | `TWITTERAPI_IO_API_KEY` |
+| Credential | `XAI_API_KEY` | `TWITTERAPI_IO_API_KEY` by default; user-only `twitterIoApiKeyEnv` override |
 | Keyword post search | ✅ `x_keyword_search` | ✅ `mode=posts` → `/twitter/tweet/advanced_search` |
 | Semantic search | ✅ `x_semantic_search` | ❌ no equivalent |
 | User/account search | ✅ `x_user_search` | ✅ `mode=users` → `/twitter/user/search` |
@@ -52,7 +52,7 @@ which is why the two are priced differently.
 | Result order | chosen by the model | ✅ `queryType` (`Latest`/`Top`), `replySort` (`Relevance`/`Latest`/`Likes`) |
 | Item-count control | ❌ | ✅ `count` (posts/users/trends), `limit` (many modes) |
 | Image understanding | ✅ `enable_image_understanding` | ✅ `enableImageUnderstanding` (attached only when the model accepts images) |
-| Video understanding | ✅ `enable_video_understanding` | ✅ `enableVideoUnderstanding` (poster frames); ⚠️ opt-in `enableVideoProcessing` adds real analysis — native video via `gemini-files` or an `openai-compatible` endpoint, and/or local frames + STT |
+| Video understanding | ✅ `enable_video_understanding` | ✅ `enableVideoUnderstanding` (poster frames); ⚠️ opt-in `enableVideoProcessing` adds real analysis — native video via a compatible Pi provider, direct `gemini-files` or an `openai-compatible` endpoint, and/or local frames + STT |
 | Answer generation | Grok (xAI) | any pi model: `twitter.synthesisModel`, else the session model, with runtime fallback |
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Billing | xAI model tokens + per post/profile fetched | twitterapi.io credits + your synthesis model's tokens; opt-in video analysis and STT are billed by their own endpoints |
@@ -120,3 +120,13 @@ and far-east offsets can spend free pages on the newer trim band.
 - xAI X Search docs: https://docs.x.ai/developers/tools/x-search
 - xAI tool usage details: https://docs.x.ai/developers/tools/tool-usage-details
 - twitterapi.io docs: https://docs.twitterapi.io/introduction
+
+## Legal disclaimer
+
+TwitterAPI.io is an independent third-party service operated by Prism Digital,
+LLC. It is not affiliated with X Corp. "Twitter" and "X" are trademarks of
+X Corp.
+
+pi-twitterapi.io is an independently developed extension that uses TwitterAPI.io.
+It is not affiliated with, endorsed by, or sponsored by X Corp. or Prism Digital,
+LLC.

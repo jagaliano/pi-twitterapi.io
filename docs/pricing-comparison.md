@@ -136,8 +136,9 @@ Media behaves the same way on both sides: attached images are token costs, not
 per-item charges. This extension attaches post images, and video posts as their
 poster frame, only when the configured model accepts image input. With
 `enableVideoProcessing` a video can instead be analysed properly — native video
-through `gemini-files` or an `openai-compatible` endpoint, and/or local frames plus
-STT — and those endpoint charges appear on their own providers' bills, outside the
+through a compatible Pi provider, direct `gemini-files` or an `openai-compatible`
+endpoint, and/or local frames plus STT — and those provider charges appear on their
+own bills, outside the
 retrieval and synthesis figures compared here.
 
 ## What this comparison excludes
@@ -169,3 +170,13 @@ Responses API response reports `x_posts_fetched` and `x_users_fetched` under
 `usage.server_side_tool_usage_details`, which is what the per-item bill is
 computed from — and what to check if a request costs more than expected, since
 the model decides how many searches to run.
+
+## Legal disclaimer
+
+TwitterAPI.io is an independent third-party service operated by Prism Digital,
+LLC. It is not affiliated with X Corp. "Twitter" and "X" are trademarks of
+X Corp.
+
+pi-twitterapi.io is an independently developed extension that uses TwitterAPI.io.
+It is not affiliated with, endorsed by, or sponsored by X Corp. or Prism Digital,
+LLC.

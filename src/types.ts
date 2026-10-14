@@ -12,7 +12,7 @@ export interface TwitterSearchDetails {
   model: string;
   text: string;
   citations: string[];
-  /** Legacy successful logical synthesis hops; usage.synthesisAttempts counts all SDK invocations. */
+  /** Legacy successful logical synthesis hops; usage.synthesisAttempts counts all answer-synthesis SDK invocations. */
   synthesisCalls?: number;
   /** Measured per-run work; displayed only in Pi's expanded tool view. */
   usage?: TwitterUsage;
@@ -43,9 +43,12 @@ export interface TwitterUsage {
   /** All native lifecycle fetches (upload/poll/generate/delete), not logical videos. */
   nativeVideoAttempts: number;
   nativeVideoHttpFailures: number;
+  /** Pi-managed native-video SDK calls; separate from direct lifecycle HTTP and answer synthesis. */
+  nativeVideoSdkAttempts?: number;
+  nativeVideoSdkFailures?: number;
   sttAttempts: number;
   sttHttpFailures: number;
-  /** Every registry.complete invocation, including reasoning repair and fallback/retry. */
+  /** Every answer-synthesis registry.complete invocation, including reasoning repair and fallback/retry. */
   synthesisAttempts: number;
   synthesisFailures: number;
   /** SDK-reported samples only, including failed messages; absent fields remain unknown. */

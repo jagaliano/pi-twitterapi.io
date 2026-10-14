@@ -34,6 +34,12 @@ For the default answer output, synthesis uses `twitter.synthesisModel` when set,
 export TWITTERAPI_IO_API_KEY="your-twitterapi.io-key"
 ```
 
+To use another environment variable, set `"twitterIoApiKeyEnv": "MY_TWITTER_KEY"`
+in your **user** `twitter` settings and export `MY_TWITTER_KEY` before starting Pi.
+The setting contains the variable name, never the secret. It defaults to
+`TWITTERAPI_IO_API_KEY`; when overridden, only the selected variable is used.
+Project settings cannot change the credential variable.
+
 The settings file is strict JSON (no comments). Add the `twitter` block to
 `~/.pi/agent/settings.json` — or `<cwd>/.pi/settings.json` for a project-scoped
 override — and set only the keys you need. Both files are read at the start of
@@ -58,6 +64,7 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 
 | Key | Required | Meaning |
 |---|---|---|
+| `twitterIoApiKeyEnv` | no | User-only environment variable name holding the twitterapi.io retrieval key (default `TWITTERAPI_IO_API_KEY`). The secret stays in the environment, not settings. |
 | `synthesisModel` | no | A pi model id (`provider/model`) used to turn retrieved posts into an answer. When unset, the session model is used; if it is set but fails at runtime, the session model answers instead with a note. |
 | `enableImageUnderstanding` | no | Attach post images when the model accepts images **and** has explicit `imageInputBounds` and reserved input space. |
 | `enableVideoUnderstanding` | no | Attach video poster frames (pi's synthesis interface takes images, not video). |
@@ -70,8 +77,8 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 | `retryBaseDelayMs` | no | Base delay for retry backoff (default 5000). Retries honor both backoff/`Retry-After` and shared request spacing; zero backoff does not bypass pacing. |
 | `enableVideoProcessing` | no | Run **real** video processing (native video and/or frames + transcript). Requires `enableVideoUnderstanding`. Off by default. |
 | `evidenceCache` | no | User-only text evidence persistence: `off` (default), `read`, `write`, or `read-write`. See privacy and deletion below. |
-| `videoEndpointType` | no | Native-video wire format: `gemini-files` (default, Google) or `openai-compatible` (video-capable chat-completions endpoints that accept this `video_url` shape; verified with OpenRouter). An unrecognised string disables native video — frames and STT still run — and is reported in the answer rather than silently changing provider. |
-| `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | Native-video endpoint, model, and the **env var name** holding the key (default `GOOGLE_API_KEY`). `gemini-files` targets Google unless `videoEndpoint` is set. |
+| `videoEndpointType` | no | Native-video wire format: `gemini-files` (default; direct Google or Pi `provider/model`) or `openai-compatible` (video-capable chat-completions endpoints that accept this `video_url` shape; verified with OpenRouter). An unrecognised string disables native video — frames and STT still run — and is reported in the answer rather than silently changing provider. |
+| `videoEndpoint` / `videoModel` / `videoApiKeyEnv` | no | With `gemini-files`, a bare `videoModel` calls Google directly using the key env (default `GOOGLE_API_KEY`); a qualified `provider/model` instead uses Pi-managed authentication and transport. Do not combine the Pi route with `videoEndpoint`. With `openai-compatible`, slash-containing model ids remain direct upstream ids. See [Pi-provider native video](#pi-provider-native-video). |
 | `sttEndpoint` / `sttModel` / `sttApiKeyEnv` | no | OpenAI-compatible speech-to-text endpoint, model, and key env var. The endpoint must be a valid `https://` URL and `sttApiKeyEnv` must be set explicitly (including when using `STT_API_KEY`). Otherwise remote STT is disabled with a note. No hidden default provider. |
 | `sttLanguage` | no | ISO-639-1 language for STT, or `auto` (default). |
 | `ffmpegPath` | no | ffmpeg binary override; otherwise `ffmpeg` is searched on `PATH`. ffmpeg must be installed locally (no bundled binary) — download it from [ffmpeg.org](https://ffmpeg.org/) or your package manager. |
@@ -84,8 +91,9 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 > **Video processing is opt-in and local-tooling first.** It needs
 > `enableVideoUnderstanding: true` **and** `enableVideoProcessing: true`, plus a
 > locally installed `ffmpeg` (for frames/audio) and optionally whisper.cpp, or a
-> configured native-video / STT endpoint. Native video works two ways:
-> `gemini-files` (Google, direct) and `openai-compatible` (OpenRouter and other
+> configured native-video / STT provider. Native video can use a registered Pi
+> provider (depending on its native-video support), `gemini-files` (Google,
+> direct), or `openai-compatible` (OpenRouter and other
 > chat-completions endpoints, verified with `google/gemini-2.5-flash-lite`);
 > frames are sent to your pi model. A model that does not accept video input simply
 > refuses the request, and the refusal is disclosed; the run then falls back to
@@ -196,6 +204,79 @@ snapshot. Project overrides still cannot supply user-only sensitive keys.
 > for most hosted Whisper APIs, with the audio re-sent — up to three attempts — when
 > an endpoint rejects the requested response format), and local `ffmpeg` plus
 > whisper.cpp cost nothing beyond the model files you download.
+
+### Pi-provider native video
+
+To reuse a model registered in Pi, set a qualified `videoModel` in your **user**
+settings. The default `gemini-files` endpoint type recognises `provider/model`
+references; keep `videoEndpoint` unset so Pi manages routing:
+
+```json
+{
+  "twitter": {
+    "enableVideoUnderstanding": true,
+    "enableVideoProcessing": true,
+    "videoEndpointType": "gemini-files",
+    "videoModel": "google/gemini-2.5-flash-lite"
+  }
+}
+```
+
+This selects the **video evidence** model, not the answer synthesis model.
+Authentication (including OAuth), endpoint selection and transport stay with Pi
+and the registered provider extension. No `GOOGLE_API_KEY` or `videoApiKeyEnv`
+is required for this route, and this extension never extracts Pi credentials.
+
+**Native-video support is the provider extension's responsibility.** A Gemini
+model name alone is not a compatibility guarantee for `pi-antigravity`,
+`@estebanforge/pi-antigravity-bridge`, `pi-provider-antigravity`, or any other
+provider. Pi's ordinary message API carries text/images, so the provider must
+honour its `onPayload` hook and forward native video. Supported payload layouts
+are Google `contents`, Antigravity-style `request.contents`, and Pi's
+`openai-completions` messages using `video_url`. Providers that do not forward
+the hook or expose an unsupported layout fail with a disclosure; a hook-less
+text-only reply is discarded, never used as video evidence. A downstream service
+can still reject or silently ignore video despite the hook: verify your chosen
+provider/model rather than assuming it supports the modality. Applicable
+frames/STT fallbacks remain available. The example above selects a Pi catalogue
+entry; it is not a claim of cloud verification for that route.
+
+**Measured incompatibility:** a bounded cloud probe of `pi-antigravity@0.10.0`
+with `antigravity/gemini-2.5-flash-lite` invoked no payload hook and sent no video
+parts. Its HTTP 200 text-only reply was discarded as intended. That installed
+provider is **not compatible with this adapter**; this does not establish the
+capabilities of other Antigravity extensions or versions.
+
+This Pi-provider path sends bounded clips **inline only, up to 12 MiB**; it does
+not borrow credentials for Google's Files API. Persistent evidence caching is
+bypassed with a note because provider authentication/routing can change outside
+these settings. Expanded telemetry reports native-video SDK calls separately
+from direct HTTP requests and answer synthesis; provider-internal HTTP retries
+are not observable.
+
+If your provider extension does not support native video, use the existing
+**direct Gemini** alternative instead:
+
+```bash
+export GOOGLE_API_KEY="your-google-api-key"
+```
+
+```json
+{
+  "twitter": {
+    "enableVideoUnderstanding": true,
+    "enableVideoProcessing": true,
+    "videoEndpointType": "gemini-files",
+    "videoModel": "gemini-2.5-flash-lite"
+  }
+}
+```
+
+The bare model name selects direct Gemini, including its Files upload path for
+larger clips. Switching routes is explicit: a failed Pi provider never causes its
+credentials (or `GOOGLE_API_KEY`) to be sent automatically to another provider.
+The `openai-compatible` direct endpoint route is unchanged: a model id such as
+`google/gemini-2.5-flash-lite` remains an upstream id there, not a Pi reference.
 
 ### Video processing priority
 
@@ -605,7 +686,7 @@ version, including parameter mapping, lives in
 | Capability | xAI `x_search` | `pi-twitterapi.io` (`twitter` tool) |
 |---|---|---|
 | Retrieval source | xAI's server-side X index | twitterapi.io REST API |
-| Credential | `XAI_API_KEY` | `TWITTERAPI_IO_API_KEY` |
+| Credential | `XAI_API_KEY` | `TWITTERAPI_IO_API_KEY` by default; user-only `twitterIoApiKeyEnv` override |
 | Keyword post search | ✅ `x_keyword_search` | ✅ `mode=posts` (`advanced_search`) |
 | Semantic search | ✅ `x_semantic_search` | ❌ **no equivalent** (twitterapi.io has no semantic endpoint) |
 | User/account search | ✅ `x_user_search` | ✅ `mode=users` |
@@ -704,3 +785,13 @@ every push and pull request.
 ## License
 
 MIT
+
+## Legal disclaimer
+
+TwitterAPI.io is an independent third-party service operated by Prism Digital,
+LLC. It is not affiliated with X Corp. "Twitter" and "X" are trademarks of
+X Corp.
+
+pi-twitterapi.io is an independently developed extension that uses TwitterAPI.io.
+It is not affiliated with, endorsed by, or sponsored by X Corp. or Prism Digital,
+LLC.

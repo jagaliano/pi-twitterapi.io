@@ -105,6 +105,7 @@ function mediaDeps(
           nativeFetcher: backend.nativeVideoFetcher,
           sttFetcher: backend.sttFetcher,
           env: options.env ?? {},
+          registry: options.registry,
           signal: options.signal,
           progress: options.progress,
           telemetry: backend.telemetry,

@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { reportProgress } from "../progress.js";
 import { isAllowedMediaUrl } from "./media.js";
+import { usesPiVideoModel } from "./provider-video.js";
 import type { ProcessVideoInput, VideoEvidence, VideoMethod } from "./video.js";
 
 export const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -207,6 +208,9 @@ function endpoint(value: string | undefined): string | undefined {
 /** Full variant ladder/order plus policy, endpoint, local-file and algorithm identities. */
 export async function cacheKey(input: ProcessVideoInput): Promise<string | undefined> {
   const { config: c, media, deps } = input;
+  // Pi/provider authentication and routing can change outside twitter settings.
+  // Never replay disk evidence under a registry identity we cannot fingerprint.
+  if (usesPiVideoModel(c)) return undefined;
   const variants = media.videoVariantsDetailed?.length
     ? media.videoVariantsDetailed.map(({ url, bitrate }) => ({ url, bitrate }))
     : (media.videoVariants ?? []).map(url => ({ url }));
@@ -226,7 +230,7 @@ export async function cacheKey(input: ProcessVideoInput): Promise<string | undef
 }
 
 function containsCredential(e: Pick<VideoEvidence, "transcript" | "visualNotes">, input: ProcessVideoInput): boolean {
-  return [input.config.videoApiKeyEnv, input.config.sttApiKeyEnv, "TWITTERAPI_IO_API_KEY"].some(name => {
+  return [input.config.videoApiKeyEnv, input.config.sttApiKeyEnv, input.config.twitterIoApiKeyEnv ?? "TWITTERAPI_IO_API_KEY", "TWITTERAPI_IO_API_KEY"].some(name => {
     const value = input.deps.env?.[name];
     return typeof value === "string" && Boolean(value) && Boolean(e.transcript?.includes(value) || e.visualNotes?.includes(value));
   });
@@ -236,6 +240,11 @@ function containsCredential(e: Pick<VideoEvidence, "transcript" | "visualNotes">
 export async function withEvidenceCache(input: ProcessVideoInput, run: () => Promise<VideoEvidence>): Promise<VideoEvidence> {
   const mode = input.config.evidenceCache ?? "off";
   if (mode === "off" || !input.config.enableVideoUnderstanding || !input.config.enableVideoProcessing) return run();
+  if (usesPiVideoModel(input.config)) {
+    const evidence = await run();
+    evidence.notes.push("Persistent evidence caching was bypassed for the Pi-provider video configuration because provider authentication and routing are managed outside twitter settings.");
+    return evidence;
+  }
   const now = input.deps.now ?? Date.now;
   const active = () => { input.deps.signal?.throwIfAborted(); return now() < input.deadline; };
   const expired = (): VideoEvidence => ({ postUrl: input.postUrl, method: "frames-only", frames: [], notes: ["Video phase deadline expired before cached text could be delivered."] });

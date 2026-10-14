@@ -11,7 +11,7 @@ export class RunTelemetry {
     upstreamAttempts: 0, upstreamHttpFailures: 0, successfulPages: 0,
     postsReturned: 0, postsRetained: 0, accountsReturned: 0, accountsRetained: 0, trendsReturned: 0, trendsRetained: 0,
     mediaAttempts: 0, mediaHeadAttempts: 0, mediaHttpFailures: 0,
-    nativeVideoAttempts: 0, nativeVideoHttpFailures: 0, sttAttempts: 0, sttHttpFailures: 0,
+    nativeVideoAttempts: 0, nativeVideoHttpFailures: 0, nativeVideoSdkAttempts: 0, nativeVideoSdkFailures: 0, sttAttempts: 0, sttHttpFailures: 0,
     synthesisAttempts: 0, synthesisFailures: 0,
   };
   private readonly elapsed = { retrievalMs: 0, preprocessingMs: 0, synthesisMs: 0 };

@@ -2101,7 +2101,7 @@ test("the video model id is URL-encoded in the request path (V11)", async () => 
     }) as unknown as typeof fetch;
 
     const config = loadTwitterConfig({
-      twitter: { videoEndpointType: "gemini-files", videoModel: "models/gemini-2.5-flash", videoApiKeyEnv: "GOOGLE_API_KEY" },
+      twitter: { videoEndpointType: "gemini-files", videoModel: "gemini-2.5-flash?key=value", videoApiKeyEnv: "GOOGLE_API_KEY" },
     });
     await processVideo({
       postUrl: "https://x.com/a/status/42",
@@ -2114,7 +2114,7 @@ test("the video model id is URL-encoded in the request path (V11)", async () => 
 
     assert.ok(seen.length > 0, "a generateContent request was made");
     assert.ok(
-      seen[0].includes("models%2Fgemini-2.5-flash:generateContent"),
+      seen[0].includes("gemini-2.5-flash%3Fkey%3Dvalue:generateContent"),
       `the model id must be encoded, got ${seen[0]}`,
     );
   });

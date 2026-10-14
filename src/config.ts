@@ -22,6 +22,7 @@ export const VIDEO_ENDPOINT_TYPES = ["gemini-files", "openai-compatible", "anthr
 export type VideoEndpointType = (typeof VIDEO_ENDPOINT_TYPES)[number];
 
 export const DEFAULT_VIDEO_ENDPOINT_TYPE: VideoEndpointType = "gemini-files";
+export const DEFAULT_TWITTER_API_KEY_ENV = "TWITTERAPI_IO_API_KEY";
 export const DEFAULT_VIDEO_API_KEY_ENV = "GOOGLE_API_KEY";
 export const DEFAULT_STT_API_KEY_ENV = "STT_API_KEY";
 export const DEFAULT_MAX_VIDEO_SECONDS = 120;
@@ -60,6 +61,7 @@ export const DEFAULT_WHISPER_REALTIME_FACTOR = 2;
  * secret via `.pi/settings.json`.
  */
 export const USER_ONLY_CONFIG_KEYS = [
+  "twitterIoApiKeyEnv",
   "enableVideoProcessing",
   "videoEndpoint",
   "videoEndpointType",
@@ -81,6 +83,8 @@ export const USER_ONLY_CONFIG_KEYS = [
 export type EvidenceCacheMode = "off" | "read" | "write" | "read-write";
 
 export interface TwitterConfig {
+  /** User-only env var name for retrieval credentials; defaults to TWITTERAPI_IO_API_KEY. */
+  twitterIoApiKeyEnv?: string;
   /** User-only text persistence; off by default. Off does not delete existing entries. */
   evidenceCache?: EvidenceCacheMode;
   /**
@@ -124,9 +128,9 @@ export interface TwitterConfig {
    * host (P2-9).
    */
   videoEndpointExplicit: boolean;
-  /** Native-video model id (e.g. "gemini-2.5-flash"). */
+  /** Bare direct model id, or Pi provider/model when videoEndpointType is gemini-files. */
   videoModel?: string;
-  /** Env var holding the native-video API key (default `GOOGLE_API_KEY`). */
+  /** Direct native-video key env (default GOOGLE_API_KEY); unused by Pi provider/model calls. */
   videoApiKeyEnv: string;
   /** HTTPS STT base URL; settings require an explicitly named credential env var. Unset disables remote STT. */
   sttEndpoint?: string;
@@ -324,6 +328,12 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     );
   }
 
+  const twitterKeyEnv = text(user.twitterIoApiKeyEnv);
+  const validTwitterKeyEnv = twitterKeyEnv !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(twitterKeyEnv);
+  if (user.twitterIoApiKeyEnv !== undefined && !validTwitterKeyEnv) {
+    configNotes.push("twitter.twitterIoApiKeyEnv must name an environment variable; using TWITTERAPI_IO_API_KEY.");
+  }
+
   const maxMedia = config.maxMediaPerSearch;
   const ceiling = pageCount(config.maxPagesCeiling, DEFAULT_MAX_PAGES_CEILING, "maxPagesCeiling", configNotes);
   const synthesisModel = text(config.synthesisModel);
@@ -397,6 +407,7 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
   }
 
   return {
+    twitterIoApiKeyEnv: validTwitterKeyEnv ? twitterKeyEnv : DEFAULT_TWITTER_API_KEY_ENV,
     evidenceCache,
     synthesisModel,
     maxSynthesisChars: intInRange(config.maxSynthesisChars, DEFAULT_MAX_SYNTHESIS_CHARS, 1_000, 120_000, "maxSynthesisChars", configNotes),
