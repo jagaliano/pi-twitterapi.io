@@ -1397,8 +1397,8 @@ async function processVideoImpl(input: ProcessVideoInput): Promise<VideoEvidence
       // the config is loaded, so a caller-built config cannot send the default
       // key to a host the user never explicitly authorised.
       const authorized = config.videoEndpoint === undefined || config.videoEndpointExplicit === true;
-      if (!/^https:\/\//i.test(base)) {
-        evidence.notes.push("Native video was skipped: the configured endpoint is not https.");
+      if (!isHttpsEndpoint(base)) {
+        evidence.notes.push("Native video was skipped: the configured endpoint is not https or is malformed; a valid https:// URL is required.");
       } else if (!authorized) {
         evidence.notes.push(
           "Native video was skipped: a custom endpoint is only used when it was configured together with an " +

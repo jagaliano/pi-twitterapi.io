@@ -378,8 +378,8 @@ export function loadTwitterConfig(settings: PiSettings, options: LoadTwitterConf
     );
     videoEndpoint = undefined;
   }
-  if (videoEndpoint && !/^https:\/\//i.test(videoEndpoint)) {
-    configNotes.push("twitter.videoEndpoint was ignored: it must be an https:// URL.");
+  if (videoEndpoint && !isHttpsEndpoint(videoEndpoint)) {
+    configNotes.push("twitter.videoEndpoint was ignored: it must be a valid https:// URL.");
     videoEndpoint = undefined;
   }
 

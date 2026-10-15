@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-14
+
+### Changed
+
+- Replaced the pi.dev gallery preview image.
+
+### Security
+
+- Refuse HTTP redirects on credential-bearing twitterapi.io requests without
+  forwarding the API-key header. Redirect responses fail immediately with an
+  explicit diagnostic instead of being retried as generic network errors.
+- Validate custom video endpoints with the same parsed HTTPS URL check as STT
+  endpoints, both at settings load and at native-video dispatch, rejecting
+  malformed URLs and embedded whitespace/control characters.
+
 ## [0.5.4] - 2026-10-14
 
 ### Changed

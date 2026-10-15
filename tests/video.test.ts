@@ -1160,6 +1160,37 @@ test("a caller-built http endpoint is refused as native video even when marked e
   });
 });
 
+test("caller-built malformed HTTPS endpoints cannot dispatch native video to either adapter", async () => {
+  await withTempDir(async (dir) => {
+    for (const config of [GEMINI_CONFIG, OPENAI_CONFIG]) {
+      for (const videoEndpoint of ["https://", "https://[invalid/v1", "https://fixture-secret@", "https://provider.invalid/with space", "https://provider.invalid\n.other/v1"]) {
+        let nativeCalls = 0;
+        const evidence = await processVideo({
+          postUrl: "https://x.com/a/status/57",
+          media: videoMedia(),
+          config: { ...config, videoEndpoint, videoEndpointExplicit: true },
+          deps: {
+            ...nativeDeps((async (input: string | URL, init?: RequestInit) => {
+              if (!String(input).startsWith("https://video.twimg.com/")) {
+                nativeCalls++;
+                throw new Error("malformed endpoint reached authenticated dispatch");
+              }
+              return new Response(new Uint8Array(1024), { headers: { "content-type": "video/mp4" } });
+            }) as typeof fetch, dir),
+            env: { GOOGLE_API_KEY: "sk-test", OPENROUTER_API_KEY: "sk-openrouter-test" },
+            checkBinary: async () => false,
+          },
+          deadline: 60_000,
+          modelSupportsImage: false,
+        });
+        assert.equal(nativeCalls, 0, `${config.videoEndpointType}: ${JSON.stringify(videoEndpoint)}`);
+        assert.ok(evidence.notes.some(note => /endpoint is not https.*valid https:\/\//.test(note)));
+        assert.ok(!evidence.notes.some(note => /fixture-secret|provider\.invalid/.test(note)), "do not echo rejected endpoints");
+      }
+    }
+  });
+});
+
 test("a failed native call still leaves the frame fallback available", async () => {
   await withTempDir(async (dir) => {
     const { fetcher } = openAiFetcher({ status: 404, errorBody: { error: { message: "no video support" } } });

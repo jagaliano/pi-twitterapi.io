@@ -145,6 +145,32 @@ test("an unrecognised videoEndpointType is flagged so native video is skipped", 
   assert.equal(loadTwitterConfig({ twitter: { videoEndpointType: "   " } }).videoEndpointTypeInvalid, false);
 });
 
+test("video endpoints reject malformed HTTPS URLs with a credential-safe disclosure", () => {
+  for (const videoEndpoint of ["https://", "https://[invalid/v1", "https://video.example\n.invalid/v1", "https://video.example/with space", "https://fixture-secret@", "http://video.example/v1", "ftp://video.example/v1", "//video.example/v1"]) {
+    const config = loadTwitterConfig({ twitter: { videoEndpoint, videoApiKeyEnv: "TEST_VIDEO" } });
+    assert.equal(config.videoEndpoint, undefined, JSON.stringify(videoEndpoint));
+    assert.equal(config.videoEndpointExplicit, false);
+    assert.ok(config.configNotes.some(note => /twitter\.videoEndpoint.*valid https:\/\//.test(note)));
+    assert.ok(!config.configNotes.some(note => /video\.example|fixture-secret|invalid\/v1/.test(note)), "do not echo rejected endpoints");
+  }
+});
+
+test("video endpoints accept valid HTTPS URLs across adapters without changing credential binding", () => {
+  for (const videoEndpointType of VIDEO_ENDPOINT_TYPES) {
+    for (const videoEndpoint of ["https://video.example/v1", "HTTPS://video.example:443/v1/", "https://[::1]:8443/v1"]) {
+      const config = loadTwitterConfig({ twitter: { videoEndpoint: `  ${videoEndpoint}  `, videoEndpointType, videoApiKeyEnv: "  TEST_VIDEO  " } });
+      assert.equal(config.videoEndpoint, videoEndpoint);
+      assert.equal(config.videoEndpointExplicit, true);
+      assert.equal(config.videoApiKeyEnv, "TEST_VIDEO");
+      assert.deepEqual(config.configNotes, []);
+    }
+  }
+  const unbound = loadTwitterConfig({ twitter: { videoEndpoint: "https://video.example/v1" } });
+  assert.equal(unbound.videoEndpoint, undefined);
+  assert.equal(unbound.videoEndpointExplicit, false);
+  assert.ok(unbound.configNotes.some(note => /set twitter\.videoApiKeyEnv explicitly/.test(note)));
+});
+
 test("STT refuses non-HTTPS and malformed endpoints with a disclosure", () => {
   for (const endpoint of ["http://stt.example/v1", "http://localhost:8080/v1", "ftp://stt.example/v1", "//stt.example/v1", "https://", "https://stt.example\n.invalid/v1"]) {
     const config = loadTwitterConfig({ twitter: { sttEndpoint: endpoint, sttApiKeyEnv: "TEST_STT", sttModel: "whisper" } });

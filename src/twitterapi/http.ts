@@ -78,6 +78,14 @@ export class CancelledError extends Error {
   }
 }
 
+/** Marks a refused redirect. Unlike transport failures, it must not be retried. */
+class RedirectError extends Error {
+  constructor(status: number) {
+    super(`twitterapi.io responded with an HTTP redirect (${status}); refusing to follow it with the API key.`);
+    this.name = "RedirectError";
+  }
+}
+
 /** One request attempt with its own timeout; returns the parsed body alongside the response. */
 async function requestOnce(
   url: string,
@@ -101,9 +109,17 @@ async function requestOnce(
   aborted.catch(() => {}); // settled-after-race rejections are not unhandled errors
   try {
     const response = await Promise.race([
-      fetcher(url, { headers: { "X-API-Key": apiKey }, signal: controller.signal }),
+      // Manual mode never follows Location, but exposes the status so a refused
+      // redirect is distinguishable from a retryable network failure.
+      fetcher(url, { headers: { "X-API-Key": apiKey }, signal: controller.signal, redirect: "manual" }),
       aborted,
     ]);
+    if (response.status >= 300 && response.status < 400) {
+      // Discard without awaiting cleanup: a stalled body must not delay refusal.
+      // Never include Location, which can itself contain credentials.
+      void response.body?.cancel().catch(() => {});
+      throw new RedirectError(response.status);
+    }
     let body: unknown;
     let bodyError: string | undefined;
     try {
@@ -132,7 +148,7 @@ async function requestOnce(
   } catch (error) {
     if (outerSignal?.aborted) throw new CancelledError();
     if (controller.signal.aborted) throw new TimeoutError(`twitterapi.io request timed out after ${timeoutMs}ms`);
-    if (error instanceof TransportError || error instanceof TimeoutError) throw error;
+    if (error instanceof RedirectError || error instanceof TransportError || error instanceof TimeoutError) throw error;
     throw new TransportError(error instanceof Error ? error.message : String(error), { cause: error });
   } finally {
     clearTimeout(timeout);
