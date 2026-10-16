@@ -5,7 +5,6 @@ import {
   type FetchLike,
   type SearchTermination,
   type Tweet,
-  type TwitterApiSearchParams,
   type UserProfile,
 } from "./core.js";
 import { asTweet, asUser, metadataUrl, statusIdFromUrl, tweetIdFromInput } from "./tweet.js";
@@ -23,6 +22,15 @@ import { advanceOrStop, isTruncated } from "./search.js";
 
 export const USER_SEARCH_PATH = "/twitter/user/search";
 export const THREAD_CONTEXT_PATH = "/twitter/tweet/thread_context";
+
+/** Build an internal endpoint URL without exposing parser inputs on failure. */
+function endpointUrl(path: string): URL {
+  try {
+    return new URL(TWITTERAPI_BASE_URL + path);
+  } catch {
+    throw new Error("twitterapi.io: invalid endpoint URL (internal error)");
+  }
+}
 
 export interface UserSearchDetails {
   query: string;
@@ -67,7 +75,7 @@ export async function searchUsers(
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
     reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} accounts`);
-    const url = new URL(TWITTERAPI_BASE_URL + USER_SEARCH_PATH);
+    const url = endpointUrl(USER_SEARCH_PATH);
     url.searchParams.set("query", trimmed);
     if (cursor) url.searchParams.set("cursor", cursor);
 
@@ -155,7 +163,7 @@ export async function fetchThread(
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
     reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} posts`);
-    const url = new URL(TWITTERAPI_BASE_URL + THREAD_CONTEXT_PATH);
+    const url = endpointUrl(THREAD_CONTEXT_PATH);
     url.searchParams.set("tweetId", id);
     if (cursor) url.searchParams.set("cursor", cursor);
 
@@ -259,7 +267,7 @@ async function walkTweets(
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
     reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} posts`);
-    const url = new URL(TWITTERAPI_BASE_URL + path);
+    const url = endpointUrl(path);
     for (const [key, value] of Object.entries(options.params ?? {})) {
       if (value === undefined || value === "") continue;
       url.searchParams.set(key, String(value));
@@ -531,7 +539,7 @@ export async function fetchTrends(
 ): Promise<TrendsDetails> {
   if (!Number.isInteger(woeid)) throw new Error(`twitter woeid must be an integer (got ${String(woeid)})`);
   const settings = resolveRequestSettings(options);
-  const url = new URL(TWITTERAPI_BASE_URL + TRENDS_PATH);
+  const url = endpointUrl(TRENDS_PATH);
   url.searchParams.set("woeid", String(woeid));
   if (options.count !== undefined) {
     if (!Number.isInteger(options.count) || options.count < 30) {
@@ -600,7 +608,7 @@ async function walkUsers(
     if (settings.signal?.aborted) throw new CancelledError();
     pages += 1;
     reportProgress(options, `page ${pages}/${maxPages} · ${collected.length} accounts`);
-    const url = new URL(TWITTERAPI_BASE_URL + path);
+    const url = endpointUrl(path);
     for (const [key, value] of Object.entries(options.params ?? {})) {
       if (value === undefined || value === "") continue;
       url.searchParams.set(key, String(value));
@@ -740,7 +748,7 @@ export async function fetchUserProfile(
 ): Promise<UserProfile> {
   const handle = requireUserName(userName, "profile");
   const settings = resolveRequestSettings(options);
-  const url = new URL(TWITTERAPI_BASE_URL + USER_INFO_PATH);
+  const url = endpointUrl(USER_INFO_PATH);
   url.searchParams.set("userName", handle);
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
@@ -772,7 +780,7 @@ export async function fetchTweetsByIds(
   if (cleaned.length === 0) throw new Error("twitter mode \"tweets\" needs at least one id in `ids`");
   if (cleaned.length > 100) throw new Error("twitter mode \"tweets\" accepts at most 100 ids");
   const settings = resolveRequestSettings(options);
-  const url = new URL(TWITTERAPI_BASE_URL + TWEETS_BY_IDS_PATH);
+  const url = endpointUrl(TWEETS_BY_IDS_PATH);
   url.searchParams.set("tweet_ids", cleaned.join(","));
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
@@ -845,7 +853,7 @@ export async function fetchSpaceDetail(
   const id = spaceId?.trim();
   if (!id) throw new Error('twitter mode "space" needs a spaceId');
   const settings = resolveRequestSettings(options);
-  const url = new URL(TWITTERAPI_BASE_URL + SPACE_DETAIL_PATH);
+  const url = endpointUrl(SPACE_DETAIL_PATH);
   url.searchParams.set("space_id", id);
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
@@ -967,7 +975,7 @@ export async function fetchUserAbout(
 ): Promise<UserAbout> {
   const handle = requireUserName(userName, "about");
   const settings = resolveRequestSettings(options);
-  const url = new URL(TWITTERAPI_BASE_URL + USER_ABOUT_PATH);
+  const url = endpointUrl(USER_ABOUT_PATH);
   url.searchParams.set("userName", handle);
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);

@@ -117,6 +117,29 @@ than silently ignored.
   omit manifests/references, with disclosure. See the
   [complete-input budget](configuration.md#complete-input-budget-answer-output).
 
+## Pagination and retries
+
+Searches, account lists and other paginated post reads follow `has_next_page`
+and `next_cursor`. An empty page, an unusable page or a duplicate-only page does
+not prove exhaustion when the API supplies a fresh cursor: later pages may still
+contain results. Page budgets and ceilings still bound the requests. Hitting a
+page cap, a repeated cursor or a missing cursor while more results are advertised
+is disclosed as truncation, not a complete read.
+
+Thread context is an intentional exception: its existing endpoint-specific rule
+stops on a genuinely empty raw `tweets` array, even if `has_next_page` stays true.
+Duplicate-only thread pages still continue within the page budget. These are
+separate contracts; applying the thread heuristic to every endpoint could discard
+later results. See the upstream [pagination guide](https://docs.twitterapi.io/pagination).
+
+The extension retries HTTP **429/503**, plus retryable transport failures and
+request timeouts, with bounded backoff and shared per-key pacing. The current
+upstream [error guide](https://docs.twitterapi.io/errors) also recommends retrying
+500/502; the extension intentionally uses a narrower status policy to limit
+replaying potentially billed requests. Received responses with unreadable bodies
+are not retried merely because reading failed. Redirect refusals and permanent
+HTTP failures, including exhausted credits (402), are not retried.
+
 ## Evidence output
 
 Pass `output: "posts"` with **any of the 17 read modes**. The name selects the

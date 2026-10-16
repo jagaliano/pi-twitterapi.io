@@ -79,9 +79,9 @@ export class CancelledError extends Error {
 }
 
 /** Marks a refused redirect. Unlike transport failures, it must not be retried. */
-class RedirectError extends Error {
+export class RedirectError extends Error {
   constructor(status: number) {
-    super(`twitterapi.io responded with an HTTP redirect (${status}); refusing to follow it with the API key.`);
+    super(`twitterapi.io responded with an HTTP redirect (${status === 0 ? "opaque response" : status}); refusing to follow it with the API key.`);
     this.name = "RedirectError";
   }
 }
@@ -114,7 +114,7 @@ async function requestOnce(
       fetcher(url, { headers: { "X-API-Key": apiKey }, signal: controller.signal, redirect: "manual" }),
       aborted,
     ]);
-    if (response.status >= 300 && response.status < 400) {
+    if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
       // Discard without awaiting cleanup: a stalled body must not delay refusal.
       // Never include Location, which can itself contain credentials.
       void response.body?.cancel().catch(() => {});
@@ -193,9 +193,10 @@ export async function sleepAbortable(
 }
 
 /**
- * The documented safe retry scope: 429 and 503 only. Retrying other statuses
- * repeats a request the upstream may already have billed, and the provider's
- * own guidance names these two. Widening this is a deliberate policy change.
+ * This extension deliberately retries HTTP 429/503 only. Upstream currently
+ * also recommends 500/502 (https://docs.twitterapi.io/errors); our narrower
+ * policy limits replay of requests that may already have been billed.
+ * Widening the status set is a deliberate cost/reliability policy change.
  */
 export function isRetryableStatus(status: number): boolean {
   return status === 429 || status === 503;

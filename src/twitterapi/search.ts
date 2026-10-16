@@ -17,7 +17,6 @@ import {
   defaultSleep,
   ensureSuccessfulPayload,
   requestWithRetry,
-  type TwitterApiRequestOptions,
 } from "./http.js";
 import { asTweet } from "./tweet.js";
 
@@ -71,6 +70,9 @@ export function isTruncated(stoppedBy: SearchTermination): boolean {
  * `has_next_page !== true` genuinely means "no more results". Reporting the same
  * when upstream says there ARE more pages but hands us no cursor would present a
  * partial result as complete, so that case counts as truncation instead.
+ * Empty, unusable or duplicate-only pages still follow a fresh cursor within
+ * the page budget; they do not prove exhaustion. Thread context applies its
+ * separate raw-empty-page stop before calling this shared cursor helper.
  */
 export function advanceOrStop(
   payload: Record<string, unknown>,

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-10-15
+
+### Fixed
+
+- Recognize browser-style opaque redirects without reading their hidden body or
+  retrying, and report an explicit redirect refusal instead of an HTTP 0 error.
+- Export `RedirectError` from the transport module and its barrel so callers can
+  identify refused redirects with `instanceof`.
+- Correct the retry-guidance comment: upstream also recommends HTTP 500/502;
+  the extension deliberately retains its narrower 429/503 status policy.
+- Document and test cursor-driven empty-page continuation across searches and
+  shared post/account walkers, including bounded spend and honest truncation.
+  Preserve the existing thread-only empty-page exhaustion rule.
+- Handle internal endpoint URL-construction failures consistently before any
+  upstream fetch, with a safe diagnostic that does not expose parser inputs.
+
 ## [0.5.5] - 2026-10-14
 
 ### Changed
@@ -647,7 +663,9 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.1...v0.5.2
