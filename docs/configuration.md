@@ -51,7 +51,7 @@ fractional values rather than rounding. Media/processing flags require literal
 | `maxMediaPerSearch` | `4` | Photo/poster attachment ceiling, range 0–20; excludes extracted video frames. Complete-input limits can reduce delivery. |
 | `maxSynthesisChars` | `60000` | Rendered-text backstop, range 1,000–120,000; evidence output uses it as its final text ceiling including disclosures. |
 | `imageInputBounds` | No declarations | User-only exact-model image limits; missing entries omit images with disclosure. |
-| `maxPages` | `5` | Base page budget, range 1–100, additionally clamped to `maxPagesCeiling`. |
+| `maxPages` | `5` | Base page/logical lookup-batch budget, range 1–100, additionally clamped to `maxPagesCeiling`. `mode=tweets` preflights its required one or two batches; `mode=article` requires two logical requests (article + same-ID provenance lookup). Insufficient budgets fail before retrieval; retries count separately. |
 | `maxPagesCeiling` | `20` | Hard page ceiling, range 1–100. |
 | `minRequestIntervalMs` | `5000` | Shared per-credential twitterapi.io dispatch spacing, range 0–600,000 ms. Raise when throttled; lower for a higher-QPS tier. |
 | `retryBaseDelayMs` | `5000` | Retry backoff base, range 0–600,000 ms. Backoff/`Retry-After` and pacing both apply. |

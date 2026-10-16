@@ -5,11 +5,15 @@ import type { TwitterSearchDetails } from "../types.js";
 import {
   synthesizeAnswer,
   synthesizeDocument,
+  preflightDocument,
+  untrustedInline,
   synthesizeTrends,
   synthesizeUserAnswer,
   type SynthesisDeps,
 } from "../synthesize.js";
 import {
+  fetchArticle,
+  ARTICLE_SOURCE_URL_CHARS,
   fetchCommunityTweets,
   fetchFollowers,
   fetchFollowings,
@@ -590,14 +594,17 @@ export async function runTwitterApiTweetsByIds(
   options: TwitterApiTweetsByIdsOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const backend = resolveSynthesisBackend(options, options.query);
-  const result = await fetchTweetsByIds(options.ids, backend.apiKey, backend.fetcher, lookupOptions(options, backend));
+  const result = await fetchTweetsByIds(options.ids, backend.apiKey, backend.fetcher, tweetReadOptions(options, backend));
   const notes = [`Answered from ${result.tweets.length} post(s) fetched by id.`];
   // Asking for five posts and reporting "3 post(s)" hides the fact that two were
   // never returned — deleted, protected, or simply missing upstream (G9).
   const requested = new Set(
     options.ids.map((raw) => tweetIdFromInput(raw)).filter((id): id is string => Boolean(id)),
   );
-  const returned = new Set(result.tweets.map((tweet) => tweet.id).filter((id): id is string => Boolean(id)));
+  const returned = new Set(
+    result.tweets.map((tweet) => tweetIdFromInput(tweet.id ?? "") ?? tweetIdFromInput(tweet.url ?? ""))
+      .filter((id): id is string => Boolean(id)),
+  );
   const missing = [...requested].filter((id) => !returned.has(id));
   if (missing.length > 0) {
     const shown = missing.slice(0, 10).join(", ");
@@ -714,6 +721,37 @@ export async function runTwitterApiList(
     notes.push(`Retrieval stopped early (${incomplete}) while more list posts remained, so these results may be incomplete.`);
   }
   return completeTweetAnswer(backend, options, { query: options.query, tweets: result.tweets, incomplete, notes });
+}
+
+export interface TwitterApiArticleOptions extends TwitterApiSynthesisOptions {
+  query: string;
+  tweet: string;
+}
+
+/** Explicit text-only article read; ordinary tweet previews never enter this runner. */
+export async function runTwitterApiArticle(options: TwitterApiArticleOptions): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  const tweetId = tweetIdFromInput(options.tweet);
+  if (!tweetId) throw new Error("twitter article needs a numeric post id or X permalink");
+  const backend = resolveSynthesisBackend(options, options.query);
+  preflightDocument(options.query, "X article", backend.budget, ARTICLE_SOURCE_URL_CHARS);
+  const article = await fetchArticle(tweetId, backend.apiKey, backend.fetcher, {
+    ...lookupOptions(options, backend), maxPages: pageBudget(undefined, options.config), maxPagesCeiling: options.config.maxPagesCeiling,
+  });
+  options.signal?.throwIfAborted();
+  const fields: string[] = [];
+  if (article.title) fields.push(`Article title: ${untrustedInline(article.title, Infinity)}`);
+  if (article.author) fields.push(`Article author: @${article.author}`);
+  if (article.createdAt) fields.push(`Article date: ${untrustedInline(article.createdAt, Infinity)}`);
+  for (const block of article.blocks) fields.push(`Block ${block.index} (${block.type}): ${untrustedInline(block.text ?? "—", Infinity)}`);
+  const details = await synthesizeDocument({
+    query: options.query, title: "X article", bodyKind: "article", body: fields.join("\n"),
+    citations: article.citations, notes: article.notes, model: toSynthesisModel(backend.model), signal: options.signal,
+    deps: { output: options.output, signal: options.signal, complete: backend.complete, inputBudget: backend.budget, telemetry: backend.telemetry },
+  });
+  applyFallbackNote(backend, details);
+  appendConfigNotes(options, details);
+  Object.assign(details, backend.telemetry.snapshot());
+  return { markdown: formatTwitterResults(details), details };
 }
 
 /** Flatten a nested object into bounded `key: value` lines for synthesis. */

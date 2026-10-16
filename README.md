@@ -2,8 +2,8 @@
 
 Read X/Twitter from the [pi coding agent](https://pi.dev), using
 [twitterapi.io](https://twitterapi.io) for retrieval and your Pi model for answers
-with citation URLs. One `twitter` tool supports **17 read modes**: posts,
-accounts, threads, timelines, trends, conversations and more.
+with citation URLs. One `twitter` tool supports **18 read modes**: posts,
+accounts, threads, timelines, trends, conversations and explicit article-body reads.
 
 Optional image, video and speech analysis adds media evidence. Prefer to let your
 main agent read the evidence directly? Use `output: "posts"` to skip the separate
@@ -121,9 +121,10 @@ Node.js **22.19 or later** and a compatible Pi **1.x** release
 - [Setup recipes](docs/setup.md) — choose one working configuration.
 - [Configuration](docs/configuration.md) — settings, image bounds, budgets, fallback and pacing.
 - [Video](docs/video.md) — native providers, frames, STT, cache, privacy and costs.
-- [Tool reference](docs/tool-reference.md) — parameters, 17 modes, evidence and telemetry.
+- [Tool reference](docs/tool-reference.md) — parameters, 18 modes, evidence and telemetry.
 - [Compared with xAI `x_search`](docs/x-search-comparison.md) — capabilities and differences.
 - [Pricing comparison](docs/pricing-comparison.md) — dated rates and billing boundaries.
+- [Answer versus evidence benchmark](docs/output-benchmark.md) — three caller-inclusive trials, quality failures and limits.
 - [Development and releases](https://github.com/jagaliano/pi-twitterapi.io/blob/main/CONTRIBUTING.md) — repository-only contributor guide.
 
 ## License

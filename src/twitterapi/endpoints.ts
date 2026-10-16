@@ -758,12 +758,12 @@ export async function fetchUserProfile(
   return user;
 }
 
-/** Fetch specific posts by id via `/twitter/tweets` (max 100 ids). */
+/** Fetch up to 100 unique post IDs via sequential `/twitter/tweets` chunks of at most 50. */
 export async function fetchTweetsByIds(
   ids: readonly string[],
   apiKey: string,
   fetcher: FetchLike = fetch,
-  options: TwitterApiRequestOptions = {},
+  options: TwitterApiRequestOptions & Pick<TweetPagingOptions, "maxPages" | "maxPagesCeiling"> = {},
 ): Promise<TweetCollection> {
   // The tool accepts ids or permalinks, so every entry is canonicalised to a
   // post id before the paid endpoint is called; an unusable reference is
@@ -780,31 +780,49 @@ export async function fetchTweetsByIds(
   if (cleaned.length === 0) throw new Error("twitter mode \"tweets\" needs at least one id in `ids`");
   if (cleaned.length > 100) throw new Error("twitter mode \"tweets\" accepts at most 100 ids");
   const settings = resolveRequestSettings(options);
-  const url = endpointUrl(TWEETS_BY_IDS_PATH);
-  url.searchParams.set("tweet_ids", cleaned.join(","));
-  reportProgress(options, "reading X");
-  const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
-  const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
-  if (!Array.isArray(payload.tweets)) {
-    throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
+  const chunkSize = 50;
+  const chunks = Math.ceil(cleaned.length / chunkSize);
+  const ceiling = boundedCount(options.maxPagesCeiling, DEFAULT_MAX_PAGES_CEILING, MAX_PAGE_BOUND, "maxPagesCeiling");
+  const budget = Math.min(boundedCount(options.maxPages, 3, MAX_PAGE_BOUND, "maxPages"), ceiling);
+  // Known ID batches are all-or-nothing: never bill the first chunk when the
+  // configured logical request budget cannot cover the complete lookup.
+  if (chunks > budget) {
+    throw new Error(
+      `twitter mode "tweets" needs ${chunks} lookup requests of at most ${chunkSize} ids, but the configured budget permits ${budget}; ` +
+      "no upstream requests were sent. Increase maxPages/maxPagesCeiling or request fewer ids.",
+    );
   }
   const tweets: Tweet[] = [];
-  // Register both identifiers, like the paginated walkers: a post returned with
-  // an id and again with only its permalink is the same post.
   const seenIds = new Set<string>();
   const seenUrls = new Set<string>();
-  for (const raw of payload.tweets) {
-    const tweet = asTweet(raw);
-    if (!tweet) continue;
-    const duplicate =
-      (tweet.id !== undefined && seenIds.has(tweet.id)) ||
-      (tweet.url !== undefined && seenUrls.has(tweet.url));
-    if (tweet.id) seenIds.add(tweet.id);
-    if (tweet.url) seenUrls.add(tweet.url);
-    if (duplicate) continue;
-    tweets.push(tweet);
+  // Keep input chunk order and upstream order within each response. Do not
+  // replay successful chunks or produce partial answers when a later one fails.
+  for (let chunk = 0; chunk < chunks; chunk++) {
+    if (settings.signal?.aborted) throw new CancelledError();
+    const url = endpointUrl(TWEETS_BY_IDS_PATH);
+    url.searchParams.set("tweet_ids", cleaned.slice(chunk * chunkSize, (chunk + 1) * chunkSize).join(","));
+    reportProgress(options, chunks === 1 ? "reading X" : `lookup ${chunk + 1}/${chunks} · ${tweets.length} posts`);
+    const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
+    const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
+    if (!Array.isArray(payload.tweets)) {
+      throw new Error("twitterapi.io returned a malformed response (missing tweets array)");
+    }
+    // Alias indices span every chunk; a URL-only copy and an ID-bearing copy
+    // of the same fetched source must not become separate evidence bundles.
+    for (const raw of payload.tweets) {
+      const tweet = asTweet(raw);
+      if (!tweet) continue;
+      const duplicate =
+        (tweet.id !== undefined && seenIds.has(tweet.id)) ||
+        (tweet.url !== undefined && seenUrls.has(tweet.url));
+      if (tweet.id) seenIds.add(tweet.id);
+      if (tweet.url) seenUrls.add(tweet.url);
+      if (duplicate) continue;
+      tweets.push(tweet);
+    }
   }
-  return { tweets, pagesFetched: 1, stoppedBy: "exhausted", truncated: false };
+  if (settings.signal?.aborted) throw new CancelledError();
+  return { tweets, pagesFetched: chunks, stoppedBy: "exhausted", truncated: false };
 }
 
 // --------------------------------------- communities, lists, spaces (P3)

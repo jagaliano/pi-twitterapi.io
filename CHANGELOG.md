@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-10-16
+
+### Added
+
+- Explicit, text-only `article` reads in both output modes, with ordered untrusted
+  blocks, bounded response parsing and complete-input selection. A separately
+  paced/accounted same-ID post lookup verifies fetched citations; missing or
+  conflicting provenance and omitted content/media are disclosed. Other modes
+  never auto-fetch article bodies or embedded destinations.
+- A caller-inclusive, three-query answer-versus-evidence benchmark under a
+  controlled Gemini model pair, with measured latency/tokens, dated paid-tier
+  model-price equivalents, explicit quality failures and failed-setup overhead.
+  Actual account/retrieval charges remain unknown; no general savings claim.
+- A repository-only, opt-in benchmark runner with paid-work caps, private
+  checkpoints, replay refusal, enclosing-turn suppression and offline tests.
+
+### Fixed
+
+- Preserve the 100-unique-ID `tweets` input limit while sending sequential
+  requests of at most 50 IDs. Preflight the configured logical request budget,
+  deduplicate across batches and retain upstream response order within each
+  batch. Retries use the existing shared pacing and physical telemetry.
+- Failed or cancelled batches never produce partial answers or start media/
+  synthesis work. Missing-ID notes also recognize valid URL-only post identities.
+
 ## [0.5.6] - 2026-10-15
 
 ### Fixed
@@ -663,7 +688,8 @@ First version published to npm.
 Tagged but never published. Superseded by [0.1.1](#011---2026-10-03), which carries the same features
 plus the fixes above; the entry is kept because the git tag exists.
 
-[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/jagaliano/pi-twitterapi.io/compare/v0.5.3...v0.5.4

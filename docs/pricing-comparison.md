@@ -66,8 +66,8 @@ twitterapi.io prices in credits, where **100,000 credits = $1.00**
 
 ## Cost per mode
 
-The `twitter` tool has 17 modes. Each maps to one twitterapi.io endpoint and one
-billable unit. "Quoted" means the rate appears in the linked official source;
+The `twitter` tool has 18 modes. Most use one endpoint/billable unit;
+`article` adds a same-ID post lookup to its article request. "Quoted" means the rate appears in the linked official source;
 "inferred" means the unit follows from the endpoint's documented return type, but
 that endpoint's page does not restate a price.
 
@@ -81,6 +81,7 @@ that endpoint's page does not restate a price.
 | `quotes` | `/twitter/tweet/quotes` | tweets returned | $0.15 / 1K | inferred |
 | `mentions` | `/twitter/user/mentions` | tweets returned | $0.15 / 1K | inferred |
 | `tweets` | `/twitter/tweets` | tweets returned | $0.15 / 1K | inferred |
+| `article` | `/twitter/article` + `/twitter/tweets` | article + associated post lookup | 100 credits/article advertised; post lookup separate | dated API spec (2026-10-16); actual/failed-call charges not verified |
 | `retweeters` | `/twitter/tweet/retweeters` | users returned | $0.18 / 1K | inferred |
 | `community` | `/twitter/community/tweets` | tweets returned | $0.15 / 1K | inferred |
 | `profile` | `/twitter/user/info` | profiles returned | $0.18 / 1K | inferred from the profile unit rate |
@@ -146,7 +147,10 @@ for dated single-clip measurements, retention and processing limits.
 With [`output: "posts"`](tool-reference.md#evidence-output), the extension skips
 its separate answer-synthesis call. Retrieval and configured native-video/STT
 still cost money, and your main agent can consume tokens when reading the result.
-No comparative latency/cost/quality benchmark is claimed here.
+A [three-query output-mode benchmark](output-benchmark.md) includes caller work,
+reported tokens and a quality rubric under a controlled Gemini model pair. It is
+not an xAI comparison or a general cost/quality guarantee; actual account charges
+remain unknown.
 
 ## What this comparison excludes
 
@@ -155,8 +159,10 @@ No comparative latency/cost/quality benchmark is claimed here.
 - the official X API's own read prices (reported at roughly $0.005 per post read),
   which are a baseline rather than a route this extension can use;
 - enterprise agreements, and write/post endpoints that this extension never calls;
-- the token cost of the agent conversation itself, which is identical on both
-  sides of this comparison and belongs to pi, not to the retrieval route.
+- the surrounding agent conversation's token cost, which varies with model,
+  context and output format; this retrieval-unit comparison does not measure it.
+  The [output-mode benchmark](output-benchmark.md) measures a controlled standalone
+  caller, not every possible agent conversation.
 
 ## Sources
 

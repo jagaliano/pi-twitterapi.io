@@ -71,6 +71,7 @@ test("the mode, queryType and replySort parameters are closed sets", () => {
     "community",
     "list",
     "space",
+    "article",
   ]);
   assert.deepEqual(literals("queryType"), ["Latest", "Top"]);
   assert.deepEqual(literals("replySort"), ["Relevance", "Latest", "Likes"]);

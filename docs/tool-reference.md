@@ -6,11 +6,11 @@
 |---|---|---|
 | `query` | string (required) | Natural-language question. Required for every mode. |
 | `output` | `"answer"` \| `"posts"` | Default `answer`: separately synthesize. `posts`: bounded untrusted text evidence for any mode, with no answer synthesis. |
-| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `about` \| `tweets` \| `retweeters` \| `community` \| `list` \| `space` | Defaults to `posts`. |
-| `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`, `retweeters`; refused in any other mode. |
+| `mode` | `posts` \| `users` \| `thread` \| `user` \| `trends` \| `replies` \| `quotes` \| `mentions` \| `followers` \| `followings` \| `profile` \| `about` \| `tweets` \| `retweeters` \| `community` \| `list` \| `space` \| `article` | Defaults to `posts`. |
+| `tweet` | string | Post id or X permalink. Required for `thread`, `replies`, `quotes`, `retweeters`, `article`; refused in any other mode. |
 | `user` | string | Handle (no `@`) for `mode=user`, `mentions`, `followers`, `followings`, `profile`, `about`. |
 | `userId` | string | Numeric user id for `mode=user`; preferred over `user` when known. |
-| `ids` | string[] | `mode=tweets`: post ids or permalinks to fetch (max 100). |
+| `ids` | string[] | `mode=tweets`: up to 100 unique post ids or permalinks; sequential lookup batches of at most 50, within `maxPages`/`maxPagesCeiling`. |
 | `pageSize` | number | `mode=followers`/`followings`: accounts per page (20–200). |
 | `communityId` | string | `mode=community`: the community id. |
 | `listId` | string | `mode=list`: the list id. |
@@ -45,11 +45,57 @@ than silently ignored.
 | `followings` | `/twitter/user/followings` | Who an account follows (`user`, `pageSize`, `limit`). |
 | `profile` | `/twitter/user/info` | A single account profile (`user`). |
 | `about` | `/twitter/user_about` | Extended profile-page metadata (`user`): account-based-in, creation source, handle changes, identity verification; cited as the profile URL. |
-| `tweets` | `/twitter/tweets` | Specific posts by id (`ids`, max 100). |
+| `tweets` | `/twitter/tweets` | Specific posts by id (`ids`, max 100 unique); each lookup request carries at most 50. |
 | `retweeters` | `/twitter/tweet/retweeters` | Accounts that reposted a post (`tweet`, `limit`); profile URLs as sources. |
 | `community` | `/twitter/community/tweets` | Posts from a community (`communityId`, `limit`). |
 | `list` | `/twitter/list/tweets_timeline` | Posts from a list (`listId`, `limit`). |
 | `space` | `/twitter/spaces/detail` | An X Space's detail (`spaceId`); cited as `https://x.com/i/spaces/<id>`. Note: twitterapi.io currently returns HTTP 404 for this endpoint even for Spaces that are live in the X app, so the mode often reports the upstream error verbatim. |
+| `article` | `/twitter/article` + `/twitter/tweets` | Explicit text-only article body via `tweet`; one same-ID post lookup verifies fetched citation provenance. No implicit enrichment or media fetches. |
+
+## Explicit article reads
+
+`mode: "article"` reads the body associated with one post id or permalink:
+
+```json
+{ "query": "Summarize this article's argument and evidence.", "mode": "article", "tweet": "1905545699552375179", "output": "posts" }
+```
+
+Use `output: "answer"` (the default) for a separately synthesized answer. Article
+bodies are **never fetched automatically** from previews, t.co destinations or
+quoted/reposted context in other modes. No embedded link, cover, image/GIF or
+video/STT request is made in article mode, even when media processing is enabled.
+
+An article read reserves **two logical requests**: `/twitter/article?tweet_id=...`,
+then one `/twitter/tweets?tweet_ids=...` lookup for the same post. Both use shared
+pacing, retries, cancellation and physical telemetry. `maxPages` and
+`maxPagesCeiling` must permit two requests; otherwise the call fails before any
+network work. A failed article response does not trigger the associated lookup.
+
+Citations use only the associated post's **fetched** HTTPS permalink, with matching
+post id, URL handle and non-conflicting shared author ids/handles. The article's
+opaque `id` is not a post id. Input permalinks, author profile URLs and constructed
+links are not promoted to fetched article sources. Missing, ambiguous, invalid or
+conflicting provenance is disclosed; article text can remain available without a
+source URL, and the synthesis prompt explicitly forbids guessing one. Unreadable,
+malformed or failed **2xx provenance data** does not discard the article body;
+HTTP/transport failures and cancellation still fail the call.
+
+Ordered text, heading, list, Markdown-text and divider blocks are rendered as
+labelled untrusted text—not executed HTML/Markdown. Inline styles, cover images
+and image/GIF blocks are omitted; unsupported/empty/malformed blocks are counted
+in disclosures. Each article/provenance response is capped at **1 MiB of decoded
+HTTP bytes before JSON parsing**; at most **1,000 article blocks** are parsed.
+Oversized/unreadable HTTP200 bodies are not retried merely for that failure.
+The existing complete answer/evidence input budgets select whole fields/blocks;
+omissions are disclosed as a **partial body**, never a complete-article claim.
+
+The 2026-10-16 compatibility spike observed 73 ordered blocks on the official
+example post and HTTP200 `{article:null,status:"failed",msg:"article not found"}`
+on a non-article post. Both `failed` and `error` envelopes are rejected explicitly;
+arbitrary provider error text is not echoed. The dated spec advertises **100
+credits/article**, with the associated post lookup charged separately. Responses
+exposed no usage headers: actual charges, including failed/aborted calls, remain
+unknown. The initial local-harness abort was counted, not silently retried.
 
 ## Behavior and disclosures
 
@@ -119,6 +165,21 @@ than silently ignored.
 
 ## Pagination and retries
 
+`mode=tweets` validates and deduplicates all references before requesting them.
+It retains the 100-ID public limit, using one or two sequential batches of at
+most 50 unique IDs. `maxPages` and `maxPagesCeiling` also bound these logical
+lookup batches: if the budget cannot cover all batches, the call fails before
+any request. Retries are separate physical attempts, visible in telemetry.
+Results retain batch order and upstream order within each batch; they are not
+sorted into requested-ID order. Missing-ID notes compare fetched identities,
+including valid URL-only copies, rather than response positions.
+
+A failed or cancelled batch fails the whole lookup without a partial answer,
+media processing or synthesis. Successful earlier batches may already have been
+billed; retrying the whole tool call would fetch them again. Existing transport
+error classes and per-request retry rules are preserved. Unattempted batches
+are never described as posts missing from successful upstream responses.
+
 Searches, account lists and other paginated post reads follow `has_next_page`
 and `next_cursor`. An empty page, an unusable page or a duplicate-only page does
 not prove exhaustion when the API supplies a fresh cursor: later pages may still
@@ -142,7 +203,7 @@ HTTP failures, including exhausted credits (402), are not retried.
 
 ## Evidence output
 
-Pass `output: "posts"` with **any of the 17 read modes**. The name selects the
+Pass `output: "posts"` with **any of the 18 read modes**. The name selects the
 output contract, not the retrieval mode: accounts, trends and documents return
 their appropriate evidence too. For example:
 

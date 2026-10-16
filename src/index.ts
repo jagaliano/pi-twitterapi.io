@@ -38,6 +38,7 @@ export function registerCacheCommand(pi: ExtensionAPI, agentDir?: string): void 
 export { registerTwitterTool, type TwitterToolOptions } from "./tool.js";
 export {
   runTwitterApiAbout,
+  runTwitterApiArticle,
   runTwitterApiCommunity,
   runTwitterApiFollowers,
   runTwitterApiFollowings,
@@ -69,6 +70,7 @@ export type {
   RegistryLike,
   SynthesisFailureKind,
   TwitterApiAboutOptions,
+  TwitterApiArticleOptions,
   TwitterApiCommunityOptions,
   TwitterApiFollowOptions,
   TwitterApiListOptions,
@@ -108,6 +110,7 @@ export {
 export type { ImageAttachment, SynthesisModel } from "./synthesize.js";
 export {
   buildExpression,
+  fetchArticle,
   fetchCommunityTweets,
   fetchFollowers,
   fetchFollowings,
@@ -130,6 +133,8 @@ export {
   tweetIdFromInput,
 } from "./twitterapi.js";
 export type {
+  ArticleDetails,
+  ArticleOptions,
   FollowersDetails,
   ReplySort,
   RetweetersDetails,

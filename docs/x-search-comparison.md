@@ -18,8 +18,8 @@ run:
 xAI runs the retrieval and Grok writes the answer, so one request does
 everything. It is only available on xAI models; there is no non-xAI fallback.
 
-**`pi-twitterapi.io`** registers one `twitter` tool with 17 modes. Each mode maps
-to a twitterapi.io REST endpoint; the retrieved posts, accounts or metadata are
+**`pi-twitterapi.io`** registers one `twitter` tool with 18 modes. Each mode uses
+twitterapi.io REST reads (article mode also looks up the associated post); the retrieved posts, accounts or metadata are
 then handed to a pi model (`twitter.synthesisModel`, else the session model) that
 writes the answer with citations. Retrieval and synthesis are two separate steps,
 which is why the two are priced differently. Alternatively, `output: "posts"`
@@ -59,7 +59,7 @@ returns bounded untrusted text evidence without a separate synthesis call; see t
 | Citations | xAI annotations/citations | derived from fetched permalinks; unmatched X links dropped and disclosed |
 | Billing | xAI model tokens + per post/profile fetched | twitterapi.io credits + your synthesis model's tokens; opt-in video analysis and STT are billed by their own endpoints |
 | Evidence-only output | server-side answer flow | `output: "posts"` skips answer synthesis; retrieval and opted-in video/STT still cost money |
-| Tool shape | one `x_search` call | one `twitter` tool, 17 modes |
+| Tool shape | one `x_search` call | one `twitter` tool, 18 modes |
 | Availability | xAI models only | any pi session with a twitterapi.io key |
 
 ## Parameter mapping

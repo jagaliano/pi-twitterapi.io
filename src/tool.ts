@@ -9,6 +9,7 @@ import {
 } from "./settings.js";
 import {
   runTwitterApiAbout,
+  runTwitterApiArticle,
   runTwitterApiCommunity,
   runTwitterApiFollowers,
   runTwitterApiFollowings,
@@ -51,7 +52,7 @@ export interface TwitterToolOptions {
 }
 
 /** Modes that locate a specific post through the shared `tweet` argument. */
-const TWEET_MODES = new Set(["thread", "replies", "quotes", "retweeters"]);
+const TWEET_MODES = new Set(["thread", "replies", "quotes", "retweeters", "article"]);
 
 /** Every read mode the tool accepts, in README order. */
 const TWITTER_MODES = [
@@ -72,6 +73,7 @@ const TWITTER_MODES = [
   "community",
   "list",
   "space",
+  "article",
 ] as const;
 
 type TwitterMode = (typeof TWITTER_MODES)[number];
@@ -108,6 +110,7 @@ const MODE_PARAMS: Record<TwitterMode, readonly string[]> = {
   space: ["spaceId"],
   about: ["user"],
   retweeters: ["limit"],
+  article: [],
 };
 
 /** Modes that must be told which account to read. */
@@ -145,10 +148,11 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
     description:
       "Read X/Twitter via twitterapi.io and return an answer with citation URLs. Modes: posts (default), " +
       "users, thread, user (account timeline), trends, replies, quotes, mentions, followers, followings, " +
-      "profile, about, tweets, retweeters, community, list and space. output=answer (default) synthesizes " +
+      "profile, about, tweets, retweeters, community, list, space and article (explicit text-only body read). output=answer (default) synthesizes " +
       "an answer; output=posts returns bounded untrusted text evidence without a synthesis model call.",
-    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes, mentions, followers, followings, profile, about, tweets, retweeters, community, list, space) and return an answer with citation URLs",
+    promptSnippet: "Read X/Twitter via twitterapi.io (posts, users, thread, user timeline, trends, replies, quotes, mentions, followers, followings, profile, about, tweets, retweeters, community, list, space, article) and return an answer with citation URLs",
     promptGuidelines: [
+      'Use mode "article" with a post id or permalink only when explicitly asked for the article body. Text only; uses an article request plus one associated-post lookup for fetched provenance. Other modes never auto-fetch article bodies.',
       "Use twitter when the user needs current discussion or sentiment from X/Twitter and twitterapi.io is configured.",
       "Use mode \"users\" to discover accounts; use mode \"user\" to read a specific account's recent posts.",
       "Use mode \"thread\" with a tweet id or permalink to read a post's whole thread.",
@@ -168,13 +172,13 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       })),
       mode: Type.Optional(
         Type.Union(modeLiterals(), {
-          description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "about", "tweets", "retweeters", "community", "list", or "space".',
+          description: 'What to read: "posts" (default), "users", "thread", "user", "trends", "replies", "quotes", "mentions", "followers", "followings", "profile", "about", "tweets", "retweeters", "community", "list", "space", or "article".',
         }),
       ),
-      tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes/retweeters; refused in any other mode.' })),
+      tweet: Type.Optional(Type.String({ description: 'Post id or X permalink. Required for mode=thread/replies/quotes/retweeters/article; refused in any other mode.' })),
       user: Type.Optional(Type.String({ description: "X handle (no @) for mode=user, mentions, followers, followings, profile or about." })),
       userId: Type.Optional(Type.String({ description: "Numeric user id for mode=user; preferred over `user` when known." })),
-      ids: Type.Optional(Type.Array(Type.String(), { description: "mode=tweets: post ids or X permalinks to fetch (max 100)." })),
+      ids: Type.Optional(Type.Array(Type.String(), { description: "mode=tweets: up to 100 unique post ids or X permalinks; fetched in sequential batches of at most 50, within the configured request budget." })),
       pageSize: Type.Optional(Type.Number({ description: "mode=followers/followings: accounts per page (20–200)." })),
       communityId: Type.Optional(Type.String({ description: "mode=community: the community id." })),
       listId: Type.Optional(Type.String({ description: "mode=list: the list id." })),
@@ -331,6 +335,11 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
           count: number(supplied.count),
           ...base,
         });
+        return { content: [{ type: "text", text: markdown }], details };
+      }
+
+      if (mode === "article") {
+        const { markdown, details } = await runTwitterApiArticle({ tweet: tweetReference, query: question, ...base });
         return { content: [{ type: "text", text: markdown }], details };
       }
 
