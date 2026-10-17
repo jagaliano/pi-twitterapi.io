@@ -94,6 +94,15 @@ test("the mode, queryType and replySort parameters are closed sets", () => {
   }
 });
 
+test("reply-window schema and guidance retain the explicit root-only sort contract", () => {
+  const { pi, tool } = captureTool(); registerTwitterTool(pi as any, { env: { TWITTERAPI_IO_API_KEY: testCredential() }, settings: {} });
+  const registered = tool();
+  assert.equal(Value.Check(registered.parameters, { query: "q", mode: "replies", tweet: "7", sinceTime: 0, untilTime: 1000, replySort: "Latest" }), true);
+  assert.match(registered.parameters.properties.sinceTime.description, /replies.*root-only/);
+  assert.match(registered.parameters.properties.replySort.description, /With sinceTime\/untilTime.*omitted.*Latest/);
+  assert.ok(registered.promptGuidelines.some((line: string) => /replies.*root-only.*does not verify/.test(line)));
+});
+
 test("execute rejects with actionable guidance when no credentials exist", async () => {
   const { pi, tool } = captureTool();
   registerTwitterTool(pi as any, { env: {}, settings: {} });

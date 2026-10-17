@@ -11,7 +11,7 @@ import {
   type SearchTermination,
 } from "../src/twitterapi.js";
 
-const routes = ["posts", "users", "replies", "timeline", "followers"] as const;
+const routes = ["posts", "users", "replies", "reply-window", "timeline", "followers"] as const;
 type Route = typeof routes[number];
 interface Page {
   entries: Array<number | null>;
@@ -65,6 +65,7 @@ async function read(route: Route, key: string, fetcher: FetchLike, maxPages: num
     case "posts": return searchTweets(normalizeParams({ query: "fixture", count: 50 }), key, fetcher, options);
     case "users": return searchUsers("fixture", key, fetcher, { ...options, count: 50 });
     case "replies": return fetchTweetReplies("1", key, fetcher, { ...options, limit: 50 });
+    case "reply-window": return fetchTweetReplies("1", key, fetcher, { ...options, limit: 50, sinceTime: 0, untilTime: 1000 });
     case "timeline": return fetchUserTweets({ userName: "fixture" }, key, fetcher, { ...options, limit: 50 });
     case "followers": return fetchFollowers("fixture", key, fetcher, { ...options, limit: 50 });
   }
@@ -78,6 +79,12 @@ for (const route of routes) {
         assert.equal(init?.redirect, "manual");
         const url = new URL(String(input));
         assert.equal(url.origin, "https://api.twitterapi.io");
+        if (route === "reply-window") {
+          assert.equal(url.pathname, "/twitter/tweet/replies");
+          assert.equal(url.searchParams.get("sinceTime"), "0");
+          assert.equal(url.searchParams.get("untilTime"), "1000");
+          assert.equal(url.searchParams.has("queryType"), false);
+        }
         const page = scenario.pages[seen.length];
         assert.ok(page, "pagination must not dispatch beyond the expected bound");
         const expectedCursor = seen.length === 0 ? "" : scenario.pages[seen.length - 1].cursor;

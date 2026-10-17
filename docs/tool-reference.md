@@ -17,9 +17,9 @@
 | `spaceId` | string | `mode=space`: the X Space id. |
 | `woeid` | number | `mode=trends` location id (1=Worldwide, 23424977=USA). |
 | `includeReplies` | boolean | `mode=user` (timeline) and `mode=quotes`. |
-| `sinceTime` / `untilTime` | number | `mode=quotes` and `mode=mentions`: unix timestamps (seconds) bounding the results. |
+| `sinceTime` / `untilTime` | number | `mode=quotes`/`mentions`: unix-seconds bounds. `mode=replies`: explicit bounds select the root-only [date-windowed route](#date-windowed-replies), inclusive start and exclusive end; stricter integer/range rules apply. |
 | `limit` | number | `mode=user`/`mentions`/`followers`/`followings`/`replies`/`quotes`/`retweeters`/`community`/`list`: stop after this many items (max 1000). |
-| `replySort` | `"Relevance"` \| `"Latest"` \| `"Likes"` | `mode=replies` sort order (default `Relevance`). |
+| `replySort` | `"Relevance"` \| `"Latest"` \| `"Likes"` | `mode=replies`: default `Relevance` without dates. With dates, only omitted or `Latest`; the dated route sends no sort parameter. |
 | `allowed_x_handles` | string[] | `mode=posts`: only these handles (max 20, no `@`). |
 | `excluded_x_handles` | string[] | `mode=posts`: exclude these handles (max 20, no `@`). |
 | `from_date` / `to_date` | `YYYY-MM-DD` | `mode=posts` date range. |
@@ -38,7 +38,7 @@ than silently ignored.
 | `thread` | `/twitter/tweet/thread_context` | A referenced post's whole thread context. |
 | `user` | `/twitter/user/last_tweets` | A specific account's most recent posts (`user`/`userId`, `includeReplies`, `limit`). |
 | `trends` | `/twitter/trends` | Trending topics for a `woeid`; sources are X search URLs. |
-| `replies` | `/twitter/tweet/replies/v2` | Replies to a post (`replySort`, `limit`). |
+| `replies` | `/twitter/tweet/replies/v2`, or `/twitter/tweet/replies` with dates | Legacy replies unchanged without dates. Explicit `sinceTime`/`untilTime` opt into a root-only, newest-first window; `limit` caps retained replies. |
 | `quotes` | `/twitter/tweet/quotes` | Quote-posts of a post (`sinceTime`/`untilTime`, `includeReplies`, `limit`). |
 | `mentions` | `/twitter/user/mentions` | Posts mentioning an account (`user`, `sinceTime`/`untilTime`, `limit`). |
 | `followers` | `/twitter/user/followers` | Who follows an account (`user`, `pageSize`, `limit`); profile URLs as sources. |
@@ -51,6 +51,46 @@ than silently ignored.
 | `list` | `/twitter/list/tweets_timeline` | Posts from a list (`listId`, `limit`). |
 | `space` | `/twitter/spaces/detail` | An X Space's detail (`spaceId`); cited as `https://x.com/i/spaces/<id>`. Note: twitterapi.io currently returns HTTP 404 for this endpoint even for Spaces that are live in the X app, so the mode often reports the upstream error verbatim. |
 | `article` | `/twitter/article` + `/twitter/tweets` | Explicit text-only article body via `tweet`; one same-ID post lookup verifies fetched citation provenance. No implicit enrichment or media fetches. |
+
+## Date-windowed replies
+
+Without dates, `mode: "replies"` keeps the existing v2 URL, sort behavior and
+notes. An omitted `replySort` sends no `queryType`; `Relevance`, `Latest` and
+`Likes` remain available. The helper adds only `route: "replies-v2"` to its
+existing details, with no date fields.
+
+An explicit `sinceTime` or `untilTime` selects `/twitter/tweet/replies`:
+
+```json
+{ "query": "What did people say in this time window?", "mode": "replies", "tweet": "2111389384432099459", "sinceTime": 1792246746, "untilTime": 1792247019, "replySort": "Latest", "limit": 10, "output": "posts" }
+```
+
+- Pass an **original post, first in its thread, not a reply**. The tool performs
+  no extra lookup to verify that precondition; both output modes disclose it.
+- Start is inclusive; end is exclusive. One-sided windows are allowed. The
+  raw value `0` is a supplied start, not an omitted date.
+- Dates must be safe integers in seconds from 0 through 253402300799
+  (9999-12-31T23:59:59Z); `untilTime` must be at least 1. With both bounds,
+  `sinceTime < untilTime`. This tool policy rejects contemporary epoch-millisecond
+  mistakes, but does not infer units or detect every possible millisecond value.
+- `null`, strings, booleans, fractions, unsafe integers, `NaN` and infinity are
+  rejected before retrieval or model resolution. Only `undefined` means omitted.
+- With dates, omit `replySort` or use exactly `Latest`. `Relevance`, `Likes` and
+  malformed raw sort values are rejected with guidance to drop the dates or sort.
+  The route sends **no sort parameter**: newest first by reply time is the
+  documented upstream ordering, not a local sort or independent per-call proof.
+- `limit` caps retained replies, not returned/billed items. Dates accompany every
+  cursor; shared paging/pacing/retries/cancellation/media/input budgets apply.
+- No local date filtering, hidden root lookup or fallback to v2/search occurs.
+  Empty results do not prove none exist: non-root input, an empty window or
+  upstream coverage can explain them. Completeness is never claimed.
+
+The 2026-10-17 compatibility spike passed on one owner-confirmed root/window:
+4 HTTP attempts, zero synthesis SDK calls, an exact inclusive-start witness,
+exclusive-end exclusion, independently newest-first responses and one cursor
+continuation. This is observed compatibility, not universal coverage or verified
+pricing. The helper identifies this path as `route: "replies-window"`;
+`quotes`, `mentions` and `list` retain their existing validation and behavior.
 
 ## Explicit article reads
 

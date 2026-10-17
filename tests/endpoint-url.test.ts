@@ -19,6 +19,7 @@ const cases: Array<{ name: string; run: (fetcher: FetchLike) => Promise<unknown>
   { name: "account search", run: f => searchUsers("fixture", key, f, options) },
   { name: "thread", run: f => fetchThread("1", key, f, options) },
   { name: "shared post walker", run: f => fetchTweetReplies("1", key, f, options) },
+  { name: "dated replies", run: f => fetchTweetReplies("1", key, f, { ...options, sinceTime: 0 }) },
   { name: "trends", run: f => fetchTrends(1, key, f, options) },
   { name: "shared account walker", run: f => fetchFollowers("fixture", key, f, options) },
   { name: "profile", run: f => fetchUserProfile("fixture", key, f, options) },

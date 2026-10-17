@@ -27,7 +27,7 @@ import {
   runTwitterApiUserSearch,
   runTwitterApiUserTimeline,
 } from "./backend.js";
-import { tweetIdFromInput, type ReplySort, type TwitterApiSearchParams } from "./twitterapi.js";
+import { tweetIdFromInput, validateReplyWindow, type ReplySort, type TwitterApiSearchParams } from "./twitterapi.js";
 import { DEFAULT_TWITTER_API_KEY_ENV, loadTwitterConfig } from "./config.js";
 import { reportProgress } from "./progress.js";
 import { usesPiVideoModel } from "./backend/provider-video.js";
@@ -98,7 +98,7 @@ const MODE_PARAMS: Record<TwitterMode, readonly string[]> = {
   thread: [],
   user: ["user", "userId", "includeReplies", "limit"],
   trends: ["woeid", "count"],
-  replies: ["replySort", "limit"],
+  replies: ["replySort", "limit", "sinceTime", "untilTime"],
   quotes: ["sinceTime", "untilTime", "includeReplies", "limit"],
   mentions: ["user", "sinceTime", "untilTime", "limit"],
   followers: ["user", "pageSize", "limit"],
@@ -157,6 +157,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       "Use mode \"users\" to discover accounts; use mode \"user\" to read a specific account's recent posts.",
       "Use mode \"thread\" with a tweet id or permalink to read a post's whole thread.",
       "Use mode \"replies\" or mode \"quotes\" to read the conversation around a specific post.",
+      'With mode "replies", explicit sinceTime/untilTime select a root-only date-windowed route, newest first; replySort must be omitted or "Latest". Pass an original first-in-thread post; the tool does not verify root status or fall back on empty results.',
       "Use mode \"retweeters\" with a tweet id or permalink to list the accounts that reposted it.",
       "Use mode \"trends\" with a woeid (1=Worldwide, 23424977=USA) for trending topics.",
       "Use allowed_x_handles and excluded_x_handles with mode \"posts\" to narrow or exclude accounts.",
@@ -185,12 +186,12 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       spaceId: Type.Optional(Type.String({ description: "mode=space: the X Space id." })),
       woeid: Type.Optional(Type.Number({ description: "Yahoo Where-On-Earth id for mode=trends (1=Worldwide, 23424977=USA)." })),
       includeReplies: Type.Optional(Type.Boolean({ description: "Include replies: mode=user (timeline) and mode=quotes." })),
-      sinceTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items on or after this unix timestamp (seconds)." })),
-      untilTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions: only items before this unix timestamp (seconds)." })),
+      sinceTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions/replies: inclusive unix-seconds start. Replies dates opt into a root-only route; safe integer 0–253402300799, strictly before untilTime when both are set." })),
+      untilTime: Type.Optional(Type.Number({ description: "mode=quotes/mentions/replies: exclusive unix-seconds end. Replies: safe integer 1–253402300799; requires an original root, newest-first only." })),
       limit: Type.Optional(Type.Number({ description: "mode=user/mentions/followers/followings/replies/quotes/retweeters/community/list: stop after this many items (max 1000)." })),
       replySort: Type.Optional(
         Type.Union([Type.Literal("Relevance"), Type.Literal("Latest"), Type.Literal("Likes")], {
-          description: 'mode=replies sort order: "Relevance" (default), "Latest", or "Likes".',
+          description: 'mode=replies: without dates, "Relevance" (default), "Latest", or "Likes". With sinceTime/untilTime, only omitted or "Latest"; no sort parameter is sent.',
         }),
       ),
       allowed_x_handles: Type.Optional(Type.Array(Type.String(), { description: "mode=posts: only posts from these handles (max 20, no @)." })),
@@ -239,6 +240,11 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       // must fail before any retrieval.
       const question = typeof supplied.query === "string" ? supplied.query.trim() : "";
       if (!question) throw new Error("twitter query must not be empty");
+      // Raw presence matters: 0 opts in, and null/string dates must never
+      // disappear through number()/text() into an unfiltered paid v2 read.
+      if (mode === "replies") validateReplyWindow(supplied.tweet, {
+        sinceTime: supplied.sinceTime, untilTime: supplied.untilTime, queryType: supplied.replySort,
+      });
 
       // `tweet` locates a post for the thread/reply/quote modes, and is refused
       // elsewhere rather than silently ignored.
@@ -375,6 +381,8 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
           query: question,
           tweet: tweetReference,
           queryType: text(supplied.replySort) as ReplySort | undefined,
+          sinceTime: supplied.sinceTime as number | undefined,
+          untilTime: supplied.untilTime as number | undefined,
           limit: number(supplied.limit),
           ...base,
         });

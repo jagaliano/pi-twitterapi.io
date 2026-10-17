@@ -33,6 +33,7 @@ import {
   searchTweets,
   searchUsers,
   tweetIdFromInput,
+  validateReplyWindow,
   type ReplySort,
   type Tweet,
   type TwitterApiSearchParams,
@@ -317,7 +318,7 @@ export async function runTwitterApiThread(
 async function completeTweetAnswer(
   backend: SynthesisBackend,
   options: TwitterApiSynthesisOptions,
-  input: { query: string; tweets: Tweet[]; incomplete?: string; notes: string[] },
+  input: { query: string; tweets: Tweet[]; incomplete?: string; notes: string[]; priorityNotes?: string[] },
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
   const details = await synthesizeAnswer({
     query: input.query,
@@ -328,7 +329,12 @@ async function completeTweetAnswer(
     incomplete: input.incomplete,
     deps: mediaDeps(backend, options),
   });
-  details.notes = [...(details.notes ?? []), ...input.notes];
+  // Required route preconditions must precede optional processing disclosures
+  // so the evidence note budget cannot silently bury the root-only warning.
+  details.notes = input.priorityNotes?.length
+    ? [...(details.output === "posts" ? [EVIDENCE_POLICY] : []), ...input.priorityNotes,
+      ...(details.notes ?? []).filter(note => note !== EVIDENCE_POLICY), ...input.notes]
+    : [...(details.notes ?? []), ...input.notes];
   applyFallbackNote(backend, details);
   appendConfigNotes(options, details);
   Object.assign(details, backend.telemetry.snapshot());
@@ -380,6 +386,8 @@ export interface TwitterApiRepliesOptions extends TwitterApiSynthesisOptions {
   query: string;
   tweet: string;
   queryType?: ReplySort;
+  sinceTime?: number;
+  untilTime?: number;
   limit?: number;
 }
 
@@ -387,19 +395,30 @@ export interface TwitterApiRepliesOptions extends TwitterApiSynthesisOptions {
 export async function runTwitterApiReplies(
   options: TwitterApiRepliesOptions,
 ): Promise<{ markdown: string; details: TwitterSearchDetails }> {
+  validateReplyWindow(options.tweet, options); // Before model resolution or paid work.
   const backend = resolveSynthesisBackend(options, options.query);
   const replies = await fetchTweetReplies(options.tweet, backend.apiKey, backend.fetcher, {
     ...tweetReadOptions(options, backend),
     queryType: options.queryType,
+    sinceTime: options.sinceTime,
+    untilTime: options.untilTime,
     limit: options.limit,
   });
   const incomplete = incompleteReason(replies.stoppedBy, replies.pagesFetched);
   const count = replies.tweets.length;
   const notes = [`Answered from ${count} repl${count === 1 ? "y" : "ies"} to post ${replies.tweetId}.`];
+  const priorityNotes = replies.route === "replies-window"
+    ? [`The date-windowed route requires an original root post; this tool did not verify that post ${replies.tweetId} is one.`]
+    : undefined;
+  if (priorityNotes) {
+    notes.push(`Route: /twitter/tweet/replies (replies-window); requested sinceTime=${options.sinceTime ?? "unbounded"} (inclusive), untilTime=${options.untilTime ?? "unbounded"} (exclusive).`,
+      "Ordering: newest first by reply time (documented upstream). Results are not exhaustive; no local date filtering or fallback to v2/search was performed.");
+    if (!count) notes.push("An empty result does not prove none exist (non-root post, empty window, or upstream coverage).");
+  }
   if (incomplete) {
     notes.push(`Retrieval stopped early (${incomplete}) while more replies remained, so these results may be incomplete.`);
   }
-  return completeTweetAnswer(backend, options, { query: options.query, tweets: replies.tweets, incomplete, notes });
+  return completeTweetAnswer(backend, options, { query: options.query, tweets: replies.tweets, incomplete, notes, priorityNotes });
 }
 
 export interface TwitterApiQuotesOptions extends TwitterApiSynthesisOptions {

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-10-17
+
+### Added
+
+- Opt-in date-windowed `replies` on the root-only v1 route, with inclusive start,
+  exclusive end and documented newest-first ordering. Strict raw bounds/sort
+  preflight runs before paid work or model resolution; no-date v2 behavior is
+  unchanged apart from an additive helper `route` field. Both output modes
+  disclose the unverified root precondition and empty/partial-result limits;
+  there is no hidden root lookup, local date filtering or fallback route.
+
 ## [0.5.7] - 2026-10-16
 
 ### Added

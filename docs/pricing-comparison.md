@@ -77,7 +77,8 @@ that endpoint's page does not restate a price.
 | `users` | `/twitter/user/search` | profiles returned | $0.18 / 1K | inferred (endpoint returns user objects) |
 | `thread` | `/twitter/tweet/thread_context` | tweets returned | $0.15 / 1K | inferred |
 | `user` | `/twitter/user/last_tweets` | tweets returned | $0.15 / 1K | inferred |
-| `replies` | `/twitter/tweet/replies/v2` | tweets returned | $0.15 / 1K | inferred |
+| `replies` without dates | `/twitter/tweet/replies/v2` | tweets returned | $0.15 / 1K | inferred |
+| `replies` with explicit dates | `/twitter/tweet/replies` | tweets returned | **unverified** | 2026-10-17: one-window compatibility observed; no verified endpoint-specific price or actual charges |
 | `quotes` | `/twitter/tweet/quotes` | tweets returned | $0.15 / 1K | inferred |
 | `mentions` | `/twitter/user/mentions` | tweets returned | $0.15 / 1K | inferred |
 | `tweets` | `/twitter/tweets` | tweets returned | $0.15 / 1K | inferred |

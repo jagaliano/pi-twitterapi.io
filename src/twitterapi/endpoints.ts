@@ -311,6 +311,7 @@ async function walkTweets(
 
 export const USER_LAST_TWEETS_PATH = "/twitter/user/last_tweets";
 export const TWEET_REPLIES_PATH = "/twitter/tweet/replies/v2";
+export const TWEET_REPLIES_WINDOW_PATH = "/twitter/tweet/replies";
 export const TWEET_QUOTES_PATH = "/twitter/tweet/quotes";
 export const TRENDS_PATH = "/twitter/trends";
 
@@ -410,14 +411,43 @@ export type ReplySort = "Relevance" | "Latest" | "Likes";
 
 export interface TweetRepliesDetails extends TweetCollection {
   tweetId: string;
+  route: "replies-v2" | "replies-window";
 }
 
 export interface FetchTweetRepliesOptions extends TweetPagingOptions {
-  /** Sort order for replies (default Relevance). */
+  /** V2 sort; with dates only omitted or Latest is supported. */
   queryType?: ReplySort;
+  /** Inclusive start in safe integer unix seconds, 0 through 253402300799. */
+  sinceTime?: number;
+  /** Exclusive end in safe integer unix seconds, 1 through 253402300799. */
+  untilTime?: number;
 }
 
-/** Fetch replies to a post via `/twitter/tweet/replies/v2`. */
+/** Shared raw preflight; only explicit dates opt into the stricter root-only contract. */
+export function validateReplyWindow(tweet: unknown, options: {
+  sinceTime?: unknown; untilTime?: unknown; queryType?: unknown;
+}): boolean {
+  const { sinceTime, untilTime, queryType } = options;
+  if (sinceTime === undefined && untilTime === undefined) return false;
+  if (typeof tweet !== "string" || !tweetIdFromInput(tweet)) {
+    throw new Error("twitter tweet must be a numeric post id or an X permalink");
+  }
+  for (const [name, value] of [["sinceTime", sinceTime], ["untilTime", untilTime]] as const) {
+    if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 253402300799)) {
+      throw new Error(`twitter ${name} must be a safe integer unix timestamp in seconds from 0 through 253402300799`);
+    }
+  }
+  if (untilTime === 0) throw new Error("twitter untilTime must be at least 1 (the end is exclusive)");
+  if (typeof sinceTime === "number" && typeof untilTime === "number" && sinceTime >= untilTime) {
+    throw new Error("twitter sinceTime must be strictly before untilTime");
+  }
+  if (queryType !== undefined && queryType !== "Latest") {
+    throw new Error('twitter replySort/queryType with sinceTime/untilTime must be "Latest" or omitted; drop the dates or the sort');
+  }
+  return true;
+}
+
+/** Fetch legacy v2 replies, or opt into the root-only dated route with explicit bounds. */
 export async function fetchTweetReplies(
   tweet: string,
   apiKey: string,
@@ -426,15 +456,21 @@ export async function fetchTweetReplies(
 ): Promise<TweetRepliesDetails> {
   const id = tweetIdFromInput(tweet);
   if (!id) throw new Error(`twitter tweet must be a numeric post id or an X permalink (got "${tweet}")`);
-  const { queryType, ...paging } = options;
+  const windowed = validateReplyWindow(tweet, options);
+  const { queryType, sinceTime, untilTime, ...paging } = options;
   if (queryType !== undefined && queryType !== "Relevance" && queryType !== "Latest" && queryType !== "Likes") {
     throw new Error(`twitter reply queryType must be "Relevance", "Latest" or "Likes" (got "${queryType}")`);
   }
-  const result = await walkTweets(TWEET_REPLIES_PATH, apiKey, fetcher, {
+  const result = await walkTweets(windowed ? TWEET_REPLIES_WINDOW_PATH : TWEET_REPLIES_PATH, apiKey, fetcher, {
     ...paging,
-    params: { tweetId: id, queryType },
+    params: windowed ? { tweetId: id, sinceTime, untilTime } : { tweetId: id, queryType },
+    ...(windowed ? { extract: (payload: Record<string, unknown>) => {
+      // Keep this semantic-failure policy scoped to v1; never coerce status objects.
+      if (payload.status === "failed") throw new Error("twitterapi.io date-windowed replies request failed");
+      return Array.isArray(payload.tweets) ? payload.tweets : undefined;
+    } } : {}),
   });
-  return { ...result, tweetId: id };
+  return { ...result, tweetId: id, route: windowed ? "replies-window" : "replies-v2" };
 }
 
 // -------------------------------------------------------- quotes (P1)

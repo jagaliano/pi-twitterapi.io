@@ -64,6 +64,28 @@ opted-in native-video/STT processing can still incur costs.
 See [evidence output](docs/tool-reference.md#evidence-output) for the contract and
 limits.
 
+## Replies in a time window
+
+Use `mode: "replies"` with optional Unix-seconds bounds. Replace
+`ORIGINAL_ROOT_POST_ID` with an **original, first-in-thread post**, not a reply:
+
+```json
+{
+  "query": "Summarize the replies in this UTC window with sources.",
+  "mode": "replies",
+  "tweet": "ORIGINAL_ROOT_POST_ID",
+  "sinceTime": 1792108800,
+  "untilTime": 1792281600,
+  "limit": 10
+}
+```
+
+Start is inclusive; end is exclusive. With dates, omit `replySort` or use
+`"Latest"`. Without dates, existing replies behavior is unchanged. The tool does
+not verify root status or promise exhaustive coverage; `limit` caps retained
+replies, not returned/billed items. See the
+[date-windowed replies contract](docs/tool-reference.md#date-windowed-replies).
+
 ## Settings basics
 
 - User settings: `~/.pi/agent/settings.json`, or your `PI_CODING_AGENT_DIR`.
@@ -105,6 +127,9 @@ per-search savings or cost ceiling is promised.
 - No semantic search: twitterapi.io exposes keyword/operator search.
 - The upstream Space-detail endpoint has returned HTTP 404 even for live Spaces;
   `mode=space` surfaces that error rather than inventing a summary.
+- Explicit dates on `mode=replies` use a root-only, newest-first route; root
+  status is not verified. Without dates, the existing replies behavior is unchanged.
+  See [date-windowed replies](docs/tool-reference.md#date-windowed-replies).
 - Upstream date boundaries were observed at 04:00 UTC. Padding/local trimming
   cannot recover every far-west window; partial retrieval is disclosed.
 
