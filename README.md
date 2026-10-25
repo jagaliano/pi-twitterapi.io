@@ -140,6 +140,7 @@ See [behavior and disclosures](docs/tool-reference.md#behavior-and-disclosures).
 Node.js **22.19 or later** and a compatible Pi **1.x** release
 (`@earendil-works/pi-coding-agent` peer range `^1.0.0`). Answer output requires
 `ModelRegistry.complete`; 1.0.0 is the supported minimum, not its first release.
+Compatibility has also been checked with **Pi 1.4.0**; the supported minimum is unchanged.
 
 ## Documentation
 

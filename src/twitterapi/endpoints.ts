@@ -775,6 +775,22 @@ export async function fetchFollowings(
   return { ...result, userName: handle };
 }
 
+/** Untrusted diagnostic text only; never coerce objects or create source markers. */
+function profileDiagnostic(value: unknown, apiKey: string): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value
+    .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+    .replace(/\[\d+\]|\b(?:permalink|transcript|visual|video)\s*:|https?:\/\//gi, " ")
+    .replace(/[`<>\[\]#*~"]/g, " ")
+    .trim();
+  if (!text) return undefined;
+  // Check before truncation, and after cleanup, so a partial or reassembled key
+  // cannot enter the diagnostic. The key is never copied to error output.
+  if (typeof apiKey === "string" && apiKey && [value, text].some(part =>
+    part.includes(apiKey) || part.replace(/[\p{Cc}\p{Cf}\s]/gu, "").includes(apiKey))) return undefined;
+  return text.length > 100 ? text.slice(0, 99) + "…" : text;
+}
+
 /** Fetch a single profile via `/twitter/user/info`. */
 export async function fetchUserProfile(
   userName: string,
@@ -789,6 +805,12 @@ export async function fetchUserProfile(
   reportProgress(options, "reading X");
   const { response, body, attempts, bodyError } = await requestWithRetry(url.toString(), apiKey, fetcher, settings);
   const payload = ensureSuccessfulPayload(response, body, bodyError, attempts, options.telemetry);
+  if (isObject(payload.data) && payload.data.unavailable === true) {
+    const reason = profileDiagnostic(payload.data.unavailableReason, apiKey)
+      ?? profileDiagnostic(payload.data.message, apiKey) ?? "unavailable";
+    const requested = profileDiagnostic(handle, apiKey) ?? "requested account";
+    throw new Error(`twitterapi.io reports no profile for "${requested}" (upstream reason: ${reason})`);
+  }
   const user = asUser(payload.data);
   if (!user) throw new Error(`twitterapi.io returned no profile for "${handle}"`);
   return user;

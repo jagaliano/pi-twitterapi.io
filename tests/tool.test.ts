@@ -820,6 +820,30 @@ test("mode=profile reads a single account profile", async () => {
   assert.match(result.content[0].text, /Alice builds things/);
 });
 
+for (const output of ["answer", "posts"] as const) {
+  for (const plausible of [false, true]) {
+    test(`unavailable profile fails ${output} without synthesis or a placeholder (plausible=${plausible})`, async () => {
+      const { pi, tool } = captureTool(); let http = 0, completions = 0;
+      const registry = { ...userRegistry("should not synthesize"), complete: async () => { completions++; throw new Error("must not synthesize an unavailable account"); } };
+      registerTwitterTool(pi as any, {
+        env: { TWITTERAPI_IO_API_KEY: testCredential() },
+        settings: { twitter: { synthesisModel: "anthropic/haiku", minRequestIntervalMs: 0, evidenceCache: "off" } },
+        fetcher: async input => {
+          http++; assert.equal(new URL(String(input)).pathname, "/twitter/user/info");
+          return Response.json({ status: "success", data: {
+            ...(plausible ? { id: "1", userName: "alice", description: "must not become evidence" } : {}),
+            unavailable: true, unavailableReason: "Suspended",
+          } });
+        },
+      });
+      const context = { get modelRegistry() { assert.equal(output, "answer", "evidence output must not consult the model registry"); return registry; } };
+      await assert.rejects(() => tool().execute("id", { query: "Who is this account?", mode: "profile", user: "alice", output },
+        undefined, undefined, context), /twitterapi\.io reports no profile.*alice.*upstream reason: Suspended/);
+      assert.equal(http, 1); assert.equal(completions, 0);
+    });
+  }
+}
+
 test("mode=followers and mode=followings read account graphs", async () => {
   const { pi, tool } = captureTool();
   const seen: string[] = [];

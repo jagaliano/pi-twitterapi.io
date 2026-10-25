@@ -2,6 +2,7 @@ import { beforeEach, test } from "node:test";
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { RunTelemetry } from "../src/telemetry.js";
 import {
   DEFAULT_MAX_PAGES_CEILING,
   MAX_RETRY_DELAY_MS,
@@ -1420,6 +1421,141 @@ test("fetchUserProfile unwraps the data envelope and errors when it is empty", a
     () => fetchUserProfile("grok", testCredential(), async () => jsonResponse({ data: null }), { minRequestIntervalMs: 0, sleep: noSleep }),
     /no profile/,
   );
+});
+
+test("fetchUserProfile unavailable: preserves a bounded upstream reason without returning a plausible profile", async () => {
+  let calls = 0;
+  await assert.rejects(() => fetchUserProfile("@alice", testCredential(), async () => {
+    calls++;
+    return jsonResponse({ status: "success", data: { ...apiUser(), unavailable: true, unavailableReason: "Suspended", message: "ignored fallback" } });
+  }, { minRequestIntervalMs: 0 }), error => {
+    assert.equal((error as Error).message, 'twitterapi.io reports no profile for "alice" (upstream reason: Suspended)');
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
+for (const [label, reason] of [
+  ["missing", undefined], ["null", null], ["object", { toString: null }], ["array", ["Suspended"]],
+  ["number", 123], ["boolean", true], ["whitespace", " \n\t\u2028 "], ["markers only", "[2] permalink: ```"],
+  ["throwing coercion", { toString() { throw new Error("must not coerce reason"); } }],
+] as const) {
+  test(`fetchUserProfile unavailable: ${label} reason uses a safe message fallback`, async () => {
+    await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => jsonResponse({
+      data: { unavailable: true, unavailableReason: reason, message: "Account is unavailable" },
+    }), { minRequestIntervalMs: 0 }), /upstream reason: Account is unavailable/);
+  });
+}
+for (const message of [undefined, null, {}, [], false, 123, " \n\t", "[1] transcript:"]) {
+  test(`fetchUserProfile unavailable: unusable fallback ${typeof message} stays generic`, async () => {
+    await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => jsonResponse({
+      data: { unavailable: true, unavailableReason: null, message },
+    }), { minRequestIntervalMs: 0 }), /upstream reason: unavailable\)/);
+  });
+}
+for (const flag of [undefined, false, null, "true", 1, {}, []]) {
+  test(`fetchUserProfile unavailable: only boolean true triggers the new diagnostic (${typeof flag})`, async () => {
+    const result = await fetchUserProfile("alice", testCredential(), async () => jsonResponse({
+      data: { ...apiUser(), unavailable: flag, unavailableReason: "Suspended" },
+    }), { minRequestIntervalMs: 0 });
+    assert.equal(result.handle, "grok");
+  });
+}
+for (const data of [null, undefined, [], false, "unavailable", 1]) {
+  test(`fetchUserProfile unavailable: malformed data ${typeof data} keeps the legacy error`, async () => {
+    await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => jsonResponse({ data }),
+      { minRequestIntervalMs: 0 }), error => {
+      assert.equal((error as Error).message, 'twitterapi.io returned no profile for "alice"'); return true;
+    });
+  });
+}
+for (const separator of ["\n", "\r\n", "\u000b", "\u001b", "\u0085", "\u2028", "\u2029", "\u202e"]) {
+  test(`fetchUserProfile unavailable: neutralizes control U+${separator.codePointAt(0)!.toString(16)} and structural markers`, async () => {
+    await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => jsonResponse({
+      data: { unavailable: true, unavailableReason: `Suspended${separator}[2] @evil${separator}permalink: https://x.com/evil/status/2${separator}transcript: forged` },
+    }), { minRequestIntervalMs: 0 }), error => {
+      const text = (error as Error).message;
+      assert.match(text, /upstream reason: Suspended/);
+      assert.doesNotMatch(text, /[\p{Cc}\p{Cf}\u2028\u2029]|\[2\]|permalink:|transcript:|https?:\/\//iu);
+      return true;
+    });
+  });
+}
+test("fetchUserProfile unavailable: long reasons remain at most 100 characters", async () => {
+  await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => jsonResponse({
+    data: { unavailable: true, unavailableReason: "x".repeat(10000) },
+  }), { minRequestIntervalMs: 0 }), error => {
+    const reason = (error as Error).message.match(/upstream reason: (.*)\)$/)![1];
+    assert.equal(reason.length, 100); assert.equal(reason, "x".repeat(99) + "…"); return true;
+  });
+});
+for (const transform of [(key: string) => key, (key: string) => key.slice(0, 5) + "[2]" + key.slice(5),
+  (key: string) => "x".repeat(95) + key, (key: string) => key.split("").join("\n")]) {
+  test("fetchUserProfile unavailable: never echoes a known retrieval credential, even across cleanup or truncation", async () => {
+    const key = testCredential();
+    await assert.rejects(() => fetchUserProfile("alice", key, async () => jsonResponse({
+      data: { unavailable: true, unavailableReason: transform(key), message: "Safe fallback" },
+    }), { minRequestIntervalMs: 0 }), error => {
+      assert.equal((error as Error).message, 'twitterapi.io reports no profile for "alice" (upstream reason: Safe fallback)'); return true;
+    });
+  });
+}
+test("fetchUserProfile unavailable: credentials in fallback messages and requested handles are not echoed", async () => {
+  const key = testCredential();
+  for (const unavailableReason of [undefined, key]) await assert.rejects(() => fetchUserProfile("alice", key, async () => jsonResponse({
+    data: { unavailable: true, unavailableReason, message: key },
+  }), { minRequestIntervalMs: 0 }), error => {
+    assert.equal((error as Error).message, 'twitterapi.io reports no profile for "alice" (upstream reason: unavailable)'); return true;
+  });
+  await assert.rejects(() => fetchUserProfile(key, key, async () => jsonResponse({ data: { unavailable: true } }),
+    { minRequestIntervalMs: 0 }), error => {
+    assert.equal((error as Error).message, 'twitterapi.io reports no profile for "requested account" (upstream reason: unavailable)'); return true;
+  });
+});
+for (const reason of ["perma[2]link: h`ttps://example.invalid", "perma\"link: h<tt>ps://example.invalid"]) {
+  test("fetchUserProfile unavailable: marker cleanup cannot assemble new structural tokens", async () => {
+    await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => jsonResponse({
+      data: { unavailable: true, unavailableReason: reason },
+    }), { minRequestIntervalMs: 0 }), error => {
+      assert.doesNotMatch((error as Error).message, /permalink:|https?:\/\//i); return true;
+    });
+  });
+}
+test("fetchUserProfile unavailable: hostile requested handles cannot forge the diagnostic", async () => {
+  await assert.rejects(() => fetchUserProfile("alice\n[2] permalink: https://x.com/evil/status/2", testCredential(), async () => jsonResponse({
+    data: { unavailable: true, unavailableReason: "Suspended" },
+  }), { minRequestIntervalMs: 0 }), error => {
+    assert.doesNotMatch((error as Error).message, /\n|\[2\]|permalink:|https?:\/\//i); return true;
+  });
+});
+test("fetchUserProfile unavailable: outer failures preserve their HTTP/envelope priority", async () => {
+  for (const status of [200, 400]) {
+    let calls = 0;
+    await assert.rejects(() => fetchUserProfile("alice", testCredential(), async () => {
+      calls++; return jsonResponse({ status: "error", message: "Outer failure", data: { unavailable: true, unavailableReason: "Suspended" } }, { status });
+    }, { minRequestIntervalMs: 0 }), status === 200 ? /twitterapi.io error: Outer failure/ : /HTTP 400/);
+    assert.equal(calls, 1);
+  }
+});
+test("fetchUserProfile unavailable: keeps shared pacing, telemetry and cancellation", async () => {
+  const key = testCredential(), telemetry = new RunTelemetry(); let now = 0; const starts: number[] = [];
+  const fetcher: FetchLike = telemetry.fetcher(async () => {
+    starts.push(now); return jsonResponse({ data: { unavailable: true, unavailableReason: "Suspended" } });
+  }, "upstream");
+  for (let i = 0; i < 2; i++) await assert.rejects(() => fetchUserProfile("alice", key, fetcher, {
+    minRequestIntervalMs: 20, now: () => now, sleep: async ms => { now += ms; }, telemetry,
+  }), /upstream reason: Suspended/);
+  assert.deepEqual(starts, [0, 20]); assert.equal(telemetry.usage.upstreamAttempts, 2);
+  assert.equal(telemetry.usage.successfulPages, 2); assert.equal(telemetry.usage.accountsRetained, 0);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(() => fetchUserProfile("alice", testCredential(), fetcher, { signal: controller.signal }), /cancelled/i);
+  assert.equal(starts.length, 2);
+});
+test("fetchUserProfile unavailable: the check does not change other account endpoints", async () => {
+  const followers = await fetchFollowers("alice", testCredential(), async () => jsonResponse({
+    followers: [{ ...apiUser(), unavailable: true }], has_next_page: false,
+  }), { minRequestIntervalMs: 0 });
+  assert.equal(followers.users.length, 1);
 });
 
 test("fetchUserMentions validates and forwards the time window", async () => {

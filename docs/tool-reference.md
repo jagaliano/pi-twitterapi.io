@@ -137,6 +137,19 @@ credits/article**, with the associated post lookup charged separately. Responses
 exposed no usage headers: actual charges, including failed/aborted calls, remain
 unknown. The initial local-harness abort was counted, not silently retried.
 
+## Unavailable profiles
+
+For `mode=profile`, an explicit upstream unavailable flag produces an error naming
+the requested account, with a sanitized reason of at most 100 characters. The
+reason is an upstream claim, not independent verification of a suspension or
+other account state. Missing, unsafe or non-string reasons fall back safely;
+known retrieval credentials are not echoed in the diagnostic.
+
+No placeholder profile, answer synthesis, semantic retry or additional lookup is
+performed. Normal profiles and existing transport/envelope errors keep their
+behavior; ordinary transport retries still apply. This documented response shape
+is covered by offline fixtures; its live compatibility has not been verified.
+
 ## Behavior and disclosures
 
 - **Citations are derived from fetched permalinks, never from model output.**

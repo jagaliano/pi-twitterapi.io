@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-10-25
+
+### Fixed
+
+- Profile reads stop on an explicit upstream unavailable flag and report the
+  requested account with a bounded, sanitized upstream reason instead of losing
+  it or fabricating a profile. Unsafe/non-string reasons fall back safely;
+  known retrieval keys are not echoed. No extra lookup, semantic retry or
+  answer synthesis follows this response; other account modes remain unchanged.
+
+### Compatibility
+
+- Checked the extension against Pi 1.4.0 host APIs, type declarations and offline
+  native-runtime fixtures. No migration or increase to the supported Pi minimum
+  is required. The unavailable-profile envelope remains live-unverified.
+
 ## [0.5.8] - 2026-10-17
 
 ### Added
