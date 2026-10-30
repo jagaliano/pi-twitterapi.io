@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-10-30
+
+### Documentation
+
+- An offline citation review of saved timeline records locates evidence-route
+  link loss in the final caller and attribution loss already visible in the answer-route
+  tool result. Exact historical synthesis input/reply capture is missing; the
+  precise attribution cause remains unresolved. Clarify caller citation/credit
+  responsibilities and add synthetic regression guards. No runtime fix, new
+  benchmark, quality-repair call or changed benchmark scores are claimed.
+
 ## [0.5.9] - 2026-10-25
 
 ### Fixed

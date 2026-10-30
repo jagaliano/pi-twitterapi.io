@@ -137,6 +137,115 @@ test("evidence answer remains the default and still needs a synthesis model", as
   assert.ok(registered.promptGuidelines.some((text: string) => text.includes('output: "posts"')));
 });
 
+// Synthetic U2 timeline: three enclosing posts, one longer reposted original.
+// No saved benchmark text, account identity or post id is copied here.
+const originalText = `ORIGINAL_START ${"original words ".repeat(25)}\nORIGINAL_TAIL`;
+const timelineUrls = [101, 102, 103].map(id => `https://x.com/relay/status/${id}`);
+const originalUrl = "https://x.com/origin/status/201";
+const timelineSources = [timelineUrls[0], originalUrl, ...timelineUrls.slice(1)];
+function timelinePosts() {
+  return [
+    { id: "101", url: timelineUrls[0], text: `RT @origin: ${"excerpt ".repeat(16)}`,
+      author: { id: "10", userName: "relay" }, retweeted_tweet: {
+        id: "201", url: originalUrl, text: originalText, author: { id: "20", userName: "origin" },
+      } },
+    { id: "102", url: timelineUrls[1], text: "SECOND_TOPIC", author: { id: "10", userName: "relay" } },
+    { id: "103", url: timelineUrls[2], text: "THIRD_TOPIC", author: { id: "10", userName: "relay" } },
+  ];
+}
+const timelinePayload = (tweets = timelinePosts()) => ({ data: { tweets, pin_tweet: null }, has_next_page: false });
+const timelineArgs = { query: "Summarize three topics, cite each source and distinguish original from reposted words.",
+  mode: "user", user: "relay", limit: 3 };
+const fixtureModel = { provider: "fixture", id: "summary", input: ["text"], contextWindow: 100_000, maxTokens: 4096 };
+
+test("U2 three-root timeline evidence delivers every fetched source and distinct original without synthesis", async () => {
+  let requests = 0;
+  const registered = tool(async input => {
+    assert.equal(new URL(String(input)).pathname, "/twitter/user/last_tweets");
+    requests++; return response(timelinePayload());
+  });
+  const result = await registered.execute("u2-evidence", { ...timelineArgs, output: "posts" }, undefined, undefined,
+    { modelRegistry: forbiddenRegistry });
+  const text = result.content[0].text;
+  assert.equal(requests, 1);
+  assert.equal(result.details.usage.postsRetained, 3);
+  assert.equal(result.details.usage.synthesisAttempts, 0);
+  assert.equal(result.details.synthesisCalls, 0);
+  assert.deepEqual(result.details.citations, timelineSources);
+  for (const url of timelineUrls) assert.ok(text.includes(`\npermalink: ${url}`));
+  assert.match(text, /^\[1\] @relay /m);
+  assert.match(text, /truncated RT copy omitted/);
+  assert.match(text, /^reposted source: @origin .*distinct from enclosing post/m);
+  assert.ok(text.includes(`reposted permalink: ${originalUrl}`));
+  assert.ok(text.includes(originalText.replace("\n", " ⏎ ")));
+});
+
+test("U2 answer fixture receives full original attribution and preserves a model's incomplete attribution without repair", async () => {
+  let requests = 0, completions = 0, prompt = "";
+  const generated = timelineUrls.map((url, i) => `Topic ${i + 1} from relay (${url}).`).join("\n");
+  const registered = tool(async () => { requests++; return response(timelinePayload()); }, {
+    settings: { twitter: { ...settings.twitter, synthesisModel: "fixture/summary" } },
+  });
+  const registry = { getAll: () => [fixtureModel], find: () => fixtureModel,
+    complete: async (_model: unknown, context: any) => {
+      completions++; prompt = context.messages[0].content;
+      return { role: "assistant", stopReason: "stop", content: [{ type: "text", text: generated }] };
+    } };
+  const result = await registered.execute("u2-answer", { ...timelineArgs, output: "answer" }, undefined, undefined,
+    { modelRegistry: registry });
+  for (const url of [...timelineUrls, originalUrl]) assert.ok(prompt.includes(url));
+  assert.match(prompt, /^reposted source: @origin .*distinct from enclosing post/m);
+  assert.ok(prompt.includes(originalText.replace("\n", " ⏎ ")));
+  assert.equal(result.details.text, generated);
+  assert.ok(!result.details.text.includes("@origin"));
+  assert.deepEqual(result.details.citations, timelineUrls);
+  assert.equal(requests, 1); assert.equal(completions, 1);
+  assert.equal(result.details.usage.synthesisAttempts, 1);
+});
+
+test("U2 timeline budget omits whole root/original bundles with disclosure, not guessed citations", async () => {
+  const roots = timelinePosts();
+  roots[0].retweeted_tweet!.text = `OVERSIZED_ORIGINAL ${"x".repeat(10_000)}`;
+  const registered = tool(async () => response(timelinePayload(roots)), {
+    settings: { twitter: { ...settings.twitter, maxSynthesisChars: 4_000 } },
+  });
+  const result = await registered.execute("u2-budget", { ...timelineArgs, output: "posts" });
+  const text = result.content[0].text;
+  assert.ok(text.length <= 4_000);
+  assert.equal(result.details.usage.postsRetained, 2);
+  assert.ok(!text.includes(timelineUrls[0]) && !text.includes(originalUrl) && !text.includes("OVERSIZED_ORIGINAL"));
+  for (const url of timelineUrls.slice(1)) assert.ok(text.includes(url));
+  assert.deepEqual(result.details.citations, timelineUrls.slice(1));
+  assert.match(text, /omitted.*bundle/i);
+});
+
+test("U2 invalid fetched timeline URLs are disclosed and never reconstructed from ids", async () => {
+  const roots = timelinePosts(); roots[2].url = "https://invalid.example/status/103";
+  const result = await tool(async () => response(timelinePayload(roots))).execute("u2-invalid", { ...timelineArgs, output: "posts" });
+  const text = result.content[0].text;
+  assert.ok(!text.includes(timelineUrls[2]) && !text.includes("https://invalid.example/status/103"));
+  assert.deepEqual(result.details.citations, [timelineUrls[0], originalUrl, timelineUrls[1]]);
+  assert.match(text, /1 retrieved source URL\(s\) were invalid and omitted from the prompt and Sources\./);
+});
+
+test("U2 bare model markers get fetched Sources fallback and disclosure, not another completion", async () => {
+  let completions = 0;
+  const generated = "Three topics [1], [2], [3].";
+  const registered = tool(async () => response(timelinePayload()), {
+    settings: { twitter: { ...settings.twitter, synthesisModel: "fixture/summary" } },
+  });
+  const registry = { getAll: () => [fixtureModel], find: () => fixtureModel,
+    complete: async () => {
+      completions++; return { role: "assistant", stopReason: "stop", content: [{ type: "text", text: generated }] };
+    } };
+  const result = await registered.execute("u2-markers", { ...timelineArgs, output: "answer" }, undefined, undefined,
+    { modelRegistry: registry });
+  assert.equal(result.details.text, generated);
+  assert.deepEqual(result.details.citations, timelineSources);
+  assert.ok(result.details.notes.some((note: string) => /cited no permalinks inline/.test(note)));
+  assert.equal(completions, 1); assert.equal(result.details.usage.synthesisAttempts, 1);
+});
+
 test("evidence never reads caller model or registry getters, and renderer labels the evidence workflow", async () => {
   const registered = tool(async () => response({ tweets: [post()] }));
   const ctx = { get model() { throw new Error("no caller model dependency"); }, get modelRegistry() { throw new Error("no registry dependency"); } };

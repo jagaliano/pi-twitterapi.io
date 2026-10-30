@@ -171,6 +171,38 @@ and the timeline result failed the final citation requirement. Prefer it only
 when the caller reliably preserves source URLs and needed context; these data do
 not establish equal quality or general savings across models and workloads.
 
+### Offline citation follow-up
+
+On **2026-10-30**, an offline citation review inspected the saved timeline records
+without new retrieval, answer-synthesis/caller, video or STT calls. This is not a
+benchmark rerun or evidence of improved model quality. The measurements and scores
+above remain unchanged.
+
+- **Evidence-route links:** both arms returned 20 roots and retained three. The
+  saved evidence tool content delivered all three enclosing-post URLs, the first
+  post's distinct reposted-original URL, and its original-author heading. The
+  final caller returned only the three bare markers and no usable source URLs.
+  For this arm, the observed link omission is in the final caller, not in the
+  evidence delivered to it.
+- **Answer-route attribution:** the original-author credit was already absent
+  from the saved extension result supplied to the caller; all three root links
+  were present. The exact historical synthesis SDK request and raw reply were
+  not captured. Therefore the records locate the visible loss before the final
+  caller, but do not prove the precise historical generation/processing cause.
+- **Offline reconstruction:** the current tool, given the saved upstream payloads
+  through a fixture transport, delivered the three roots plus the original's
+  URL, author and full text after normal newline sanitization.
+  A fixture completion returning the saved extension answer passed through
+  without losing additional attribution. This reconstruction is not a captured
+  historical SDK request and makes no new model-quality claim.
+
+No extension evidence omission was reproduced, so this review adds guidance and
+synthetic regression coverage, not a speculative runtime fix, prompt rewrite, source legend
+or paid repair loop. Callers must carry the delivered validated URLs and source
+attribution into their final answer; see
+[caller responsibilities](tool-reference.md#caller-responsibilities). Raw saved
+payloads, questions and answers remain private.
+
 ## Failed setup and lifecycle correction
 
 The original configured pair was `opencode-go/muse-spark-1.3-contributor` synthesis

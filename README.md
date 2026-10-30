@@ -61,8 +61,11 @@ mode and returns bounded, untrusted **text evidence**, not raw API JSON. No
 synthesis model is needed; images and frames are omitted. Retrieval and any
 opted-in native-video/STT processing can still incur costs.
 
-See [evidence output](docs/tool-reference.md#evidence-output) for the contract and
-limits.
+The caller must carry validated source URLs and original/reposter distinctions
+into its final answer; bare `[1]` markers are not usable citations. Neither output
+mode guarantees that a model preserves them. See
+[caller responsibilities](docs/tool-reference.md#caller-responsibilities) and the
+[evidence output contract](docs/tool-reference.md#evidence-output).
 
 ## Replies in a time window
 
