@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-05
+
+### Fixed
+
+- Pi 1.5 coerces tool arguments before `execute()`: it drops `null` optionals,
+  converts numeric strings and turns `true` into `1`. A `null` `sinceTime` could
+  therefore silently select the undated replies route, and a `null` `mode` could
+  default to a paid `posts` search. The tool now checks raw argument types in
+  `prepareArguments`, before host coercion, and rejects non-numeric
+  `sinceTime`/`untilTime` and non-string `mode`/`output`/`replySort`/`queryType`.
+  Other harmless coercions (numeric `limit`, single-value `ids`) still apply.
+- The result view uses Pi's injected `keyHint`, so the expand hint shows the
+  user's configured keybinding; older Pi falls back to the package export.
+
+### Compatibility
+
+- Checked against Pi 1.5.0 host packages and its argument validator; the
+  supported Pi minimum is unchanged. The dev TypeBox pin now matches the 1.3.27
+  copy Pi bundles.
+
 ## [0.5.10] - 2026-10-30
 
 ### Documentation

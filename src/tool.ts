@@ -139,6 +139,30 @@ const ALL_PARAMS = [
   "spaceId",
 ] as const;
 
+// Raw-type gates for arguments Pi may coerce before execute(). Pi 1.5's
+// validator drops null optionals, turns numeric strings into numbers and
+// `true` into 1, which would let a null date silently select an undated paid
+// route or a null mode default to a paid search.
+const RAW_NUMBER_ARGS = ["sinceTime", "untilTime"] as const;
+const RAW_STRING_ARGS = ["mode", "output", "replySort", "queryType"] as const;
+
+/** Reject wrong raw types before host coercion; leaves valid input untouched. */
+export function prepareTwitterArguments(args: unknown): unknown {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+  const raw = args as Record<string, unknown>;
+  for (const name of RAW_NUMBER_ARGS) {
+    if (name in raw && raw[name] !== undefined && typeof raw[name] !== "number") {
+      throw new Error(`twitter ${name} must be a number of Unix seconds or omitted (got ${raw[name] === null ? "null" : typeof raw[name]})`);
+    }
+  }
+  for (const name of RAW_STRING_ARGS) {
+    if (name in raw && raw[name] !== undefined && typeof raw[name] !== "string") {
+      throw new Error(`twitter ${name} must be a string or omitted (got ${raw[name] === null ? "null" : typeof raw[name]})`);
+    }
+  }
+  return args;
+}
+
 export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOptions = {}): void {
   const env = options.env ?? process.env;
   const fetcher = options.fetcher ?? fetch;
@@ -205,6 +229,8 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       ),
       count: Type.Optional(Type.Number({ description: "mode=posts/users: max items (posts default 10, accounts default 20; max 50). mode=trends: number of trends (min 30)." })),
     }),
+
+    prepareArguments: prepareTwitterArguments as (args: unknown) => never,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       // Fresh, call-local snapshot: edits apply without /reload and parallel
@@ -531,6 +557,12 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
         return text;
       }
 
+      // Pi 1.5+ injects the host's keybinding formatter; an imported copy may
+      // not see the user's bindings. Older Pi 1.x lacks it, so fall back.
+      const injected = (context as { keyHint?: unknown }).keyHint;
+      const expandHint = (description: string) => typeof injected === "function"
+        ? (injected as (key: "app.tools.expand", text: string) => string)("app.tools.expand", description)
+        : keyHint("app.tools.expand", description);
       const details = result.details as TwitterSearchDetails;
       const header = theme.fg("success", details.output === "posts" ? "✓ Twitter evidence" : "✓ Twitter") + theme.fg("muted", ` · ${details.citations.length} citations · ${details.synthesisCalls ?? 0} synthesis calls`);
       const sources = details.citations.slice(0, options.expanded ? details.citations.length : 5);
@@ -538,7 +570,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       let body = rows.length > 0 ? `\n${rows.join("\n")}` : "";
       const remaining = details.citations.length - sources.length;
       if (remaining > 0) {
-        body += theme.fg("muted", `\n… (${remaining} more citations, `) + keyHint("app.tools.expand", "to expand") + theme.fg("muted", ")");
+        body += theme.fg("muted", `\n… (${remaining} more citations, `) + expandHint("to expand") + theme.fg("muted", ")");
       }
       // Notes carry disclosures (coverage gap, skipped media, dropped links).
       // Showing them collapsed would hide information the markdown result
@@ -546,7 +578,7 @@ export function registerTwitterTool(pi: ExtensionAPI, options: TwitterToolOption
       if (details.notes?.length && options.expanded) {
         body += "\n" + details.notes.map((note) => theme.fg("muted", `• ${note}`)).join("\n");
       } else if (details.notes?.length) {
-        body += theme.fg("muted", `\n• ${details.notes.length} note(s), `) + keyHint("app.tools.expand", "to expand");
+        body += theme.fg("muted", `\n• ${details.notes.length} note(s), `) + expandHint("to expand");
       }
 
       if (options.expanded && details.usage && details.timings) {
